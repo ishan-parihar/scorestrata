@@ -1277,20 +1277,26 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
     }
 }
 
-/// Find the note-off tick for a note-on event (duration to next matching note-off).
+/// Find the note-off tick for a note-on event (duration to matching note-off).
+///
+/// The matching note-off must share the note-on's **pitch and layer** —
+/// matching by time alone would pair a note with a different layer's
+/// release whenever layers overlap.
 fn next_note_off(
     timeline: &scorestrata_compiler::TimelineIR,
     note_on: &scorestrata_compiler::timeline::TimelineEvent,
 ) -> u64 {
+    use scorestrata_compiler::timeline::EventKind;
+    let EventKind::NoteOn { pitch, .. } = &note_on.kind else {
+        return 0;
+    };
     timeline
         .events
         .iter()
         .find(|e| {
             e.tick.0 > note_on.tick.0
-                && matches!(
-                    &e.kind,
-                    scorestrata_compiler::timeline::EventKind::NoteOff { .. }
-                )
+                && e.layer_id == note_on.layer_id
+                && matches!(&e.kind, EventKind::NoteOff { pitch: p } if p == pitch)
         })
         .map_or(480, |e| e.tick.0 - note_on.tick.0)
 }

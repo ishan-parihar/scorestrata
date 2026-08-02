@@ -138,6 +138,30 @@ fn drum_pattern(ids: &mut IdSeq) -> Pattern {
     }
 }
 
+/// The absolute pitch classes of the root, third, and fifth of a scale.
+///
+/// Computed from the interval pattern so it is correct for **any** root key:
+/// the third is the third scale tone, and the fifth is a perfect fifth above
+/// the root (present in every scale the planner supports). Indexing a note
+/// list by position is only root-aligned for C-rooted keys.
+fn chord_tone_pcs(scale: &Scale) -> [u8; 3] {
+    // Distinct pitch classes of the scale relative to its root.
+    let mut rel = vec![0u8];
+    let mut acc = 0u8;
+    for &interval in &scale.pattern.intervals {
+        acc = (acc + interval) % 12;
+        if !rel.contains(&acc) {
+            rel.push(acc);
+        }
+    }
+    let third_rel = rel.get(2).copied().unwrap_or(0);
+    [
+        scale.root % 12,
+        (scale.root + third_rel) % 12,
+        (scale.root + 7) % 12,
+    ]
+}
+
 /// 1-bar bass pattern: root on the downbeat, fifth on beat 3, octave root
 /// on the offbeat of beat 2 — all drawn from the scale.
 fn bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
@@ -147,9 +171,22 @@ fn bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
     let high = MidiNote::new(48);
     let tones = scale.notes_in_range(low, high);
     let default_root = MidiNote::new(36);
-    let root = *tones.first().unwrap_or(&default_root);
-    let fifth = tones.get(4).copied().unwrap_or(root);
-    let octave = *tones.last().unwrap_or(&root);
+    let [root_pc, _, fifth_pc] = chord_tone_pcs(scale);
+    let root = tones
+        .iter()
+        .copied()
+        .find(|n| n.pitch_class() == root_pc)
+        .unwrap_or(default_root);
+    let fifth = tones
+        .iter()
+        .copied()
+        .find(|n| n.pitch_class() == fifth_pc && n.0 > root.0)
+        .unwrap_or(root);
+    let octave = tones
+        .iter()
+        .copied()
+        .find(|n| n.pitch_class() == root_pc && n.0 > root.0)
+        .unwrap_or(root);
 
     let quarter = Duration::quarter();
     let half = Duration::half();
@@ -213,12 +250,33 @@ fn lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         };
     }
 
-    // Pick scale degrees [0, 2, 4, 7] (root, third, fifth, octave) if present.
+    // Root-anchored chord tones (root, third, fifth, octave) so the arpeggio
+    // spells the tonic triad for any key — not just C-rooted ones.
+    let [root_pc, third_pc, fifth_pc] = chord_tone_pcs(scale);
+    let root = tones
+        .iter()
+        .copied()
+        .find(|n| n.pitch_class() == root_pc)
+        .unwrap_or(tones[0]);
+    let third = tones
+        .iter()
+        .copied()
+        .find(|n| n.pitch_class() == third_pc && n.0 > root.0)
+        .unwrap_or(root);
+    let fifth = tones
+        .iter()
+        .copied()
+        .find(|n| n.pitch_class() == fifth_pc && n.0 > root.0)
+        .unwrap_or(root);
+    let octave = tones
+        .iter()
+        .copied()
+        .find(|n| n.pitch_class() == root_pc && n.0 > root.0)
+        .unwrap_or(root);
+
+    let chord = [root, third, fifth, octave];
     let mut notes = Vec::new();
-    for (idx, degree) in [0usize, 2, 4, 7].into_iter().enumerate() {
-        let Some(&pitch) = tones.get(degree) else {
-            continue;
-        };
+    for (idx, pitch) in chord.into_iter().enumerate() {
         notes.push(Note {
             id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
             pitch,
@@ -514,5 +572,35 @@ mod tests {
     fn empty_duration_yields_empty_plan() {
         let plan = plan_project(&config(0));
         assert!(plan.arrangement.segments.is_empty());
+    }
+
+    #[test]
+    fn bass_roots_anchor_on_any_key_not_just_c() {
+        // G minor: root pitch class 7. The bass range starts at MIDI 24 (C),
+        // so positional indexing would wrongly pick C as the root — the
+        // pattern must anchor on the actual key root (G = MIDI 31).
+        let mut cfg = config(8);
+        cfg.key = "G minor".to_string();
+        let plan = plan_project(&cfg);
+        let bass = plan.patterns[1].clone();
+        assert_eq!(bass.name, "Bass_RootFifth");
+        let root_note = &bass.notes[0];
+        assert_eq!(root_note.pitch.0 % 12, 7, "bass downbeat must be G");
+        // The fifth (D) must sit above the root.
+        let fifth_note = &bass.notes[2];
+        assert_eq!(fifth_note.pitch.0 % 12, 2, "beat-3 note must be D (fifth)");
+        assert!(fifth_note.pitch.0 > root_note.pitch.0);
+    }
+
+    #[test]
+    fn lead_arpeggio_anchors_on_non_c_root() {
+        // G minor lead: root pc 7 → MIDI 67 (G4), third 70 (Bb4), fifth 74 (D5).
+        let mut cfg = config(8);
+        cfg.key = "G minor".to_string();
+        let plan = plan_project(&cfg);
+        let lead = plan.patterns[2].clone();
+        assert_eq!(lead.name, "Lead_Arp");
+        let pcs: Vec<u8> = lead.notes.iter().map(|n| n.pitch.0 % 12).collect();
+        assert_eq!(pcs, vec![7, 10, 2, 7], "arpeggio must spell G-Bb-D-G");
     }
 }
