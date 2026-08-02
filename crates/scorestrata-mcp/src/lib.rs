@@ -11,6 +11,7 @@
 
 pub mod capabilities;
 pub mod config_gen;
+pub mod debug_ops;
 pub mod patch_ops;
 pub mod resources;
 pub mod tools;

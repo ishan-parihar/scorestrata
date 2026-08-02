@@ -189,6 +189,10 @@ pub struct LayerIsolation {
     pub mute_others: bool,
     /// Preview URI for the isolated audio.
     pub preview_uri: Option<String>,
+    /// Number of notes this layer plays (notes + active steps across its
+    /// pattern instances) — how much musical content the solo exposes.
+    #[serde(default)]
+    pub note_count: usize,
 }
 
 // ── Segment Solo (§12.2) ───────────────────────────────────────────
@@ -427,6 +431,7 @@ mod tests {
             segment_id: Some("chorus_1".to_string()),
             mute_others: true,
             preview_uri: None,
+            note_count: 12,
         };
         #[expect(clippy::unwrap_used, reason = "Test assertion")]
         let json = serde_json::to_string_pretty(&isolation).unwrap();

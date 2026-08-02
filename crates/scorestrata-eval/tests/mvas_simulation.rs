@@ -580,6 +580,185 @@ fn mvas_step_14_genre_calibrated_loudness_and_render_regression() {
     );
 }
 
+/// Debug plane (§12) + learning loop (§13): the agent can trace commands,
+/// diff candidates, isolate layers, explain metrics, and record/query
+/// lessons — the evidence and knowledge the closed loop relies on.
+#[test]
+fn mvas_step_15_debug_plane_and_learning_loop() {
+    use scorestrata_mcp::tools::{
+        CandidateDiffParams, ExplainMetricParams, GetCommandTraceParams, GetLessonsParams,
+        GetRepairTemplatesParams, IsolateLayerParams, RecordLessonParams, SnapshotDiffParams,
+        SoloSegmentParams, ToolStatus,
+    };
+
+    let project = scorestrata_testkit::melodic_techno_project();
+    let project_json = serde_json::to_value(&project).expect("project serializes");
+    let project_id = project.id.to_string();
+
+    // ── 15a. Trace a command through episodic memory ────────────────
+    let mut memory = scorestrata_storage::memory::ProjectMemory::new();
+    memory.record_command(scorestrata_storage::memory::CommandRecord {
+        command_id: "cmd_apply_quantize".to_string(),
+        command_type: "apply_patch".to_string(),
+        actor: "agent:composer".to_string(),
+        success: true,
+        score_delta: Some(0.14),
+        duration_ms: 42,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+    let trace_receipt = scorestrata_mcp::tools::get_command_trace(&GetCommandTraceParams {
+        project_id: project_id.clone(),
+        command_id: "cmd_apply_quantize".to_string(),
+        memory: Some(serde_json::to_value(&memory).expect("memory serializes")),
+    });
+    assert_eq!(trace_receipt.tool, "get_command_trace");
+    assert!(
+        matches!(trace_receipt.status, ToolStatus::Succeeded),
+        "command trace succeeds: {}",
+        trace_receipt.summary
+    );
+    assert!(trace_receipt.summary.contains("42 ms"));
+    assert!(
+        trace_receipt
+            .evidence_uris
+            .iter()
+            .any(|u| u.contains("trace/command")),
+        "trace evidence URI"
+    );
+
+    // ── 15b. Diff two candidates and pick a winner ──────────────────
+    // Candidate A is healthy; B is degraded (out-of-scale notes).
+    let mut candidate_b = project.clone();
+    for pattern in &mut candidate_b.patterns {
+        for note in &mut pattern.notes {
+            note.pitch = scorestrata_core::domain::MidiNote::new(61);
+        }
+    }
+    let diff_receipt = scorestrata_mcp::tools::get_candidate_diff(&CandidateDiffParams {
+        project_id: project_id.clone(),
+        candidate_a: "cand_a".to_string(),
+        candidate_b: "cand_b".to_string(),
+        project_a: Some(project_json.clone()),
+        project_b: Some(serde_json::to_value(&candidate_b).expect("candidate serializes")),
+    });
+    assert!(
+        matches!(diff_receipt.status, ToolStatus::Succeeded),
+        "candidate diff succeeds: {}",
+        diff_receipt.summary
+    );
+    assert!(
+        diff_receipt.score_delta.contains_key("candidate.winner"),
+        "candidate diff reports a winner"
+    );
+    assert!(diff_receipt.summary.contains("cand_a") || diff_receipt.summary.contains("cand_b"));
+
+    // ── 15c. Snapshot diff between two project states ───────────────
+    let mut changed = project.clone();
+    for seg in &mut changed.arrangement.segments {
+        seg.bars += 4;
+    }
+    let snap_diff = scorestrata_mcp::tools::get_snapshot_diff(&SnapshotDiffParams {
+        project_id: project_id.clone(),
+        snapshot_a: "snap_a".to_string(),
+        snapshot_b: "snap_b".to_string(),
+        project_a: Some(project_json.clone()),
+        project_b: Some(serde_json::to_value(&changed).expect("changed serializes")),
+    });
+    assert!(
+        matches!(snap_diff.status, ToolStatus::Succeeded),
+        "snapshot diff succeeds: {}",
+        snap_diff.summary
+    );
+    assert!(snap_diff.summary.contains("segments changed"));
+
+    // ── 15d. Isolate a layer and solo a segment ─────────────────────
+    let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
+    let isolate = scorestrata_mcp::tools::isolate_layer(&IsolateLayerParams {
+        project_id: project_id.clone(),
+        layer_id: layer_id.clone(),
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(isolate.status, ToolStatus::Succeeded));
+    assert!(isolate.summary.contains(&layer_id));
+
+    let segment_id = project.arrangement.segments[0].id.to_string();
+    let solo = scorestrata_mcp::tools::solo_segment(&SoloSegmentParams {
+        project_id: project_id.clone(),
+        segment_id: segment_id.clone(),
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(solo.status, ToolStatus::Succeeded));
+    assert!(solo.summary.contains("bars"));
+    assert!(solo.summary.contains("layers"));
+
+    // ── 15e. Explain a metric with root causes ──────────────────────
+    // Build a degraded project so the metric has root causes to report.
+    let mut degraded = project.clone();
+    for pattern in &mut degraded.patterns {
+        for note in &mut pattern.notes {
+            note.pitch = scorestrata_core::domain::MidiNote::new(61);
+        }
+    }
+    let explain = scorestrata_mcp::tools::explain_metric(&ExplainMetricParams {
+        project_id: project_id.clone(),
+        metric_name: "harmony.scale_compliance".to_string(),
+        project: Some(serde_json::to_value(&degraded).expect("degraded serializes")),
+    });
+    assert!(
+        matches!(explain.status, ToolStatus::Succeeded),
+        "metric explanation succeeds: {}",
+        explain.summary
+    );
+    assert!(explain.summary.contains("scale_compliance"));
+    assert!(explain.summary.contains("root cause"));
+
+    // ── 15f. Learning loop: record → query → derive templates ──────
+    let store = scorestrata_storage::lesson_store::LessonStore::new();
+    let record = scorestrata_mcp::tools::record_lesson(&RecordLessonParams {
+        project_id: project_id.clone(),
+        trigger: "HARMONY_SCALE_VIOLATION".to_string(),
+        scope: "harmony".to_string(),
+        successful_patch: Some("quantize_layer_to_scale".to_string()),
+        genre: Some("melodic_techno".to_string()),
+        confidence: 0.9,
+        lesson_store: Some(serde_json::to_value(&store).expect("store serializes")),
+    });
+    assert!(
+        matches!(record.status, ToolStatus::Succeeded),
+        "record lesson succeeds: {}",
+        record.summary
+    );
+    assert_eq!(record.score_delta["lessons.total"], "1");
+
+    // The updated store is returned in evidence — round-trip it back in.
+    let store_prefix = format!("memory://lessons/{project_id}?store=");
+    let updated_store = record
+        .evidence_uris
+        .iter()
+        .find_map(|u| u.strip_prefix(&store_prefix))
+        .expect("updated store in evidence");
+    let store_json: serde_json::Value =
+        serde_json::from_str(updated_store).expect("updated store parses");
+    let query = scorestrata_mcp::tools::get_lessons(&GetLessonsParams {
+        project_id: project_id.clone(),
+        trigger: Some("HARMONY_SCALE_VIOLATION".to_string()),
+        genre: None,
+        min_confidence: 0.5,
+        lesson_store: Some(store_json),
+    });
+    assert!(matches!(query.status, ToolStatus::Succeeded));
+    assert_eq!(query.score_delta["lessons.matched"], "1");
+    assert!(query.summary.contains("quantize_layer_to_scale"));
+
+    let templates = scorestrata_mcp::tools::get_repair_templates(&GetRepairTemplatesParams {
+        project_id: project_id.clone(),
+        lesson_store: Some(serde_json::from_str(updated_store).expect("updated store re-parses")),
+    });
+    assert!(matches!(templates.status, ToolStatus::Succeeded));
+    assert_eq!(templates.score_delta["templates.count"], "1");
+    assert!(templates.summary.contains("quantize_layer_to_scale"));
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

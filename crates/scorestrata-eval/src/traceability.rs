@@ -146,6 +146,10 @@ impl TraceabilityMatrix {
 /// Build the canonical Scorestrata traceability matrix for the implemented
 /// roadmap. Wired to the actual modules, tests, MCP tools, and CLI commands
 /// delivered in this codebase.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Matrix construction is a data table by design"
+)]
 #[must_use]
 pub fn canonical_matrix() -> TraceabilityMatrix {
     let mut matrix = TraceabilityMatrix::new();
@@ -341,6 +345,60 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
         mcp_tools: vec!["get_eval_report".to_string()],
         cli_commands: vec![],
         docs: vec!["architecture.md §16".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-DEBUG-PLANE".to_string(),
+        title: "Debug plane — traces, diffs, isolation, metric explanation".to_string(),
+        phase: "4".to_string(),
+        tasks: vec!["DEBUG-001".to_string()],
+        code: vec![
+            "scorestrata_core::debug".to_string(),
+            "scorestrata_mcp::debug_ops".to_string(),
+            "scorestrata_mcp::tools".to_string(),
+        ],
+        tests: vec![
+            "debug_ops::tests".to_string(),
+            "tools::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec![
+            "get_command_trace".to_string(),
+            "get_snapshot_diff".to_string(),
+            "get_candidate_diff".to_string(),
+            "isolate_layer".to_string(),
+            "solo_segment".to_string(),
+            "explain_metric".to_string(),
+        ],
+        cli_commands: vec!["ss trace".to_string(), "ss diff".to_string()],
+        docs: vec!["architecture.md §12".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-LEARNING-LOOP".to_string(),
+        title: "Learning loop — lessons, repair templates, memory".to_string(),
+        phase: "7".to_string(),
+        tasks: vec!["LEARN-001".to_string()],
+        code: vec![
+            "scorestrata_storage::lesson_store".to_string(),
+            "scorestrata_storage::memory".to_string(),
+            "scorestrata_mcp::debug_ops".to_string(),
+            "scorestrata_mcp::tools".to_string(),
+        ],
+        tests: vec![
+            "lesson_store::tests".to_string(),
+            "memory::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec![
+            "get_lessons".to_string(),
+            "record_lesson".to_string(),
+            "get_repair_templates".to_string(),
+        ],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §13".to_string()],
         eval_result: Some("pass".to_string()),
     });
 

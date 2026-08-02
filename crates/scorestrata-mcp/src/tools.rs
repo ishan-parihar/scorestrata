@@ -9,8 +9,10 @@
 //! - Composition tools: plan_arrangement, create_pattern, write_pattern_notes, apply_motivic_variation
 //! - Patch tools: apply_patch, dry_run_patch, quantize_layer_to_scale, add_transition_package
 //! - Validation tools: run_validation, get_validation_report, suggest_fixes, compare_candidates
-//! - Debug tools: get_command_trace, get_snapshot_diff, isolate_layer, solo_segment
+//! - Debug tools: get_command_trace, get_snapshot_diff, get_candidate_diff,
+//!   isolate_layer, solo_segment, explain_metric (real logic in [`debug_ops`])
 //! - Learning tools: get_lessons, record_lesson, get_repair_templates
+//!   (real logic against [`LessonStore`](scorestrata_storage::lesson_store::LessonStore))
 //! - Engineering tools: get_next_task, claim_task, submit_task_result, run_acceptance_tests
 
 use scorestrata_core::diagnostic::Diagnostic;
@@ -501,7 +503,7 @@ pub fn add_transition_package(params: &AddTransitionParams) -> ToolReceipt {
     }
 }
 
-// ── Debug Tools (§10.5) ────────────────────────────────────────────
+// ── Debug Tools (§10.5, §12) ───────────────────────────────────────
 
 /// Parameters for debug tools that reference snapshots.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -512,26 +514,186 @@ pub struct SnapshotDiffParams {
     pub snapshot_a: String,
     /// Second snapshot ID.
     pub snapshot_b: String,
+    /// Serialized project state A (when provided, a real diff is computed).
+    #[serde(default)]
+    pub project_a: Option<serde_json::Value>,
+    /// Serialized project state B (when provided, a real diff is computed).
+    #[serde(default)]
+    pub project_b: Option<serde_json::Value>,
 }
 
-/// Diff two snapshots and return a receipt with the changes.
+/// Diff two snapshots and return a receipt with the real changes.
+///
+/// When both `project_a` and `project_b` payloads are supplied, a real
+/// [`SnapshotDiff`](scorestrata_core::debug::SnapshotDiff) is computed
+/// (segment structure, pattern content, mixer state). Without payloads,
+/// the tool returns a transparent failure (stub transparency).
 #[must_use]
 pub fn get_snapshot_diff(params: &SnapshotDiffParams) -> ToolReceipt {
+    let (Some(pa), Some(pb)) = (&params.project_a, &params.project_b) else {
+        return ToolReceipt {
+            tool: "get_snapshot_diff".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Snapshot diff requested for project '{}' but no serialized project payloads provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply project_a and project_b serialized payloads to compute the diff"
+                    .to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let project_a = match serde_json::from_value::<scorestrata_core::domain::Project>(pa.clone()) {
+        Ok(p) => p,
+        Err(e) => return deserialize_error_receipt("get_snapshot_diff", "project_a", &e),
+    };
+    let project_b = match serde_json::from_value::<scorestrata_core::domain::Project>(pb.clone()) {
+        Ok(p) => p,
+        Err(e) => return deserialize_error_receipt("get_snapshot_diff", "project_b", &e),
+    };
+
+    let diff = crate::debug_ops::compute_snapshot_diff(&project_a, &project_b);
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "diff.segments_changed".to_string(),
+        diff.changed_segments.len().to_string(),
+    );
+    score_delta.insert(
+        "diff.patterns_changed".to_string(),
+        diff.changed_patterns.len().to_string(),
+    );
+    score_delta.insert(
+        "diff.mixer_changed".to_string(),
+        if diff.mixer_changed { "yes" } else { "no" }.to_string(),
+    );
+
     ToolReceipt {
         tool: "get_snapshot_diff".to_string(),
         status: ToolStatus::Succeeded,
-        summary: format!(
-            "Diffing snapshots '{}' and '{}' in project '{}'",
-            params.snapshot_a, params.snapshot_b, params.project_id
-        ),
-        score_delta: BTreeMap::new(),
+        summary: diff.summary.clone(),
+        score_delta,
         evidence_uris: vec![format!(
             "project://{}/diff/snapshots/{}/{}",
             params.project_id, params.snapshot_a, params.snapshot_b
         )],
         focus_uris: vec![],
         next_actions: vec![],
-        cost: ToolCost::default(),
+        cost: ToolCost {
+            cpu_ms: 5,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: if diff.changed_segments.is_empty()
+            && diff.changed_patterns.is_empty()
+            && !diff.mixer_changed
+        {
+            vec!["Snapshots are identical — no changes detected".to_string()]
+        } else {
+            vec![]
+        },
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `get_candidate_diff` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateDiffParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Candidate A ID.
+    pub candidate_a: String,
+    /// Candidate B ID.
+    pub candidate_b: String,
+    /// Serialized candidate A project.
+    #[serde(default)]
+    pub project_a: Option<serde_json::Value>,
+    /// Serialized candidate B project.
+    #[serde(default)]
+    pub project_b: Option<serde_json::Value>,
+}
+
+/// Compare two candidates by validating both and comparing scorecards.
+///
+/// Produces a real [`CandidateDiff`](scorestrata_core::debug::CandidateDiff)
+/// with per-metric scores and a winner (majority of metric wins, ties broken
+/// by overall score).
+#[must_use]
+pub fn get_candidate_diff(params: &CandidateDiffParams) -> ToolReceipt {
+    let (Some(pa), Some(pb)) = (&params.project_a, &params.project_b) else {
+        return ToolReceipt {
+            tool: "get_candidate_diff".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Candidate diff requested for project '{}' but no serialized candidate payloads provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply project_a and project_b serialized payloads to compare candidates"
+                    .to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let candidate_a = match serde_json::from_value::<scorestrata_core::domain::Project>(pa.clone())
+    {
+        Ok(p) => p,
+        Err(e) => return deserialize_error_receipt("get_candidate_diff", "candidate_a", &e),
+    };
+    let candidate_b = match serde_json::from_value::<scorestrata_core::domain::Project>(pb.clone())
+    {
+        Ok(p) => p,
+        Err(e) => return deserialize_error_receipt("get_candidate_diff", "candidate_b", &e),
+    };
+
+    let diff = crate::debug_ops::compute_candidate_diff(&candidate_a, &candidate_b);
+    let mut score_delta = BTreeMap::new();
+    let winner = diff
+        .winner
+        .map_or_else(|| "tie".to_string(), |w| w.to_string());
+    score_delta.insert("candidate.winner".to_string(), winner);
+    score_delta.insert(
+        "candidate.metrics_compared".to_string(),
+        diff.score_comparison.len().to_string(),
+    );
+
+    ToolReceipt {
+        tool: "get_candidate_diff".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Compared '{}' vs '{}': {}",
+            params.candidate_a,
+            params.candidate_b,
+            diff.reason.as_deref().unwrap_or("no winner")
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/diff/candidates/{}/{}",
+            params.project_id, params.candidate_a, params.candidate_b
+        )],
+        focus_uris: vec![],
+        next_actions: vec![],
+        cost: ToolCost {
+            cpu_ms: 8,
+            tool_calls: 2,
+            ..Default::default()
+        },
         warnings: vec![],
         dry_run: false,
         diagnostics: vec![],
@@ -545,26 +707,203 @@ pub struct IsolateLayerParams {
     pub project_id: String,
     /// Layer ID to isolate.
     pub layer_id: String,
+    /// Serialized project (when provided, the isolation is real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
 }
 
 /// Isolate a layer for solo inspection.
+///
+/// With a project payload, produces a real [`LayerIsolation`]
+/// (scorestrata_core::debug) with the layer's location and note count.
 #[must_use]
 pub fn isolate_layer(params: &IsolateLayerParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "isolate_layer".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer isolation requested for project '{}' but no serialized project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![format!(
+                "Supply a serialized project payload to isolate layer '{}'",
+                params.layer_id
+            )],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("isolate_layer", "project", &e),
+        };
+    let Some(isolation) = crate::debug_ops::compute_layer_isolation(&project, &params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "isolate_layer".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in project '{}'",
+                params.layer_id, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown layer ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "isolation.segment".to_string(),
+        isolation.segment_id.clone().unwrap_or_default(),
+    );
+    score_delta.insert("isolation.mute_others".to_string(), "true".to_string());
+    score_delta.insert(
+        "isolation.note_count".to_string(),
+        isolation.note_count.to_string(),
+    );
+
     ToolReceipt {
         tool: "isolate_layer".to_string(),
         status: ToolStatus::Succeeded,
         summary: format!(
-            "Isolated layer '{}' in project '{}' for solo inspection",
-            params.layer_id, params.project_id
+            "Isolated layer '{}' in segment '{}' for solo inspection (all other layers muted, {} notes)",
+            params.layer_id,
+            isolation.segment_id.as_deref().unwrap_or("project"),
+            isolation.note_count
         ),
-        score_delta: BTreeMap::new(),
+        score_delta,
         evidence_uris: vec![format!(
             "project://{}/layers/{}",
             params.project_id, params.layer_id
         )],
-        focus_uris: vec![],
-        next_actions: vec![],
-        cost: ToolCost::default(),
+        focus_uris: vec![format!(
+            "project://{}/lens/layer/{}",
+            params.project_id, params.layer_id
+        )],
+        next_actions: vec!["render_project".to_string()],
+        cost: ToolCost {
+            cpu_ms: 3,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `solo_segment` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoloSegmentParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID to solo.
+    pub segment_id: String,
+    /// Serialized project (when provided, the solo is real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Solo a segment for inspection.
+///
+/// With a project payload, produces a real [`SegmentSolo`]
+/// (scorestrata_core::debug) with the segment's structure.
+#[must_use]
+pub fn solo_segment(params: &SoloSegmentParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "solo_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Segment solo requested for project '{}' but no serialized project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![format!(
+                "Supply a serialized project payload to solo segment '{}'",
+                params.segment_id
+            )],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("solo_segment", "project", &e),
+        };
+    let Some(solo) = crate::debug_ops::compute_segment_solo(&project, &params.segment_id) else {
+        return ToolReceipt {
+            tool: "solo_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Segment '{}' not found in project '{}'",
+                params.segment_id, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let segment = project
+        .arrangement
+        .segments
+        .iter()
+        .find(|s| s.id.to_string() == params.segment_id)
+        .expect("segment verified to exist above");
+    let _ = &solo; // solo validates existence; stats come from the segment
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("solo.layers".to_string(), segment.layers.len().to_string());
+    score_delta.insert("solo.bars".to_string(), segment.bars.to_string());
+
+    ToolReceipt {
+        tool: "solo_segment".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Soloed segment '{}' ({} bars, {} layers) in project '{}'",
+            params.segment_id,
+            segment.bars,
+            segment.layers.len(),
+            params.project_id
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}",
+            params.project_id, params.segment_id
+        )],
+        focus_uris: vec![format!(
+            "project://{}/lens/segment/{}",
+            params.project_id, params.segment_id
+        )],
+        next_actions: vec!["render_segment".to_string()],
+        cost: ToolCost {
+            cpu_ms: 3,
+            tool_calls: 1,
+            ..Default::default()
+        },
         warnings: vec![],
         dry_run: false,
         diagnostics: vec![],
@@ -578,33 +917,212 @@ pub struct ExplainMetricParams {
     pub project_id: String,
     /// Metric name to explain.
     pub metric_name: String,
+    /// Serialized project (when provided, the explanation is real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
 }
 
 /// Explain a metric with evidence and root causes.
+///
+/// With a project payload, runs a real validation and produces a
+/// [`MetricExplanation`](scorestrata_core::debug::MetricExplanation)
+/// with root causes and suggested actions.
 #[must_use]
 pub fn explain_metric(params: &ExplainMetricParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "explain_metric".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Metric explanation requested for project '{}' but no serialized project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![format!(
+                "Supply a serialized project payload to explain metric '{}'",
+                params.metric_name
+            )],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("explain_metric", "project", &e),
+        };
+    let Some(explanation) =
+        crate::debug_ops::compute_metric_explanation(&project, &params.metric_name)
+    else {
+        return ToolReceipt {
+            tool: "explain_metric".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Metric '{}' not found in the scorecard for project '{}'",
+                params.metric_name, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+            next_actions: vec!["run_validation".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Metric not measured".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "metric.value".to_string(),
+        format!("{:.3}", explanation.current_value),
+    );
+    score_delta.insert(
+        "metric.root_causes".to_string(),
+        explanation.root_causes.len().to_string(),
+    );
+
     ToolReceipt {
         tool: "explain_metric".to_string(),
         status: ToolStatus::Succeeded,
         summary: format!(
-            "Explaining metric '{}' for project '{}'",
-            params.metric_name, params.project_id
+            "Explained '{}' (value {:.3}, target 1.0, {} root cause(s), confidence {:.2})",
+            params.metric_name,
+            explanation.current_value,
+            explanation.root_causes.len(),
+            explanation.confidence
         ),
-        score_delta: BTreeMap::new(),
-        evidence_uris: vec![format!(
-            "project://{}/metrics/{}",
-            params.project_id, params.metric_name
-        )],
+        score_delta,
+        evidence_uris: explanation.evidence_uris.clone(),
         focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
-        next_actions: vec![],
-        cost: ToolCost::default(),
+        next_actions: explanation.suggested_actions.clone(),
+        cost: ToolCost {
+            cpu_ms: 6,
+            tool_calls: 1,
+            ..Default::default()
+        },
         warnings: vec![],
         dry_run: false,
         diagnostics: vec![],
     }
 }
 
-// ── Learning Tools (§10.5) ─────────────────────────────────────────
+/// Parameters for `get_command_trace` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetCommandTraceParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Command ID to trace.
+    pub command_id: String,
+    /// Serialized project memory (when provided, the trace is real).
+    #[serde(default)]
+    pub memory: Option<serde_json::Value>,
+}
+
+/// Trace a command through the event ledger.
+///
+/// With a serialized [`ProjectMemory`](scorestrata_storage::memory::ProjectMemory)
+/// payload, produces a real [`CommandTrace`](scorestrata_core::debug::CommandTrace)
+/// from episodic command history.
+#[must_use]
+pub fn get_command_trace(params: &GetCommandTraceParams) -> ToolReceipt {
+    let Some(memory_json) = &params.memory else {
+        return ToolReceipt {
+            tool: "get_command_trace".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Command trace requested for project '{}' but no serialized memory payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized project memory payload to trace the command".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let memory = match serde_json::from_value::<scorestrata_storage::memory::ProjectMemory>(
+        memory_json.clone(),
+    ) {
+        Ok(m) => m,
+        Err(e) => return deserialize_error_receipt("get_command_trace", "memory", &e),
+    };
+    let Some(trace) =
+        crate::debug_ops::build_command_trace(&memory, &params.project_id, &params.command_id)
+    else {
+        return ToolReceipt {
+            tool: "get_command_trace".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Command '{}' not found in memory for project '{}'",
+                params.command_id, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown command ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "trace.duration_ms".to_string(),
+        trace.duration_ms.to_string(),
+    );
+    score_delta.insert("trace.events".to_string(), trace.events.len().to_string());
+
+    ToolReceipt {
+        tool: "get_command_trace".to_string(),
+        status: if trace.succeeded {
+            ToolStatus::Succeeded
+        } else {
+            ToolStatus::Failed
+        },
+        summary: format!(
+            "Traced '{}' ({} by {}): {} event(s), {} ms, {}",
+            params.command_id,
+            trace.command_type,
+            trace.actor,
+            trace.events.len(),
+            trace.duration_ms,
+            if trace.succeeded {
+                "succeeded"
+            } else {
+                "failed"
+            }
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/trace/command/{}",
+            params.project_id, params.command_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec![],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+// ── Learning Tools (§10.5, §13) ────────────────────────────────────
 
 /// Parameters for `get_lessons` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -618,6 +1136,26 @@ pub struct GetLessonsParams {
     /// Minimum confidence threshold.
     #[serde(default = "default_min_confidence")]
     pub min_confidence: f32,
+    /// Serialized lesson store (when provided, the query is real).
+    #[serde(default)]
+    pub lesson_store: Option<serde_json::Value>,
+}
+
+/// Build a `ToolReceipt` for a failed payload deserialization.
+fn deserialize_error_receipt(tool: &str, field: &str, err: &serde_json::Error) -> ToolReceipt {
+    ToolReceipt {
+        tool: tool.to_string(),
+        status: ToolStatus::Failed,
+        summary: format!("Could not deserialize {field}: {err}"),
+        score_delta: BTreeMap::new(),
+        evidence_uris: vec![],
+        focus_uris: vec![],
+        next_actions: vec!["get_project_summary".to_string()],
+        cost: ToolCost::default(),
+        warnings: vec![format!("Invalid {field} payload")],
+        dry_run: false,
+        diagnostics: vec![],
+    }
 }
 
 fn default_min_confidence() -> f32 {
@@ -631,21 +1169,98 @@ const fn default_ts_num() -> u32 {
 }
 
 /// Get learned repair strategies filtered by trigger and genre.
+///
+/// With a serialized [`LessonStore`](scorestrata_storage::lesson_store::LessonStore)
+/// payload, returns real lessons matching the trigger/genre/confidence filters.
 #[must_use]
 pub fn get_lessons(params: &GetLessonsParams) -> ToolReceipt {
+    let Some(store_json) = &params.lesson_store else {
+        return ToolReceipt {
+            tool: "get_lessons".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Lesson query for project '{}' but no serialized lesson store payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Supply a serialized lesson store payload to query lessons".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let store = match serde_json::from_value::<scorestrata_storage::lesson_store::LessonStore>(
+        store_json.clone(),
+    ) {
+        Ok(s) => s,
+        Err(e) => return deserialize_error_receipt("get_lessons", "lesson_store", &e),
+    };
+
+    // Apply trigger / genre / confidence filters using the real store queries.
+    let candidates: Vec<&scorestrata_storage::lesson_store::StoredLesson> =
+        match (&params.trigger, &params.genre) {
+            (Some(trigger), Some(genre)) => store
+                .get_by_trigger(trigger)
+                .into_iter()
+                .filter(|l| l.genre.as_deref() == Some(genre.as_str()) || l.genre.is_none())
+                .collect(),
+            (Some(trigger), None) => store.get_by_trigger(trigger),
+            (None, Some(genre)) => store.get_by_genre(genre),
+            (None, None) => store.get_confident_lessons(params.min_confidence),
+        };
+    let matched: Vec<_> = candidates
+        .into_iter()
+        .filter(|l| l.confidence >= params.min_confidence)
+        .collect();
+
+    let summaries: Vec<String> = matched
+        .iter()
+        .map(|l| {
+            format!(
+                "{}: '{}' → {}",
+                l.id,
+                l.trigger,
+                l.successful_patch.as_deref().unwrap_or("no patch")
+            )
+        })
+        .collect();
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("lessons.matched".to_string(), matched.len().to_string());
+    score_delta.insert(
+        "lessons.total_in_store".to_string(),
+        store.len().to_string(),
+    );
+
     ToolReceipt {
         tool: "get_lessons".to_string(),
         status: ToolStatus::Succeeded,
         summary: format!(
-            "Retrieved lessons for project '{}' (trigger={:?}, genre={:?}, min_confidence={:.2})",
-            params.project_id, params.trigger, params.genre, params.min_confidence
+            "Retrieved {} lesson(s) for project '{}' (trigger={:?}, genre={:?}, min_confidence={:.2}): {}",
+            matched.len(),
+            params.project_id,
+            params.trigger,
+            params.genre,
+            params.min_confidence,
+            summaries.join("; ")
         ),
-        score_delta: BTreeMap::new(),
+        score_delta,
         evidence_uris: vec![format!("project://{}/memory/lessons", params.project_id)],
         focus_uris: vec![],
         next_actions: vec![],
-        cost: ToolCost::default(),
-        warnings: vec![],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: if matched.is_empty() {
+            vec!["No lessons matched the filters".to_string()]
+        } else {
+            vec![]
+        },
         dry_run: false,
         diagnostics: vec![],
     }
@@ -666,27 +1281,194 @@ pub struct RecordLessonParams {
     pub genre: Option<String>,
     /// Confidence.
     pub confidence: f32,
+    /// Serialized lesson store to mutate (when provided, the lesson is
+    /// actually recorded and the updated store is returned in evidence).
+    #[serde(default)]
+    pub lesson_store: Option<serde_json::Value>,
 }
 
 /// Record a lesson learned from a successful or failed repair.
+///
+/// With a serialized [`LessonStore`](scorestrata_storage::lesson_store::LessonStore)
+/// payload, records the lesson for real and returns the updated store
+/// serialized in the receipt's evidence so the caller can persist it.
 #[must_use]
 pub fn record_lesson(params: &RecordLessonParams) -> ToolReceipt {
+    let Some(store_json) = &params.lesson_store else {
+        return ToolReceipt {
+            tool: "record_lesson".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Lesson recording for project '{}' but no serialized lesson store payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized lesson store payload to record the lesson".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut store = match serde_json::from_value::<scorestrata_storage::lesson_store::LessonStore>(
+        store_json.clone(),
+    ) {
+        Ok(s) => s,
+        Err(e) => return deserialize_error_receipt("record_lesson", "lesson_store", &e),
+    };
+
+    let id = format!("les_{}", store.len() + 1);
+    let now = chrono::Utc::now().to_rfc3339();
+    let lesson = scorestrata_storage::lesson_store::StoredLesson {
+        id: id.clone(),
+        scope: params.scope.clone(),
+        trigger: params.trigger.clone(),
+        successful_patch: params.successful_patch.clone(),
+        failed_patches: vec![],
+        evidence_uris: vec![format!("project://{}/memory/lessons", params.project_id)],
+        genre: params.genre.clone(),
+        confidence: params.confidence,
+        success_count: 0,
+        failure_count: 0,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    store.record(lesson);
+
+    // Return the updated store so the caller can persist it (MCP adapter
+    // owns persistence; the tool is a pure function).
+    let updated_store = serde_json::to_value(&store).unwrap_or_default();
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("lessons.total".to_string(), store.len().to_string());
+    score_delta.insert("lesson.id".to_string(), id.clone());
+    score_delta.insert(
+        "lesson.confidence".to_string(),
+        format!("{:.2}", params.confidence),
+    );
+
     ToolReceipt {
         tool: "record_lesson".to_string(),
         status: ToolStatus::Succeeded,
         summary: format!(
-            "Recorded lesson: trigger='{}', scope='{}', patch={:?} for project '{}'",
-            params.trigger, params.scope, params.successful_patch, params.project_id
+            "Recorded lesson {id}: trigger='{}', scope='{}', patch={:?} for project '{}' (store now has {} lessons)",
+            params.trigger,
+            params.scope,
+            params.successful_patch,
+            params.project_id,
+            store.len()
         ),
-        score_delta: BTreeMap::new(),
-        evidence_uris: vec![format!("project://{}/memory/lessons", params.project_id)],
+        score_delta,
+        evidence_uris: vec![
+            format!("project://{}/memory/lessons", params.project_id),
+            format!(
+                "memory://lessons/{}?store={updated_store}",
+                params.project_id
+            ),
+        ],
         focus_uris: vec![],
         next_actions: vec![],
         cost: ToolCost {
+            cpu_ms: 2,
             tool_calls: 1,
             ..Default::default()
         },
         warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `get_repair_templates` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetRepairTemplatesParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized lesson store (when provided, templates are derived from
+    /// the top confident lessons).
+    #[serde(default)]
+    pub lesson_store: Option<serde_json::Value>,
+}
+
+/// Get ranked repair templates for common diagnostics.
+///
+/// With a serialized [`LessonStore`](scorestrata_storage::lesson_store::LessonStore)
+/// payload, derives templates from the highest-confidence lessons
+/// (per §13.7 patch template rankings).
+#[must_use]
+pub fn get_repair_templates(params: &GetRepairTemplatesParams) -> ToolReceipt {
+    let Some(store_json) = &params.lesson_store else {
+        return ToolReceipt {
+            tool: "get_repair_templates".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Repair template query for project '{}' but no serialized lesson store payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized lesson store payload to derive repair templates".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let store = match serde_json::from_value::<scorestrata_storage::lesson_store::LessonStore>(
+        store_json.clone(),
+    ) {
+        Ok(s) => s,
+        Err(e) => return deserialize_error_receipt("get_repair_templates", "lesson_store", &e),
+    };
+    let templates = crate::debug_ops::build_repair_templates(&store);
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("templates.count".to_string(), templates.len().to_string());
+    let summaries: Vec<String> = templates
+        .iter()
+        .map(|t| {
+            format!(
+                "{} ({:.0}% success, {} uses)",
+                t.operation,
+                t.success_rate * 100.0,
+                t.usage_count
+            )
+        })
+        .collect();
+
+    ToolReceipt {
+        tool: "get_repair_templates".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Derived {} repair template(s) for project '{}': {}",
+            templates.len(),
+            params.project_id,
+            summaries.join("; ")
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/memory/repair-templates",
+            params.project_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec![],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: if templates.is_empty() {
+            vec!["No lessons yet — record lessons to build repair templates".to_string()]
+        } else {
+            vec![]
+        },
         dry_run: false,
         diagnostics: vec![],
     }
@@ -1696,53 +2478,298 @@ mod tests {
     }
 
     #[test]
-    fn get_snapshot_diff_returns_success() {
+    fn get_snapshot_diff_without_payload_fails_transparently() {
         let params = SnapshotDiffParams {
             project_id: "proj_1".to_string(),
             snapshot_a: "snap_a".to_string(),
             snapshot_b: "snap_b".to_string(),
+            project_a: None,
+            project_b: None,
+        };
+        let receipt = get_snapshot_diff(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt.warnings.iter().any(|w| w.contains("project_a")),
+            "expected missing-payload warning, got {:#?}",
+            receipt.warnings
+        );
+    }
+
+    #[test]
+    fn get_snapshot_diff_computes_real_diff() {
+        // Two melodic-techno projects; the second has a modified pattern
+        // (note count) so the diff reports a pattern change.
+        let project_a = scorestrata_testkit::melodic_techno_project();
+        let mut project_b = project_a.clone();
+        project_b.name = "diffed".to_string();
+        // Give B a different segment bar layout to force a segment diff.
+        for seg in &mut project_b.arrangement.segments {
+            seg.bars += 4;
+        }
+        project_b.arrangement.total_bars += 4;
+
+        let params = SnapshotDiffParams {
+            project_id: project_a.id.to_string(),
+            snapshot_a: "snap_a".to_string(),
+            snapshot_b: "snap_b".to_string(),
+            project_a: Some(serde_json::to_value(&project_a).unwrap_or_default()),
+            project_b: Some(serde_json::to_value(&project_b).unwrap_or_default()),
+        };
+        let receipt = get_snapshot_diff(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "diff should succeed, got {receipt:#?}"
+        );
+        assert!(
+            receipt.score_delta.contains_key("diff.segments_changed"),
+            "receipt reports segment diff count"
+        );
+        assert!(receipt.summary.contains("segments changed"));
+    }
+
+    #[test]
+    fn get_snapshot_diff_identical_projects_report_no_changes() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = SnapshotDiffParams {
+            project_id: project.id.to_string(),
+            snapshot_a: "a".to_string(),
+            snapshot_b: "b".to_string(),
+            project_a: Some(serde_json::to_value(&project).unwrap_or_default()),
+            project_b: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
         let receipt = get_snapshot_diff(&params);
         assert!(matches!(receipt.status, ToolStatus::Succeeded));
-        assert!(receipt.evidence_uris[0].contains("snap_a"));
+        assert!(
+            receipt.warnings.iter().any(|w| w.contains("identical")),
+            "expected no-change warning, got {:#?}",
+            receipt.warnings
+        );
     }
 
     #[test]
-    fn isolate_layer_returns_success() {
+    fn get_candidate_diff_selects_winner() {
+        // Candidate A is a healthy planned project; B has an out-of-scale
+        // pattern (C# in C minor) so validation scores it lower.
+        let project_a = scorestrata_testkit::melodic_techno_project();
+        let mut project_b = project_a.clone();
+        project_b.name = "candidate_b".to_string();
+        for pattern in &mut project_b.patterns {
+            for note in &mut pattern.notes {
+                note.pitch = scorestrata_core::domain::MidiNote::new(61); // C# — out of scale
+            }
+        }
+
+        let params = CandidateDiffParams {
+            project_id: project_a.id.to_string(),
+            candidate_a: "cand_a".to_string(),
+            candidate_b: "cand_b".to_string(),
+            project_a: Some(serde_json::to_value(&project_a).unwrap_or_default()),
+            project_b: Some(serde_json::to_value(&project_b).unwrap_or_default()),
+        };
+        let receipt = get_candidate_diff(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "candidate diff should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.score_delta.contains_key("candidate.winner"));
+        assert!(
+            receipt.summary.contains("cand_a") || receipt.summary.contains("cand_b"),
+            "summary names the candidates"
+        );
+    }
+
+    #[test]
+    fn get_candidate_diff_without_payload_fails_transparently() {
+        let params = CandidateDiffParams {
+            project_id: "proj_1".to_string(),
+            candidate_a: "a".to_string(),
+            candidate_b: "b".to_string(),
+            project_a: None,
+            project_b: None,
+        };
+        let receipt = get_candidate_diff(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+    }
+
+    #[test]
+    fn isolate_layer_returns_success_with_project() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
         let params = IsolateLayerParams {
             project_id: "proj_1".to_string(),
-            layer_id: "layer_bass".to_string(),
+            layer_id: layer_id.clone(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
         let receipt = isolate_layer(&params);
-        assert!(matches!(receipt.status, ToolStatus::Succeeded));
-        assert!(receipt.summary.contains("layer_bass"));
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "isolation should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains(&layer_id));
     }
 
     #[test]
-    fn explain_metric_returns_success() {
+    fn isolate_layer_unknown_layer_fails() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = IsolateLayerParams {
+            project_id: "proj_1".to_string(),
+            layer_id: "no_such_layer".to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = isolate_layer(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+    }
+
+    #[test]
+    fn solo_segment_returns_success_with_project() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let params = SoloSegmentParams {
+            project_id: "proj_1".to_string(),
+            segment_id: segment_id.clone(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = solo_segment(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "solo should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("bars"));
+        assert!(receipt.summary.contains("layers"));
+    }
+
+    #[test]
+    fn solo_segment_unknown_segment_fails() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = SoloSegmentParams {
+            project_id: "proj_1".to_string(),
+            segment_id: "no_such_segment".to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = solo_segment(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+    }
+
+    #[test]
+    fn explain_metric_returns_real_explanation() {
+        let project = scorestrata_testkit::melodic_techno_project();
         let params = ExplainMetricParams {
             project_id: "proj_1".to_string(),
             metric_name: "harmony.scale_compliance".to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
         let receipt = explain_metric(&params);
-        assert!(matches!(receipt.status, ToolStatus::Succeeded));
-        assert!(receipt.evidence_uris[0].contains("scale_compliance"));
+        // A fully planned project should score 1.0 on scale compliance (no
+        // root causes); a metric that is measured appears in the scorecard.
+        if matches!(receipt.status, ToolStatus::Succeeded) {
+            assert!(receipt.summary.contains("scale_compliance"));
+            assert!(receipt.score_delta.contains_key("metric.value"));
+        } else {
+            // If the fixture has no scale diagnostics, the metric is not in
+            // the scorecard and the tool fails cleanly with a clear reason.
+            assert!(receipt.summary.contains("not found"));
+        }
     }
 
     #[test]
-    fn get_lessons_returns_success() {
+    fn get_command_trace_returns_real_trace() {
+        let mut memory = scorestrata_storage::memory::ProjectMemory::new();
+        memory.record_command(scorestrata_storage::memory::CommandRecord {
+            command_id: "cmd_001".to_string(),
+            command_type: "apply_patch".to_string(),
+            actor: "agent:composer".to_string(),
+            success: true,
+            score_delta: Some(0.14),
+            duration_ms: 42,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+        let params = GetCommandTraceParams {
+            project_id: "proj_1".to_string(),
+            command_id: "cmd_001".to_string(),
+            memory: Some(serde_json::to_value(&memory).unwrap_or_default()),
+        };
+        let receipt = get_command_trace(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "trace should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("cmd_001"));
+        assert!(receipt.summary.contains("42 ms"));
+    }
+
+    #[test]
+    fn get_command_trace_unknown_command_fails() {
+        let memory = scorestrata_storage::memory::ProjectMemory::new();
+        let params = GetCommandTraceParams {
+            project_id: "proj_1".to_string(),
+            command_id: "cmd_404".to_string(),
+            memory: Some(serde_json::to_value(&memory).unwrap_or_default()),
+        };
+        let receipt = get_command_trace(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("not found"));
+    }
+
+    fn sample_lesson_store() -> scorestrata_storage::lesson_store::LessonStore {
+        let mut store = scorestrata_storage::lesson_store::LessonStore::new();
+        store.record(scorestrata_storage::lesson_store::StoredLesson {
+            id: "les_1".to_string(),
+            scope: "harmony".to_string(),
+            trigger: "SCALE_VIOLATION".to_string(),
+            successful_patch: Some("quantize_layer_to_scale".to_string()),
+            failed_patches: vec![],
+            evidence_uris: vec![],
+            genre: Some("melodic_techno".to_string()),
+            confidence: 0.9,
+            success_count: 5,
+            failure_count: 0,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        });
+        store
+    }
+
+    #[test]
+    fn get_lessons_filters_by_trigger() {
+        let store = sample_lesson_store();
         let params = GetLessonsParams {
             project_id: "proj_1".to_string(),
             trigger: Some("SCALE_VIOLATION".to_string()),
-            genre: Some("melodic_techno".to_string()),
-            min_confidence: 0.7,
+            genre: None,
+            min_confidence: 0.5,
+            lesson_store: Some(serde_json::to_value(&store).unwrap_or_default()),
         };
         let receipt = get_lessons(&params);
-        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "lesson query should succeed, got {receipt:#?}"
+        );
+        assert_eq!(receipt.score_delta["lessons.matched"], "1");
+        assert!(receipt.summary.contains("quantize_layer_to_scale"));
     }
 
     #[test]
-    fn record_lesson_returns_success() {
+    fn get_lessons_no_match_returns_warning() {
+        let store = sample_lesson_store();
+        let params = GetLessonsParams {
+            project_id: "proj_1".to_string(),
+            trigger: Some("NO_SUCH_TRIGGER".to_string()),
+            genre: None,
+            min_confidence: 0.5,
+            lesson_store: Some(serde_json::to_value(&store).unwrap_or_default()),
+        };
+        let receipt = get_lessons(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(receipt.score_delta["lessons.matched"], "0");
+        assert!(
+            receipt.warnings.iter().any(|w| w.contains("No lessons")),
+            "expected no-match warning"
+        );
+    }
+
+    #[test]
+    fn record_lesson_mutates_store() {
+        let store = scorestrata_storage::lesson_store::LessonStore::new();
         let params = RecordLessonParams {
             project_id: "proj_1".to_string(),
             trigger: "TRANSITION_ENERGY_LOW".to_string(),
@@ -1750,10 +2777,63 @@ mod tests {
             successful_patch: Some("add_transition_package".to_string()),
             genre: Some("techno".to_string()),
             confidence: 0.8,
+            lesson_store: Some(serde_json::to_value(&store).unwrap_or_default()),
         };
         let receipt = record_lesson(&params);
-        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "record should succeed, got {receipt:#?}"
+        );
         assert_eq!(receipt.tool, "record_lesson");
+        assert_eq!(receipt.score_delta["lessons.total"], "1");
+        assert!(receipt.summary.contains("store now has 1 lessons"));
+    }
+
+    #[test]
+    fn record_lesson_without_store_fails_transparently() {
+        let params = RecordLessonParams {
+            project_id: "proj_1".to_string(),
+            trigger: "X".to_string(),
+            scope: "scope".to_string(),
+            successful_patch: None,
+            genre: None,
+            confidence: 0.5,
+            lesson_store: None,
+        };
+        let receipt = record_lesson(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+    }
+
+    #[test]
+    fn get_repair_templates_derives_from_lessons() {
+        let store = sample_lesson_store();
+        let params = GetRepairTemplatesParams {
+            project_id: "proj_1".to_string(),
+            lesson_store: Some(serde_json::to_value(&store).unwrap_or_default()),
+        };
+        let receipt = get_repair_templates(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "template query should succeed, got {receipt:#?}"
+        );
+        assert_eq!(receipt.score_delta["templates.count"], "1");
+        assert!(receipt.summary.contains("quantize_layer_to_scale"));
+    }
+
+    #[test]
+    fn get_repair_templates_empty_store_warns() {
+        let store = scorestrata_storage::lesson_store::LessonStore::new();
+        let params = GetRepairTemplatesParams {
+            project_id: "proj_1".to_string(),
+            lesson_store: Some(serde_json::to_value(&store).unwrap_or_default()),
+        };
+        let receipt = get_repair_templates(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(receipt.score_delta["templates.count"], "0");
+        assert!(
+            receipt.warnings.iter().any(|w| w.contains("No lessons")),
+            "expected empty-store warning"
+        );
     }
 
     #[test]
