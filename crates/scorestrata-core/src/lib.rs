@@ -21,6 +21,7 @@ pub mod event;
 pub mod ids;
 pub mod policy;
 pub mod policy_engine;
+pub mod schema_registry;
 pub mod snapshot;
 pub mod state_machine;
 pub mod telemetry;
@@ -28,5 +29,13 @@ pub mod telemetry;
 pub use error::ScorestrataError;
 /// Re-export commonly used types at crate root.
 pub use ids::*;
+pub use schema_registry::{
+    SCHEMA_REGISTRY_VERSION, SchemaEntry, Stability, get_schema, list_schema_names,
+    registry_as_json, schema_registry, validate_instance, validate_required_fields,
+};
+
+/// Contract tests — verify real serialized types conform to registered schemas.
+#[cfg(test)]
+mod contract_tests;
 #[cfg(test)]
 mod proptests;
