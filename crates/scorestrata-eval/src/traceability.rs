@@ -457,6 +457,62 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-RENDER-JOBS".to_string(),
+        title: "Render job management and candidate previews".to_string(),
+        phase: "4".to_string(),
+        tasks: vec!["RENDER-002".to_string()],
+        code: vec![
+            "scorestrata_storage::render_job".to_string(),
+            "scorestrata_mcp::tools".to_string(),
+            "scorestrata_audio::render".to_string(),
+        ],
+        tests: vec![
+            "render_job::tests".to_string(),
+            "tools::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec![
+            "render_candidate_preview".to_string(),
+            "get_render_job".to_string(),
+            "cancel_render_job".to_string(),
+        ],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §10.5, §8.2".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-ENGINEERING-PLANE".to_string(),
+        title: "Engineering plane — results, eval reports, docs, ADRs, calibration".to_string(),
+        phase: "6".to_string(),
+        tasks: vec!["ENG-002".to_string()],
+        code: vec![
+            "scorestrata_storage::engineering".to_string(),
+            "scorestrata_storage::adr".to_string(),
+            "scorestrata_storage::docs".to_string(),
+            "scorestrata_storage::calibration".to_string(),
+            "scorestrata_mcp::tools".to_string(),
+        ],
+        tests: vec![
+            "engineering::tests".to_string(),
+            "adr::tests".to_string(),
+            "docs::tests".to_string(),
+            "tools::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec![
+            "submit_task_result".to_string(),
+            "get_eval_report".to_string(),
+            "update_docs".to_string(),
+            "create_adr".to_string(),
+            "update_calibration_profile".to_string(),
+        ],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §10.5, §16.3".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-CLI-BUNDLE".to_string(),
         title: "CLI wired to real storage and pipeline".to_string(),
         phase: "0".to_string(),

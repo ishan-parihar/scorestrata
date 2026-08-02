@@ -308,6 +308,7 @@ impl Lesson {
 
 /// Calibration profile — collects signals and maintains calibration state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CalibrationProfile {
     /// Genre profiles.
     pub genre_profiles: BTreeMap<String, GenreProfile>,

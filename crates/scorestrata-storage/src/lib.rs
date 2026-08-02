@@ -8,15 +8,19 @@
 
 #![deny(missing_docs)]
 
+pub mod adr;
 pub mod bundle;
 pub mod cache;
 pub mod calibration;
 pub mod candidate;
+pub mod docs;
+pub mod engineering;
 pub mod evidence;
 pub mod experiment;
 pub mod ledger;
 pub mod lesson_store;
 pub mod memory;
+pub mod render_job;
 pub mod replay;
 pub mod snapshot_graph;
 pub mod trace;

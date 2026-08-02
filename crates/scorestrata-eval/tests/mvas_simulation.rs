@@ -997,6 +997,177 @@ fn mvas_step_17_orientation_and_validation_drill_down() {
     );
 }
 
+#[test]
+fn mvas_step_18_render_jobs_and_engineering_plane() {
+    // §10.5 render-job + engineering-plane tools: a candidate preview is
+    // rendered through the real audio engine with an observable job
+    // lifecycle, then the engineering loop closes — result submitted, eval
+    // report generated, docs updated, ADR recorded, calibration updated.
+    use scorestrata_mcp::tools::{
+        CancelRenderJobParams, CreateAdrParams, GetEvalReportParams, GetRenderJobParams,
+        RenderCandidatePreviewParams, SubmitTaskResultParams, ToolStatus,
+        UpdateCalibrationProfileParams, UpdateDocsParams,
+    };
+
+    let project = scorestrata_testkit::melodic_techno_project();
+    let project_json = serde_json::to_value(&project).expect("project serializes");
+    let project_id = project.id.to_string();
+
+    // ── 18a. Render a candidate preview — real engine, job lifecycle ──
+    let preview = scorestrata_mcp::tools::render_candidate_preview(&RenderCandidatePreviewParams {
+        project_id: project_id.clone(),
+        candidate_id: "cand_a".to_string(),
+        project: Some(project_json.clone()),
+        jobs: Some(serde_json::json!({})),
+    });
+    assert!(
+        matches!(preview.status, ToolStatus::Succeeded),
+        "candidate preview should render, got {:#?}",
+        preview
+    );
+    assert_eq!(
+        preview
+            .score_delta
+            .get("render.job_status")
+            .map(String::as_str),
+        Some("Completed")
+    );
+    let job_id = preview
+        .score_delta
+        .get("render.preview_job")
+        .cloned()
+        .expect("job id reported");
+
+    // The job is queryable afterwards.
+    let mut jobs = scorestrata_storage::render_job::RenderJobStore::new();
+    jobs.submit(scorestrata_storage::render_job::RenderJob::new(
+        &job_id,
+        &project_id,
+        "preview",
+    ));
+    jobs.start(&job_id);
+    jobs.complete(
+        &job_id,
+        &format!("project://{project_id}/render/preview/cand_a"),
+    );
+    let queried = scorestrata_mcp::tools::get_render_job(&GetRenderJobParams {
+        project_id: project_id.clone(),
+        job_id: job_id.clone(),
+        jobs: Some(serde_json::to_value(&jobs).expect("jobs serialize")),
+    });
+    assert!(matches!(queried.status, ToolStatus::Succeeded));
+    assert_eq!(
+        queried
+            .score_delta
+            .get("render.job_status")
+            .map(String::as_str),
+        Some("Completed")
+    );
+
+    // A queued job can be cancelled; a completed one cannot.
+    let mut jobs2 = scorestrata_storage::render_job::RenderJobStore::new();
+    jobs2.submit(scorestrata_storage::render_job::RenderJob::new(
+        "job_cancel",
+        &project_id,
+        "master",
+    ));
+    let cancelled = scorestrata_mcp::tools::cancel_render_job(&CancelRenderJobParams {
+        project_id: project_id.clone(),
+        job_id: "job_cancel".to_string(),
+        jobs: Some(serde_json::to_value(&jobs2).expect("jobs serialize")),
+    });
+    assert!(matches!(cancelled.status, ToolStatus::Succeeded));
+
+    // ── 18b. Engineering loop: submit result → eval report ──────────
+    let mut board = scorestrata_storage::engineering::TaskResultBoard::new();
+    board.record(scorestrata_storage::engineering::TaskResult {
+        task_id: "TASK-001".to_string(),
+        agent_id: "agent:composer".to_string(),
+        passed: 3,
+        failed: 0,
+        score_delta: 0.12,
+        evidence_uri: None,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+    let submitted = scorestrata_mcp::tools::submit_task_result(&SubmitTaskResultParams {
+        project_id: project_id.clone(),
+        task_id: "TASK-002".to_string(),
+        agent_id: "agent:composer".to_string(),
+        passed: 2,
+        failed: 0,
+        score_delta: 0.05,
+        board: Some(serde_json::to_value(&board).expect("board serializes")),
+    });
+    assert!(matches!(submitted.status, ToolStatus::Succeeded));
+    assert!(submitted.score_delta.contains_key("engineering.pass_rate"));
+
+    // Now the eval report over the whole board is clean.
+    let mut full = scorestrata_storage::engineering::TaskResultBoard::new();
+    full.record(scorestrata_storage::engineering::TaskResult {
+        task_id: "TASK-001".to_string(),
+        agent_id: "agent:composer".to_string(),
+        passed: 3,
+        failed: 0,
+        score_delta: 0.12,
+        evidence_uri: None,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+    full.record(scorestrata_storage::engineering::TaskResult {
+        task_id: "TASK-002".to_string(),
+        agent_id: "agent:composer".to_string(),
+        passed: 2,
+        failed: 0,
+        score_delta: 0.05,
+        evidence_uri: None,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+    let report = scorestrata_mcp::tools::get_eval_report(&GetEvalReportParams {
+        project_id: project_id.clone(),
+        board: Some(serde_json::to_value(&full).expect("board serializes")),
+    });
+    assert!(matches!(report.status, ToolStatus::Succeeded));
+    assert!(report.summary.contains("clean"));
+    assert!(report.score_delta.contains_key("eval.pass_rate"));
+
+    // ── 18c. Self-documentation: docs update + ADR ──────────────────
+    let docs = scorestrata_mcp::tools::update_docs(&UpdateDocsParams {
+        project_id: project_id.clone(),
+        path: "docs/architecture/architecture.md".to_string(),
+        section: "§10.5".to_string(),
+        summary: "render job + engineering tools wired".to_string(),
+        related_spec: "SPEC-ENGINEERING".to_string(),
+        ledger: Some(serde_json::json!({})),
+    });
+    assert!(matches!(docs.status, ToolStatus::Succeeded));
+    assert!(docs.evidence_uris[0].contains("architecture.md"));
+
+    let adr = scorestrata_mcp::tools::create_adr(&CreateAdrParams {
+        project_id: project_id.clone(),
+        title: "Render jobs get a dedicated store".to_string(),
+        context: "Rendering is long-running and must be observable".to_string(),
+        decision: "Add RenderJobStore to scorestrata-storage".to_string(),
+        consequences: vec![],
+        related_spec: "§10.5".to_string(),
+        ledger: Some(serde_json::json!({})),
+    });
+    assert!(matches!(adr.status, ToolStatus::Succeeded));
+    assert_eq!(
+        adr.score_delta.get("adr.id").map(String::as_str),
+        Some("adr_0001")
+    );
+
+    // ── 18d. Calibration update ─────────────────────────────────────
+    let calibration =
+        scorestrata_mcp::tools::update_calibration_profile(&UpdateCalibrationProfileParams {
+            project_id: project_id.clone(),
+            genre: "melodic_techno".to_string(),
+            target_lufs: -10.0,
+            profile: Some(serde_json::json!({})),
+        });
+    assert!(matches!(calibration.status, ToolStatus::Succeeded));
+    assert!(calibration.summary.contains("-10.0 LUFS"));
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

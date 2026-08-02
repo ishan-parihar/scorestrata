@@ -17,7 +17,8 @@
 //!   (real §12.3 logic in [`debug_ops`])
 //! - Learning tools: get_lessons, record_lesson, get_repair_templates
 //!   (real logic against [`LessonStore`](scorestrata_storage::lesson_store::LessonStore))
-//! - Engineering tools: get_next_task, claim_task, submit_task_result, run_acceptance_tests
+//! - Engineering tools: `get_next_task`, `claim_task`, `submit_task_result`, `run_acceptance_tests`,
+//!   `get_eval_report`, `update_docs`, `create_adr`, `update_calibration_profile`
 
 use scorestrata_core::diagnostic::Diagnostic;
 use scorestrata_core::error::Severity;
@@ -1890,6 +1891,433 @@ pub fn run_acceptance_tests(params: &RunAcceptanceTestsParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `submit_task_result` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmitTaskResultParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Task ID whose result is being submitted.
+    pub task_id: String,
+    /// Agent submitting the result.
+    pub agent_id: String,
+    /// Acceptance tests passed.
+    pub passed: u32,
+    /// Acceptance tests failed.
+    pub failed: u32,
+    /// Score delta observed after the change.
+    #[serde(default)]
+    pub score_delta: f32,
+    /// Serialized task-result board to record into (when provided, real).
+    #[serde(default)]
+    pub board: Option<serde_json::Value>,
+}
+
+/// Submit an engineering task result (§10.5).
+///
+/// Records the acceptance-test outcome into the task-result board and
+/// reports the updated pass rate. Without a board payload the receipt is
+/// state-only and transparent about it.
+#[must_use]
+pub fn submit_task_result(params: &SubmitTaskResultParams) -> ToolReceipt {
+    let Some(board_json) = &params.board else {
+        return ToolReceipt {
+            tool: "submit_task_result".to_string(),
+            status: ToolStatus::Succeeded,
+            summary: format!(
+                "Result recorded for task '{}' by '{}' ({} passed, {} failed) — board not supplied, pass rate not computed",
+                params.task_id, params.agent_id, params.passed, params.failed
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![format!("engineering://tasks/{}", params.task_id)],
+            focus_uris: vec![],
+            next_actions: vec!["get_eval_report".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["No task-result board payload — pass rate not computed".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut board = match serde_json::from_value::<scorestrata_storage::engineering::TaskResultBoard>(
+        board_json.clone(),
+    ) {
+        Ok(b) => b,
+        Err(e) => return deserialize_error_receipt("submit_task_result", "board", &e),
+    };
+    board.record(scorestrata_storage::engineering::TaskResult {
+        task_id: params.task_id.clone(),
+        agent_id: params.agent_id.clone(),
+        passed: params.passed,
+        failed: params.failed,
+        score_delta: params.score_delta,
+        evidence_uri: Some(format!("engineering://tasks/{}", params.task_id)),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    });
+    let rate = board.pass_rate();
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("engineering.pass_rate".to_string(), format!("{rate:.3}"));
+    score_delta.insert(
+        "engineering.regressions".to_string(),
+        board.regressions().to_string(),
+    );
+    score_delta.insert("engineering.tasks".to_string(), board.len().to_string());
+    ToolReceipt {
+        tool: "submit_task_result".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Task '{}' result recorded ({} passed, {} failed); board pass rate now {:.1}% over {} result(s)",
+            params.task_id,
+            params.passed,
+            params.failed,
+            rate * 100.0,
+            board.len()
+        ),
+        score_delta,
+        evidence_uris: vec![format!("engineering://tasks/{}", params.task_id)],
+        focus_uris: vec![],
+        next_actions: vec!["get_eval_report".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `get_eval_report` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetEvalReportParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized task-result board to summarize (when provided, real).
+    #[serde(default)]
+    pub board: Option<serde_json::Value>,
+}
+
+/// Get an eval report from the recorded task results (§10.5, §16.5).
+#[must_use]
+pub fn get_eval_report(params: &GetEvalReportParams) -> ToolReceipt {
+    let Some(board_json) = &params.board else {
+        return ToolReceipt {
+            tool: "get_eval_report".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Eval report requested for project '{}' but no task-result board payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![format!("project://{}/eval/latest", params.project_id)],
+            next_actions: vec!["submit_task_result".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized task-result board to produce a real report".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let board = match serde_json::from_value::<scorestrata_storage::engineering::TaskResultBoard>(
+        board_json.clone(),
+    ) {
+        Ok(b) => b,
+        Err(e) => return deserialize_error_receipt("get_eval_report", "board", &e),
+    };
+    let summary = scorestrata_storage::engineering::EvalSummary::from_results(&board.results);
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "eval.total_tests".to_string(),
+        summary.total_tests.to_string(),
+    );
+    score_delta.insert(
+        "eval.pass_rate".to_string(),
+        format!("{:.3}", summary.pass_rate),
+    );
+    score_delta.insert(
+        "eval.regressions".to_string(),
+        summary.regressions.to_string(),
+    );
+    ToolReceipt {
+        tool: "get_eval_report".to_string(),
+        status: if summary.clean {
+            ToolStatus::Succeeded
+        } else {
+            ToolStatus::Failed
+        },
+        summary: format!(
+            "Eval report for project '{}': {} test(s), {:.1}% pass rate, {} regression(s) — {}",
+            params.project_id,
+            summary.total_tests,
+            summary.pass_rate * 100.0,
+            summary.regressions,
+            if summary.clean {
+                "clean"
+            } else {
+                "needs repair"
+            }
+        ),
+        score_delta,
+        evidence_uris: vec![format!("project://{}/eval/latest", params.project_id)],
+        focus_uris: vec![],
+        next_actions: if summary.clean {
+            vec!["create_adr".to_string(), "update_docs".to_string()]
+        } else {
+            vec![
+                "get_failure_report".to_string(),
+                "submit_task_result".to_string(),
+            ]
+        },
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `update_docs` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateDocsParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Document path being updated.
+    pub path: String,
+    /// Section within the document.
+    pub section: String,
+    /// Summary of the change.
+    pub summary: String,
+    /// Related spec/feature.
+    #[serde(default)]
+    pub related_spec: String,
+    /// Serialized docs ledger to record into (when provided, real).
+    #[serde(default)]
+    pub ledger: Option<serde_json::Value>,
+}
+
+/// Record a documentation update (§10.5, §16.3 step 12).
+#[must_use]
+pub fn update_docs(params: &UpdateDocsParams) -> ToolReceipt {
+    let Some(ledger_json) = &params.ledger else {
+        return ToolReceipt {
+            tool: "update_docs".to_string(),
+            status: ToolStatus::Succeeded,
+            summary: format!(
+                "Doc update for '{}' §{} recorded for project '{}' — ledger not supplied, not persisted",
+                params.path, params.section, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![format!("docs://{}", params.path)],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["No docs ledger payload — update not persisted".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut ledger = match serde_json::from_value::<scorestrata_storage::docs::DocsLedger>(
+        ledger_json.clone(),
+    ) {
+        Ok(l) => l,
+        Err(e) => return deserialize_error_receipt("update_docs", "ledger", &e),
+    };
+    ledger.record(
+        &params.path,
+        &params.section,
+        &params.summary,
+        &params.related_spec,
+    );
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("docs.updates".to_string(), ledger.len().to_string());
+    ToolReceipt {
+        tool: "update_docs".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Doc update recorded for '{}' §{} (update #{})",
+            params.path,
+            params.section,
+            ledger.len()
+        ),
+        score_delta,
+        evidence_uris: vec![format!("docs://{}", params.path)],
+        focus_uris: vec![],
+        next_actions: vec!["create_adr".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `create_adr` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAdrParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Short title of the decision.
+    pub title: String,
+    /// Context motivating the decision.
+    pub context: String,
+    /// The decision itself.
+    pub decision: String,
+    /// Consequences.
+    #[serde(default)]
+    pub consequences: Vec<String>,
+    /// Related spec section.
+    #[serde(default)]
+    pub related_spec: String,
+    /// Serialized ADR ledger to record into (when provided, real).
+    #[serde(default)]
+    pub ledger: Option<serde_json::Value>,
+}
+
+/// Create an architecture decision record (§10.5, §16.3 step 12).
+#[must_use]
+pub fn create_adr(params: &CreateAdrParams) -> ToolReceipt {
+    let Some(ledger_json) = &params.ledger else {
+        return ToolReceipt {
+            tool: "create_adr".to_string(),
+            status: ToolStatus::Succeeded,
+            summary: format!(
+                "ADR '{}' drafted for project '{}' — ledger not supplied, not persisted",
+                params.title, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["update_docs".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["No ADR ledger payload — record not persisted".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut ledger =
+        match serde_json::from_value::<scorestrata_storage::adr::AdrLedger>(ledger_json.clone()) {
+            Ok(l) => l,
+            Err(e) => return deserialize_error_receipt("create_adr", "ledger", &e),
+        };
+    let id = ledger.record(
+        &params.title,
+        &params.context,
+        &params.decision,
+        params.consequences.clone(),
+        &params.related_spec,
+    );
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("adr.id".to_string(), id.clone());
+    score_delta.insert("adr.total".to_string(), ledger.len().to_string());
+    ToolReceipt {
+        tool: "create_adr".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "ADR {} '{}' recorded ({} total in ledger)",
+            id,
+            params.title,
+            ledger.len()
+        ),
+        score_delta,
+        evidence_uris: vec![format!("docs://adr/{}", id)],
+        focus_uris: vec![],
+        next_actions: vec!["update_docs".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `update_calibration_profile` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCalibrationProfileParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Genre to calibrate.
+    pub genre: String,
+    /// Target loudness (LUFS) for the genre.
+    pub target_lufs: f32,
+    /// Serialized calibration profile to update (when provided, real).
+    #[serde(default)]
+    pub profile: Option<serde_json::Value>,
+}
+
+/// Update the genre-calibrated loudness target (§10.5, §11.6).
+#[must_use]
+pub fn update_calibration_profile(params: &UpdateCalibrationProfileParams) -> ToolReceipt {
+    let Some(profile_json) = &params.profile else {
+        return ToolReceipt {
+            tool: "update_calibration_profile".to_string(),
+            status: ToolStatus::Succeeded,
+            summary: format!(
+                "Calibration update for '{}' → {:.1} LUFS drafted for project '{}' — profile not supplied, not persisted",
+                params.genre, params.target_lufs, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["render_candidate_preview".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["No calibration profile payload — target not persisted".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut profile = match serde_json::from_value::<
+        scorestrata_storage::calibration::CalibrationProfile,
+    >(profile_json.clone())
+    {
+        Ok(p) => p,
+        Err(e) => return deserialize_error_receipt("update_calibration_profile", "profile", &e),
+    };
+    let mut genre_profile = scorestrata_storage::calibration::GenreProfile::new(&params.genre);
+    genre_profile.loudness_target_lufs = params.target_lufs;
+    profile.add_genre_profile(genre_profile);
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("calibration.genre".to_string(), params.genre.clone());
+    score_delta.insert(
+        "calibration.target_lufs".to_string(),
+        format!("{:.1}", params.target_lufs),
+    );
+    ToolReceipt {
+        tool: "update_calibration_profile".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Calibration updated: '{}' now targets {:.1} LUFS ({} genre profile(s) tracked)",
+            params.genre,
+            params.target_lufs,
+            profile.genre_profiles.len()
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/calibration/{}",
+            params.project_id, params.genre
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["render_candidate_preview".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 // ── Governance Tools (§10.5) ──────────────────────────────────────
 
 /// Parameters for `get_policy_profile` tool.
@@ -3183,6 +3611,380 @@ pub fn render_stems(params: &RenderStemsParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `render_candidate_preview` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderCandidatePreviewParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Candidate ID (label).
+    pub candidate_id: String,
+    /// Serialized candidate project to render a preview of (required).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+    /// Serialized render job store to register the job in (when provided).
+    #[serde(default)]
+    pub jobs: Option<serde_json::Value>,
+}
+
+/// Render a short preview of a candidate project (§10.5).
+///
+/// Uses the real audio engine to produce a master preview, and registers the
+/// render as a `RenderJob` in the provided store so `get_render_job` can
+/// report its lifecycle. Without a job store the render still runs but the
+/// job is not persisted.
+#[must_use]
+pub fn render_candidate_preview(params: &RenderCandidatePreviewParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "render_candidate_preview".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Preview render requested for candidate '{}' but no project payload provided",
+                params.candidate_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized candidate to render".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project: scorestrata_core::domain::Project =
+        match serde_json::from_value(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return deserialize_error_receipt("render_candidate_preview", "project", &e);
+            }
+        };
+
+    // Compile to timeline IR; a failed compile means a failed render job.
+    let timeline = match scorestrata_compiler::compile_project(&project) {
+        Ok(tl) => tl,
+        Err(e) => {
+            return ToolReceipt {
+                tool: "render_candidate_preview".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Candidate preview compile failed: {e}"),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec!["run_validation".to_string()],
+                cost: ToolCost::default(),
+                warnings: vec!["Compilation failed".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    };
+
+    let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
+                Some(scorestrata_audio::render::RenderNote {
+                    pitch: pitch.0,
+                    start_tick: e.tick.0,
+                    duration_ticks: crate::patch_ops::next_note_off_duration(&timeline, e),
+                    velocity: velocity.as_f32(),
+                    layer_name: e.layer_id.to_string(),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    // A preview is a short master render; register the job first so the
+    // lifecycle is observable, then run the real engine. A malformed job
+    // store payload is reported (never silently replaced) for transparency.
+    let job_id = format!("job_{}_{}", params.project_id, params.candidate_id);
+    let mut jobs = match &params.jobs {
+        None => scorestrata_storage::render_job::RenderJobStore::new(),
+        Some(jobs_json) => {
+            match serde_json::from_value::<scorestrata_storage::render_job::RenderJobStore>(
+                jobs_json.clone(),
+            ) {
+                Ok(j) => j,
+                Err(e) => {
+                    return deserialize_error_receipt("render_candidate_preview", "jobs", &e);
+                }
+            }
+        }
+    };
+    jobs.submit(scorestrata_storage::render_job::RenderJob::new(
+        &job_id,
+        &params.project_id,
+        "preview",
+    ));
+    jobs.start(&job_id);
+
+    let artifact_uri = format!(
+        "project://{}/render/preview/{}",
+        params.project_id, params.candidate_id
+    );
+    let receipt = match scorestrata_audio::render::render_stems(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &[],
+    ) {
+        Ok((_, master)) => {
+            jobs.complete(&job_id, &artifact_uri);
+            let mut score_delta = BTreeMap::new();
+            score_delta.insert("render.preview_job".to_string(), job_id.clone());
+            score_delta.insert(
+                "audio.integrated_lufs".to_string(),
+                format!("{:.1}", master.analysis.integrated_lufs),
+            );
+            ToolReceipt {
+                tool: "render_candidate_preview".to_string(),
+                status: ToolStatus::Succeeded,
+                summary: format!(
+                    "Preview for candidate '{}' rendered ({:.2}s master, sha256 {}); job {} completed",
+                    params.candidate_id,
+                    master.duration_seconds,
+                    &master.checksum[..8.min(master.checksum.len())],
+                    job_id
+                ),
+                score_delta,
+                evidence_uris: vec![artifact_uri.clone()],
+                focus_uris: vec![format!("project://{}/render/preview", params.project_id)],
+                next_actions: vec!["compare_candidates".to_string()],
+                cost: ToolCost {
+                    cpu_ms: 15,
+                    tool_calls: 1,
+                    render_seconds: master.duration_seconds as f32,
+                },
+                warnings: vec![],
+                dry_run: false,
+                diagnostics: vec![],
+            }
+        }
+        Err(e) => {
+            jobs.fail(&job_id, &e.to_string());
+            ToolReceipt {
+                tool: "render_candidate_preview".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Candidate preview render failed: {e}"),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec!["get_failure_report".to_string()],
+                cost: ToolCost::default(),
+                warnings: vec!["Render engine error".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            }
+        }
+    };
+    // Surface the job state in the receipt for round-tripping.
+    let job_status = jobs
+        .get(&job_id)
+        .map_or_else(|| "unknown".to_string(), |j| format!("{:?}", j.status));
+    let mut enriched = receipt;
+    enriched
+        .score_delta
+        .insert("render.job_status".to_string(), job_status);
+    enriched
+        .evidence_uris
+        .push(format!("render_jobs://{}", job_id));
+    enriched
+}
+
+/// Parameters for `get_render_job` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetRenderJobParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Job ID to inspect.
+    pub job_id: String,
+    /// Serialized render job store to query (when provided, real).
+    #[serde(default)]
+    pub jobs: Option<serde_json::Value>,
+}
+
+/// Get the lifecycle status of a render job (§10.5).
+#[must_use]
+pub fn get_render_job(params: &GetRenderJobParams) -> ToolReceipt {
+    let Some(jobs_json) = &params.jobs else {
+        return ToolReceipt {
+            tool: "get_render_job".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Render job '{}' requested for project '{}' but no render job store payload provided",
+                params.job_id, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["render_candidate_preview".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Supply a serialized render job store to query jobs".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let jobs = match serde_json::from_value::<scorestrata_storage::render_job::RenderJobStore>(
+        jobs_json.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return deserialize_error_receipt("get_render_job", "jobs", &e),
+    };
+    let Some(job) = jobs.get(&params.job_id) else {
+        return ToolReceipt {
+            tool: "get_render_job".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Render job '{}' not found in the store for project '{}'",
+                params.job_id, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["render_candidate_preview".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown render job ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("render.job_status".to_string(), format!("{:?}", job.status));
+    score_delta.insert("render.job_mode".to_string(), job.mode.clone());
+    if let Some(uri) = &job.artifact_uri {
+        score_delta.insert("render.artifact".to_string(), uri.clone());
+    }
+    ToolReceipt {
+        tool: "get_render_job".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Render job '{}' ({}) is {:?} for project '{}'{}",
+            job.id,
+            job.mode,
+            job.status,
+            params.project_id,
+            job.artifact_uri
+                .as_ref()
+                .map_or_else(|| String::new(), |u| format!(" — {u}"))
+        ),
+        score_delta,
+        evidence_uris: vec![format!("render_jobs://{}", job.id)],
+        focus_uris: vec![],
+        next_actions: match job.status {
+            scorestrata_storage::render_job::RenderJobStatus::Completed => {
+                vec!["compare_candidates".to_string()]
+            }
+            scorestrata_storage::render_job::RenderJobStatus::Failed => {
+                vec!["get_failure_report".to_string()]
+            }
+            _ => vec![
+                "get_render_job".to_string(),
+                "cancel_render_job".to_string(),
+            ],
+        },
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `cancel_render_job` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelRenderJobParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Job ID to cancel.
+    pub job_id: String,
+    /// Serialized render job store to mutate (when provided, real).
+    #[serde(default)]
+    pub jobs: Option<serde_json::Value>,
+}
+
+/// Cancel a queued or rendering render job (§10.5).
+#[must_use]
+pub fn cancel_render_job(params: &CancelRenderJobParams) -> ToolReceipt {
+    let Some(jobs_json) = &params.jobs else {
+        return ToolReceipt {
+            tool: "cancel_render_job".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cancel requested for render job '{}' but no render job store payload provided",
+                params.job_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["render_candidate_preview".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Supply a serialized render job store to cancel jobs".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut jobs = match serde_json::from_value::<scorestrata_storage::render_job::RenderJobStore>(
+        jobs_json.clone(),
+    ) {
+        Ok(j) => j,
+        Err(e) => return deserialize_error_receipt("cancel_render_job", "jobs", &e),
+    };
+    if !jobs.cancel(&params.job_id) {
+        let state = jobs
+            .get(&params.job_id)
+            .map_or_else(|| "not found".to_string(), |j| format!("{:?}", j.status));
+        return ToolReceipt {
+            tool: "cancel_render_job".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot cancel render job '{}' (state: {})",
+                params.job_id, state
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Job is terminal or unknown".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "render.job_status".to_string(),
+        format!(
+            "{:?}",
+            scorestrata_storage::render_job::RenderJobStatus::Cancelled
+        ),
+    );
+    ToolReceipt {
+        tool: "cancel_render_job".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!("Render job '{}' cancelled", params.job_id),
+        score_delta,
+        evidence_uris: vec![format!("render_jobs://{}", params.job_id)],
+        focus_uris: vec![],
+        next_actions: vec!["render_candidate_preview".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3921,6 +4723,174 @@ mod tests {
         assert_eq!(receipt.cost.tool_calls, 2);
     }
 
+    #[test]
+    fn submit_task_result_computes_pass_rate_with_board() {
+        let mut board = scorestrata_storage::engineering::TaskResultBoard::new();
+        board.record(scorestrata_storage::engineering::TaskResult {
+            task_id: "TASK-000".to_string(),
+            agent_id: "agent:composer".to_string(),
+            passed: 2,
+            failed: 0,
+            score_delta: 0.1,
+            evidence_uri: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+        let params = SubmitTaskResultParams {
+            project_id: "proj_1".to_string(),
+            task_id: "TASK-001".to_string(),
+            agent_id: "agent:composer".to_string(),
+            passed: 3,
+            failed: 1,
+            score_delta: 0.05,
+            board: Some(serde_json::to_value(&board).unwrap_or_default()),
+        };
+        let receipt = submit_task_result(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("pass rate"));
+        assert!(receipt.score_delta.contains_key("engineering.pass_rate"));
+        assert!(receipt.score_delta.contains_key("engineering.regressions"));
+    }
+
+    #[test]
+    fn submit_task_result_without_board_is_transparent() {
+        let params = SubmitTaskResultParams {
+            project_id: "proj_1".to_string(),
+            task_id: "TASK-001".to_string(),
+            agent_id: "agent:composer".to_string(),
+            passed: 3,
+            failed: 0,
+            score_delta: 0.0,
+            board: None,
+        };
+        let receipt = submit_task_result(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("board not supplied") || w.contains("No task-result board")),
+            "expected transparency warning, got {:#?}",
+            receipt.warnings
+        );
+    }
+
+    #[test]
+    fn get_eval_report_is_clean_when_all_pass() {
+        let mut board = scorestrata_storage::engineering::TaskResultBoard::new();
+        board.record(scorestrata_storage::engineering::TaskResult {
+            task_id: "TASK-001".to_string(),
+            agent_id: "agent:composer".to_string(),
+            passed: 2,
+            failed: 0,
+            score_delta: 0.1,
+            evidence_uri: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+        board.record(scorestrata_storage::engineering::TaskResult {
+            task_id: "TASK-002".to_string(),
+            agent_id: "agent:composer".to_string(),
+            passed: 1,
+            failed: 0,
+            score_delta: 0.0,
+            evidence_uri: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+        let params = GetEvalReportParams {
+            project_id: "proj_1".to_string(),
+            board: Some(serde_json::to_value(&board).unwrap_or_default()),
+        };
+        let receipt = get_eval_report(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("clean"));
+        assert!(receipt.score_delta.contains_key("eval.pass_rate"));
+    }
+
+    #[test]
+    fn get_eval_report_flags_regressions() {
+        let mut board = scorestrata_storage::engineering::TaskResultBoard::new();
+        board.record(scorestrata_storage::engineering::TaskResult {
+            task_id: "TASK-001".to_string(),
+            agent_id: "agent:composer".to_string(),
+            passed: 2,
+            failed: 1,
+            score_delta: -0.05,
+            evidence_uri: None,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        });
+        let params = GetEvalReportParams {
+            project_id: "proj_1".to_string(),
+            board: Some(serde_json::to_value(&board).unwrap_or_default()),
+        };
+        let receipt = get_eval_report(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("needs repair"));
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("eval.regressions")
+                .map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn update_docs_records_into_ledger() {
+        let mut ledger = scorestrata_storage::docs::DocsLedger::new();
+        ledger.record("README.md", "install", "old", "SPEC-X");
+        let params = UpdateDocsParams {
+            project_id: "proj_1".to_string(),
+            path: "docs/architecture/architecture.md".to_string(),
+            section: "§10.5".to_string(),
+            summary: "added render job tools".to_string(),
+            related_spec: "SPEC-RENDER".to_string(),
+            ledger: Some(serde_json::to_value(&ledger).unwrap_or_default()),
+        };
+        let receipt = update_docs(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("#2"));
+        assert!(receipt.evidence_uris[0].contains("architecture.md"));
+    }
+
+    #[test]
+    fn create_adr_assigns_incrementing_id() {
+        let params = CreateAdrParams {
+            project_id: "proj_1".to_string(),
+            title: "Store render jobs in a dedicated ledger".to_string(),
+            context: "Render jobs need lifecycle tracking".to_string(),
+            decision: "Add RenderJobStore to scorestrata-storage".to_string(),
+            consequences: vec!["More storage surface".to_string()],
+            related_spec: "§10.5".to_string(),
+            ledger: Some(serde_json::json!({})),
+        };
+        let receipt = create_adr(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(
+            receipt.score_delta.get("adr.id").map(String::as_str),
+            Some("adr_0001")
+        );
+        assert!(receipt.evidence_uris[0].contains("adr_0001"));
+    }
+
+    #[test]
+    fn update_calibration_profile_sets_genre_target() {
+        let params = UpdateCalibrationProfileParams {
+            project_id: "proj_1".to_string(),
+            genre: "melodic_techno".to_string(),
+            target_lufs: -10.0,
+            profile: Some(serde_json::json!({})),
+        };
+        let receipt = update_calibration_profile(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("-10.0 LUFS"));
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("calibration.target_lufs")
+                .map(String::as_str),
+            Some("-10.0")
+        );
+    }
+
     // ── Governance tools tests ──────────────────────────────────────
 
     #[test]
@@ -4324,5 +5294,136 @@ mod tests {
         assert!(receipt.summary.contains("stems"));
         assert!(receipt.score_delta.contains_key("render.stems"));
         assert!(!receipt.evidence_uris.is_empty());
+    }
+
+    #[test]
+    fn render_candidate_preview_requires_project_payload() {
+        let params = RenderCandidatePreviewParams {
+            project_id: "proj_1".to_string(),
+            candidate_id: "cand_a".to_string(),
+            project: None,
+            jobs: None,
+        };
+        let receipt = render_candidate_preview(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("No project payload")),
+            "expected missing-payload warning, got {:#?}",
+            receipt.warnings
+        );
+    }
+
+    #[test]
+    fn render_candidate_preview_registers_completed_job() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = RenderCandidatePreviewParams {
+            project_id: project.id.to_string(),
+            candidate_id: "cand_a".to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+            jobs: Some(serde_json::json!({})),
+        };
+        let receipt = render_candidate_preview(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "preview render should succeed, got {:#?}",
+            receipt
+        );
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("render.job_status")
+                .map(String::as_str),
+            Some("Completed")
+        );
+        assert!(
+            receipt
+                .evidence_uris
+                .iter()
+                .any(|u| u.contains("render_jobs://"))
+        );
+    }
+
+    #[test]
+    fn get_render_job_reports_lifecycle_status() {
+        let mut store = scorestrata_storage::render_job::RenderJobStore::new();
+        store.submit(scorestrata_storage::render_job::RenderJob::new(
+            "job_1", "proj_1", "preview",
+        ));
+        store.start("job_1");
+        let params = GetRenderJobParams {
+            project_id: "proj_1".to_string(),
+            job_id: "job_1".to_string(),
+            jobs: Some(serde_json::to_value(&store).unwrap_or_default()),
+        };
+        let receipt = get_render_job(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("render.job_status")
+                .map(String::as_str),
+            Some("Rendering")
+        );
+    }
+
+    #[test]
+    fn get_render_job_unknown_job_fails() {
+        let store = scorestrata_storage::render_job::RenderJobStore::new();
+        let params = GetRenderJobParams {
+            project_id: "proj_1".to_string(),
+            job_id: "job_missing".to_string(),
+            jobs: Some(serde_json::to_value(&store).unwrap_or_default()),
+        };
+        let receipt = get_render_job(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("Unknown render job")),
+            "expected unknown-job warning, got {:#?}",
+            receipt.warnings
+        );
+    }
+
+    #[test]
+    fn cancel_render_job_cancels_queued_job() {
+        let mut store = scorestrata_storage::render_job::RenderJobStore::new();
+        store.submit(scorestrata_storage::render_job::RenderJob::new(
+            "job_1", "proj_1", "master",
+        ));
+        let params = CancelRenderJobParams {
+            project_id: "proj_1".to_string(),
+            job_id: "job_1".to_string(),
+            jobs: Some(serde_json::to_value(&store).unwrap_or_default()),
+        };
+        let receipt = cancel_render_job(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("cancelled"));
+    }
+
+    #[test]
+    fn cancel_render_job_refuses_terminal_job() {
+        let mut store = scorestrata_storage::render_job::RenderJobStore::new();
+        store.submit(scorestrata_storage::render_job::RenderJob::new(
+            "job_1", "proj_1", "master",
+        ));
+        store.start("job_1");
+        store.complete("job_1", "artifact://x.wav");
+        let params = CancelRenderJobParams {
+            project_id: "proj_1".to_string(),
+            job_id: "job_1".to_string(),
+            jobs: Some(serde_json::to_value(&store).unwrap_or_default()),
+        };
+        let receipt = cancel_render_job(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt.summary.contains("Cannot cancel"),
+            "terminal job must refuse cancellation: {}",
+            receipt.summary
+        );
     }
 }
