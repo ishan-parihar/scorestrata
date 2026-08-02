@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/scorestrata-core",
+    "crates/scorestrata-theory",
+    "crates/scorestrata-compiler",
+    "crates/scorestrata-validator",
+    "crates/scorestrata-audio",
+    "crates/scorestrata-storage",
+    "crates/scorestrata-agent",
+    "crates/scorestrata-mcp",
+    "crates/scorestrata-cli",
+    "crates/scorestrata-eval",
+    "crates/scorestrata-testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/scorestrata/scorestrata"
+description = "A contract-first, event-sourced, multi-objective composition compiler for AI agents"
+
+[workspace.dependencies]
+# Core dependencies
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+sha2 = "0.10"
+hex = "0.4"
+
+# Storage dependencies
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# CLI dependencies
+clap = { version = "4", features = ["derive"] }
+colored = "2"
+indicatif = "0.17"
+
+# Testing
+proptest = "1"
+insta = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"

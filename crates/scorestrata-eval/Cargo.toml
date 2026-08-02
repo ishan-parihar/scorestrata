@@ -1,0 +1,18 @@
+[package]
+name = "scorestrata-eval"
+description = "Golden test harness, eval suite, regression reports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+scorestrata-core = { path = "../scorestrata-core" }
+scorestrata-compiler = { path = "../scorestrata-compiler" }
+scorestrata-validator = { path = "../scorestrata-validator" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+
+[lints]
+workspace = true

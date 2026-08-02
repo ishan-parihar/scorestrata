@@ -1,0 +1,22 @@
+[package]
+name = "scorestrata-validator"
+description = "Multi-objective validator with diagnostics, evidence URIs, and root-cause attribution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+scorestrata-core = { path = "../scorestrata-core" }
+scorestrata-theory = { path = "../scorestrata-theory" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+insta.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,836 @@
+//! MCP resources — inspectable state that agents can query.
+//!
+//! Resources follow the "tools mutate, resources inspect" principle.
+//! Returns summary-level data by default, with drill-down via scoped lenses.
+//!
+//! Implements architecture spec §10.3 (system resources) and §10.4
+//! (project resources and engineering resources).
+
+use scorestrata_core::error::Severity;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+// ── System Resources (§10.3) ────────────────────────────────────────
+
+/// System contracts — versioned schemas for tools, receipts, diagnostics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemContracts {
+    /// Schema version.
+    pub schema_version: String,
+    /// Tool contracts.
+    pub tools: Vec<ToolContract>,
+    /// Receipt contracts.
+    pub receipts: Vec<ReceiptContract>,
+    /// Diagnostic contracts.
+    pub diagnostics: Vec<DiagnosticContract>,
+}
+
+/// A tool contract — metadata about a tool's schema and constraints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolContract {
+    /// Tool name.
+    pub name: String,
+    /// Version.
+    pub version: String,
+    /// Stability level.
+    pub stability: String,
+    /// Safety class.
+    pub safety_class: String,
+    /// Whether dry-run is supported.
+    pub supports_dry_run: bool,
+    /// Required parameters.
+    pub required_params: Vec<String>,
+    /// Optional parameters.
+    pub optional_params: Vec<String>,
+}
+
+/// A receipt contract — what a tool returns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReceiptContract {
+    /// Receipt type name.
+    pub name: String,
+    /// Fields in the receipt.
+    pub fields: Vec<String>,
+}
+
+/// A diagnostic contract — diagnostic packet schema.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticContract {
+    /// Diagnostic code.
+    pub code: String,
+    /// Severity range.
+    pub severity_range: String,
+    /// Fields.
+    pub fields: Vec<String>,
+}
+
+/// System onboarding packet — orientation data for new agents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnboardingPacket {
+    /// System map (high-level architecture overview).
+    pub system_map: String,
+    /// Capability manifest.
+    pub capabilities: String,
+    /// Schema catalog.
+    pub schemas: String,
+    /// Tool catalog.
+    pub tools: String,
+    /// Playbooks.
+    pub playbooks: Vec<String>,
+    /// Failure taxonomy.
+    pub failure_taxonomy: Vec<FailureTaxonomyEntry>,
+    /// Budget templates.
+    pub budget_templates: Vec<BudgetTemplate>,
+    /// Success criteria.
+    pub success_criteria: Vec<String>,
+    /// Golden examples.
+    pub golden_examples: Vec<String>,
+    /// Do-not-do list.
+    pub do_not_do: Vec<String>,
+}
+
+/// A failure taxonomy entry — categorized failure type with remediation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailureTaxonomyEntry {
+    /// Failure code.
+    pub code: String,
+    /// Category (e.g. `harmony`, `structure`, `mix`, `render`).
+    pub category: String,
+    /// Description.
+    pub description: String,
+    /// Suggested remediation.
+    pub remediation: Vec<String>,
+    /// Severity.
+    pub severity: Severity,
+}
+
+/// A budget template — pre-configured budget envelope.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetTemplate {
+    /// Template name.
+    pub name: String,
+    /// Description.
+    pub description: String,
+    /// Max iterations.
+    pub max_iterations: u32,
+    /// Max tool calls.
+    pub max_tool_calls: u32,
+    /// Max render seconds.
+    pub max_render_seconds: f64,
+    /// Max CPU seconds.
+    pub max_cpu_seconds: f64,
+}
+
+// ── Project Resources (§10.4) ───────────────────────────────────────
+
+/// Policy profile view — current policy state for a project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyProfileView {
+    /// Project ID.
+    pub project_id: String,
+    /// Whether destructive commands are allowed.
+    pub allow_destructive_commands: bool,
+    /// Whether snapshot is required before patch.
+    pub require_snapshot_before_patch: bool,
+    /// Max out-of-scale ratio.
+    pub max_out_of_scale_ratio: f32,
+    /// Min chorus energy delta.
+    pub min_chorus_energy_delta: f32,
+    /// Max true peak dBTP.
+    pub max_true_peak_dbtp: f32,
+    /// Max candidate renders per segment.
+    pub max_candidate_renders_per_segment: u32,
+}
+
+impl PolicyProfileView {
+    /// Create from a core PolicyProfile.
+    #[must_use]
+    pub fn from_policy(project_id: &str, policy: &scorestrata_core::policy::PolicyProfile) -> Self {
+        Self {
+            project_id: project_id.to_string(),
+            allow_destructive_commands: policy.allow_destructive_commands,
+            require_snapshot_before_patch: policy.require_snapshot_before_patch,
+            max_out_of_scale_ratio: policy.max_out_of_scale_ratio,
+            min_chorus_energy_delta: policy.min_chorus_energy_delta,
+            max_true_peak_dbtp: policy.max_true_peak_dbtp,
+            max_candidate_renders_per_segment: policy.max_candidate_renders_per_segment,
+        }
+    }
+}
+
+/// Provenance manifest view — reproducibility metadata for a project.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvenanceView {
+    /// Project ID.
+    pub project_id: String,
+    /// Compiler version.
+    pub compiler_version: String,
+    /// Validator version.
+    pub validator_version: String,
+    /// Audio engine version.
+    pub audio_engine_version: String,
+    /// Seed used for deterministic generation.
+    pub seed: Option<u64>,
+    /// Asset hashes.
+    pub asset_hashes: BTreeMap<String, String>,
+    /// Render settings.
+    pub render_settings: BTreeMap<String, String>,
+    /// Policy profile hash.
+    pub policy_hash: String,
+}
+
+/// Ledger summary — event counts and recent activity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LedgerSummary {
+    /// Project ID.
+    pub project_id: String,
+    /// Total event count.
+    pub total_events: u32,
+    /// Event counts by type.
+    pub events_by_type: BTreeMap<String, u32>,
+    /// Most recent event timestamp.
+    pub last_event_timestamp: Option<String>,
+    /// Event rate (events per minute).
+    pub events_per_minute: f32,
+}
+
+/// Branches summary — active and archived branches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchesSummary {
+    /// Project ID.
+    pub project_id: String,
+    /// Active branches.
+    pub active_branches: Vec<BranchSummary>,
+    /// Total archived branches.
+    pub archived_count: u32,
+}
+
+/// Summary of a single branch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchSummary {
+    /// Branch ID.
+    pub id: String,
+    /// Branch name.
+    pub name: String,
+    /// Whether this is the main branch.
+    pub is_main: bool,
+    /// Status.
+    pub status: String,
+    /// Number of candidates on this branch.
+    pub candidate_count: u32,
+}
+
+/// Candidates summary — active candidates for tournament selection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidatesSummary {
+    /// Project ID.
+    pub project_id: String,
+    /// Total candidate count.
+    pub total_count: u32,
+    /// Candidates by status.
+    pub by_status: BTreeMap<String, u32>,
+    /// Top candidates (highest score).
+    pub top_candidates: Vec<CandidateBrief>,
+}
+
+/// Brief info about a candidate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateBrief {
+    /// Candidate ID.
+    pub id: String,
+    /// Description.
+    pub description: String,
+    /// Overall score.
+    pub overall_score: Option<f32>,
+    /// Status.
+    pub status: String,
+}
+
+/// Memory lessons view — learned repair strategies.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryLessonsView {
+    /// Project ID.
+    pub project_id: String,
+    /// Total lesson count.
+    pub total_lessons: u32,
+    /// Lessons by trigger.
+    pub by_trigger: BTreeMap<String, u32>,
+    /// Top lessons by confidence.
+    pub top_lessons: Vec<LessonBrief>,
+}
+
+/// Brief info about a lesson.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LessonBrief {
+    /// Lesson ID.
+    pub id: String,
+    /// Trigger diagnostic.
+    pub trigger: String,
+    /// Successful patch.
+    pub successful_patch: Option<String>,
+    /// Confidence.
+    pub confidence: f32,
+    /// Genre.
+    pub genre: Option<String>,
+}
+
+/// Memory repair templates view — ranked patch templates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepairTemplatesView {
+    /// Project ID.
+    pub project_id: String,
+    /// Total template count.
+    pub total_templates: u32,
+    /// Top templates by success rate.
+    pub top_templates: Vec<TemplateBrief>,
+}
+
+/// Brief info about a repair template.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateBrief {
+    /// Template ID.
+    pub id: String,
+    /// Operation name.
+    pub operation: String,
+    /// Scope.
+    pub scope: String,
+    /// Success rate.
+    pub success_rate: f32,
+    /// Usage count.
+    pub usage_count: u32,
+}
+
+// ── Engineering Resources (§10.4) ───────────────────────────────────
+
+/// Engineering specs list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineeringSpecs {
+    /// All specs.
+    pub specs: Vec<EngineeringSpecBrief>,
+}
+
+/// Brief info about an engineering spec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineeringSpecBrief {
+    /// Spec ID.
+    pub id: String,
+    /// Title.
+    pub title: String,
+    /// Component.
+    pub component: String,
+    /// Priority.
+    pub priority: String,
+    /// Status.
+    pub status: String,
+}
+
+/// Next engineering task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NextTask {
+    /// Task ID.
+    pub task_id: String,
+    /// Title.
+    pub title: String,
+    /// Status.
+    pub status: String,
+    /// Whether dependencies are met.
+    pub dependencies_met: bool,
+    /// Acceptance criteria.
+    pub acceptance_criteria: Vec<String>,
+    /// Test commands.
+    pub test_commands: Vec<String>,
+}
+
+/// Engineering eval summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineeringEvalSummary {
+    /// Total test count.
+    pub total_tests: u32,
+    /// Passing tests.
+    pub passing_tests: u32,
+    /// Failing tests.
+    pub failing_tests: u32,
+    /// Golden test pass rate.
+    pub golden_pass_rate: f32,
+    /// Last run timestamp.
+    pub last_run: Option<String>,
+}
+
+/// Traceability entry — links spec → task → code → tests → docs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceabilityEntry {
+    /// Feature ID.
+    pub feature_id: String,
+    /// Spec ID.
+    pub spec_id: Option<String>,
+    /// Task ID.
+    pub task_id: Option<String>,
+    /// Code files.
+    pub code_files: Vec<String>,
+    /// Test files.
+    pub test_files: Vec<String>,
+    /// Golden tests.
+    pub golden_tests: Vec<String>,
+    /// Doc files.
+    pub doc_files: Vec<String>,
+    /// MCP tool names.
+    pub mcp_tools: Vec<String>,
+}
+
+// ── Existing Resource Types ──────────────────────────────────────────
+
+/// A project summary resource — high-level state overview.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectSummary {
+    /// Project ID.
+    pub project_id: String,
+    /// Project name.
+    pub name: String,
+    /// Current project state.
+    pub state: String,
+    /// Number of segments.
+    pub segment_count: u32,
+    /// Number of layers.
+    pub layer_count: u32,
+    /// Total bars.
+    pub total_bars: u32,
+    /// Whether a validation report exists.
+    pub has_validation: bool,
+    /// Overall validation score (None if not validated).
+    pub validation_score: Option<f32>,
+    /// Number of hard failures.
+    pub hard_failures: u32,
+    /// Number of warnings.
+    pub warnings: u32,
+    /// Suggested next actions.
+    pub next_actions: Vec<String>,
+}
+
+/// A validation report summary — condensed view for agent orientation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidationSummaryView {
+    /// Project ID.
+    pub project_id: String,
+    /// Validation level.
+    pub level: u8,
+    /// Whether all hard gates passed.
+    pub all_hard_gates_passed: bool,
+    /// Overall score.
+    pub overall_score: f32,
+    /// Number of diagnostics by severity.
+    pub summary: DiagnosticCounts,
+    /// Top issues (max 5, sorted by severity).
+    pub top_issues: Vec<TopIssue>,
+    /// Metric summary.
+    pub metrics: Vec<MetricSummary>,
+}
+
+/// Diagnostic count summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticCounts {
+    /// Informational diagnostics.
+    pub info: u32,
+    /// Warning diagnostics.
+    pub warnings: u32,
+    /// Error diagnostics.
+    pub errors: u32,
+    /// Critical diagnostics.
+    pub critical: u32,
+}
+
+/// A condensed top issue for summary views.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopIssue {
+    /// Diagnostic code.
+    pub code: String,
+    /// Severity.
+    pub severity: Severity,
+    /// Message.
+    pub message: String,
+    /// Evidence URIs.
+    pub evidence_uris: Vec<String>,
+    /// Suggested patch operations.
+    pub suggested_patches: Vec<String>,
+}
+
+/// A metric summary entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricSummary {
+    /// Metric name.
+    pub name: String,
+    /// Metric value.
+    pub value: f32,
+    /// Severity.
+    pub severity: Severity,
+}
+
+/// Build a project summary from a real [`Project`] entity.
+///
+/// Returns a high-level overview suitable for agent orientation,
+/// including segment/layer counts, current status, and suggested next actions.
+#[must_use]
+pub fn get_project_summary_from_project(
+    project: &scorestrata_core::domain::Project,
+) -> ProjectSummary {
+    let segment_count: u32 = project.arrangement.segments.len() as u32;
+    let layer_count: u32 = project
+        .arrangement
+        .segments
+        .iter()
+        .map(|s| s.layers.len() as u32)
+        .sum();
+    let total_bars = project.arrangement.total_bars;
+    let next_actions = suggest_next_actions(project.status);
+
+    ProjectSummary {
+        project_id: project.id.to_string(),
+        name: project.name.clone(),
+        state: format!("{:?}", project.status),
+        segment_count,
+        layer_count,
+        total_bars,
+        has_validation: false,
+        validation_score: None,
+        hard_failures: 0,
+        warnings: 0,
+        next_actions,
+    }
+}
+
+/// Build a project summary from a project ID (stub for when project data is unavailable).
+#[must_use]
+pub fn get_project_summary(project_id: &str) -> ProjectSummary {
+    ProjectSummary {
+        project_id: project_id.to_string(),
+        name: "untitled".to_string(),
+        state: "BriefReceived".to_string(),
+        segment_count: 0,
+        layer_count: 0,
+        total_bars: 0,
+        has_validation: false,
+        validation_score: None,
+        hard_failures: 0,
+        warnings: 0,
+        next_actions: vec![
+            "create_config_from_brief".to_string(),
+            "plan_arrangement".to_string(),
+        ],
+    }
+}
+
+/// Suggest next actions based on the current project status.
+fn suggest_next_actions(status: scorestrata_core::domain::ProjectStatus) -> Vec<String> {
+    use scorestrata_core::domain::ProjectStatus;
+    match status {
+        ProjectStatus::BriefReceived => vec!["generate_config_from_brief".to_string()],
+        ProjectStatus::ConfigDrafted => {
+            vec!["validate_config".to_string(), "approve_config".to_string()]
+        }
+        ProjectStatus::ConfigValidationFailed => vec![
+            "fix_config_issues".to_string(),
+            "validate_config".to_string(),
+        ],
+        ProjectStatus::ConfigApproved => vec!["plan_arrangement".to_string()],
+        ProjectStatus::ArrangementPlanned => vec!["create_skeleton".to_string()],
+        ProjectStatus::SkeletonCreated => {
+            vec!["draft_segments".to_string(), "create_patterns".to_string()]
+        }
+        ProjectStatus::SegmentDrafting => vec![
+            "generate_segment_candidates".to_string(),
+            "create_patterns".to_string(),
+        ],
+        ProjectStatus::SegmentCandidatesGenerated => vec![
+            "evaluate_segment_candidates".to_string(),
+            "select_best_candidate".to_string(),
+        ],
+        ProjectStatus::SegmentValidationFailed => vec![
+            "fix_segment_issues".to_string(),
+            "draft_segment".to_string(),
+        ],
+        ProjectStatus::SegmentsValidated => {
+            vec!["validate_transitions".to_string(), "compile".to_string()]
+        }
+        ProjectStatus::TransitionValidationFailed => vec![
+            "fix_transition_issues".to_string(),
+            "add_transition_package".to_string(),
+        ],
+        ProjectStatus::TransitionValidated => vec!["draft_mix".to_string(), "compile".to_string()],
+        ProjectStatus::MixDrafting => vec![
+            "validate_mix".to_string(),
+            "apply_mix_processing".to_string(),
+        ],
+        ProjectStatus::MixValidationFailed => {
+            vec!["fix_mix_issues".to_string(), "draft_mix".to_string()]
+        }
+        ProjectStatus::Compiling => vec!["run_validation".to_string()],
+        ProjectStatus::Validating => vec![
+            "run_validation".to_string(),
+            "get_audit_summary".to_string(),
+        ],
+        ProjectStatus::Experimenting => vec![
+            "evaluate_candidates".to_string(),
+            "select_best_candidate".to_string(),
+        ],
+        ProjectStatus::Calibrating => vec![
+            "run_final_validation".to_string(),
+            "render_preview".to_string(),
+        ],
+        ProjectStatus::Rendering => vec!["get_render_job".to_string()],
+        ProjectStatus::RenderFailed => vec![
+            "diagnose_render_failure".to_string(),
+            "retry_render".to_string(),
+        ],
+        ProjectStatus::FinalValidationPassed => {
+            vec!["finalize_render".to_string(), "export_midi".to_string()]
+        }
+        ProjectStatus::RenderFinalized => vec!["export_midi".to_string(), "archive".to_string()],
+        ProjectStatus::AwaitingHumanDecision => vec!["await_human_decision".to_string()],
+        ProjectStatus::NeedsPolicyReview => vec![
+            "review_policy_violations".to_string(),
+            "adjust_policy".to_string(),
+        ],
+        ProjectStatus::NeedsHumanReview => vec![
+            "create_human_review_packet".to_string(),
+            "await_human_decision".to_string(),
+        ],
+        ProjectStatus::Replaying => vec![
+            "continue_replay".to_string(),
+            "diagnose_replay_failure".to_string(),
+        ],
+        ProjectStatus::Quarantined => vec![
+            "diagnose_quarantine".to_string(),
+            "escalate_to_human".to_string(),
+        ],
+        ProjectStatus::Archived => vec![],
+    }
+}
+
+/// Build a `ValidationSummaryView` from a real `ValidationReport`.
+///
+/// This enables agent drill-down into per-metric scoring and top issues,
+/// returning a condensed view suitable for MCP resource responses.
+#[must_use]
+pub fn build_validation_summary_view(
+    report: &scorestrata_core::diagnostic::ValidationReport,
+) -> ValidationSummaryView {
+    let top_issues: Vec<TopIssue> = report
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity >= Severity::Warning)
+        .take(5)
+        .map(|d| TopIssue {
+            code: d.code.clone(),
+            severity: d.severity,
+            message: d.message.clone(),
+            evidence_uris: d.evidence_uris.clone(),
+            suggested_patches: d.suggested_patches.iter().map(|p| p.op.clone()).collect(),
+        })
+        .collect();
+
+    let metrics: Vec<MetricSummary> = report
+        .scorecard
+        .metrics
+        .iter()
+        .map(|m| MetricSummary {
+            name: m.name.clone(),
+            value: m.value,
+            severity: m.severity,
+        })
+        .collect();
+
+    ValidationSummaryView {
+        project_id: report.project_id.to_string(),
+        level: report.level,
+        all_hard_gates_passed: report.all_hard_gates_passed,
+        overall_score: report.scorecard.overall_score,
+        summary: DiagnosticCounts {
+            info: report.summary.info,
+            warnings: report.summary.warnings,
+            errors: report.summary.errors,
+            critical: report.summary.critical,
+        },
+        top_issues,
+        metrics,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "Test assertions")]
+    fn project_summary_serializes() {
+        let summary = get_project_summary("proj_123");
+        let json = serde_json::to_string_pretty(&summary).unwrap();
+        assert!(json.contains("proj_123"));
+        assert!(json.contains("BriefReceived"));
+    }
+
+    #[test]
+    fn project_summary_has_next_actions() {
+        let summary = get_project_summary("proj_123");
+        assert!(!summary.next_actions.is_empty());
+    }
+
+    #[test]
+    fn new_resource_types_serialize() {
+        let policy = PolicyProfileView {
+            project_id: "p1".to_string(),
+            allow_destructive_commands: false,
+            require_snapshot_before_patch: true,
+            max_out_of_scale_ratio: 0.05,
+            min_chorus_energy_delta: 0.15,
+            max_true_peak_dbtp: -1.0,
+            max_candidate_renders_per_segment: 8,
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&policy).unwrap();
+        assert!(json.contains("max_out_of_scale_ratio"));
+
+        let provenance = ProvenanceView {
+            project_id: "p1".to_string(),
+            compiler_version: "0.1.0".to_string(),
+            validator_version: "0.1.0".to_string(),
+            audio_engine_version: "0.1.0".to_string(),
+            seed: Some(1337),
+            asset_hashes: BTreeMap::new(),
+            render_settings: BTreeMap::new(),
+            policy_hash: "abc".to_string(),
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&provenance).unwrap();
+        assert!(json.contains("compiler_version"));
+
+        let ledger = LedgerSummary {
+            project_id: "p1".to_string(),
+            total_events: 42,
+            events_by_type: BTreeMap::new(),
+            last_event_timestamp: None,
+            events_per_minute: 1.5,
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&ledger).unwrap();
+        assert!(json.contains("total_events"));
+
+        let branches = BranchesSummary {
+            project_id: "p1".to_string(),
+            active_branches: vec![],
+            archived_count: 0,
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&branches).unwrap();
+        assert!(json.contains("active_branches"));
+
+        let candidates = CandidatesSummary {
+            project_id: "p1".to_string(),
+            total_count: 3,
+            by_status: BTreeMap::new(),
+            top_candidates: vec![],
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&candidates).unwrap();
+        assert!(json.contains("total_count"));
+
+        let lessons = MemoryLessonsView {
+            project_id: "p1".to_string(),
+            total_lessons: 5,
+            by_trigger: BTreeMap::new(),
+            top_lessons: vec![],
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&lessons).unwrap();
+        assert!(json.contains("total_lessons"));
+
+        let templates = RepairTemplatesView {
+            project_id: "p1".to_string(),
+            total_templates: 10,
+            top_templates: vec![],
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&templates).unwrap();
+        assert!(json.contains("total_templates"));
+    }
+
+    #[test]
+    fn engineering_resources_serialize() {
+        let specs = EngineeringSpecs {
+            specs: vec![EngineeringSpecBrief {
+                id: "SPEC-001".to_string(),
+                title: "Scale compliance".to_string(),
+                component: "validator".to_string(),
+                priority: "high".to_string(),
+                status: "implemented".to_string(),
+            }],
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&specs).unwrap();
+        assert!(json.contains("SPEC-001"));
+
+        let next_task = NextTask {
+            task_id: "TASK-001".to_string(),
+            title: "Add transition heuristics".to_string(),
+            status: "ready".to_string(),
+            dependencies_met: true,
+            acceptance_criteria: vec!["Transition energy delta >= 0.15".to_string()],
+            test_commands: vec!["cargo test transition".to_string()],
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&next_task).unwrap();
+        assert!(json.contains("TASK-001"));
+
+        let eval = EngineeringEvalSummary {
+            total_tests: 100,
+            passing_tests: 95,
+            failing_tests: 5,
+            golden_pass_rate: 0.9,
+            last_run: None,
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&eval).unwrap();
+        assert!(json.contains("golden_pass_rate"));
+
+        let trace = TraceabilityEntry {
+            feature_id: "FEAT-001".to_string(),
+            spec_id: Some("SPEC-001".to_string()),
+            task_id: Some("TASK-001".to_string()),
+            code_files: vec!["src/scale_check.rs".to_string()],
+            test_files: vec!["tests/scale_check.rs".to_string()],
+            golden_tests: vec!["golden/scale_compliance".to_string()],
+            doc_files: vec!["docs/validation-metrics.md".to_string()],
+            mcp_tools: vec!["run_validation".to_string()],
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&trace).unwrap();
+        assert!(json.contains("FEAT-001"));
+
+        let onboarding = OnboardingPacket {
+            system_map: "5-plane architecture".to_string(),
+            capabilities: "system://capabilities".to_string(),
+            schemas: "system://contracts".to_string(),
+            tools: "tool catalog".to_string(),
+            playbooks: vec!["repair".to_string(), "composition".to_string()],
+            failure_taxonomy: vec![FailureTaxonomyEntry {
+                code: "SCALE_VIOLATION".to_string(),
+                category: "harmony".to_string(),
+                description: "Note outside scale".to_string(),
+                remediation: vec!["quantize_to_scale".to_string()],
+                severity: Severity::Warning,
+            }],
+            budget_templates: vec![BudgetTemplate {
+                name: "standard".to_string(),
+                description: "Standard budget".to_string(),
+                max_iterations: 12,
+                max_tool_calls: 250,
+                max_render_seconds: 600.0,
+                max_cpu_seconds: 1800.0,
+            }],
+            success_criteria: vec!["All hard gates pass".to_string()],
+            golden_examples: vec!["melodic_techno_64_bar".to_string()],
+            do_not_do: vec!["Don't skip validation".to_string()],
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&onboarding).unwrap();
+        assert!(json.contains("system_map"));
+    }
+}

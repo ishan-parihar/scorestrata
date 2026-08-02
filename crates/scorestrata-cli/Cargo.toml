@@ -1,0 +1,24 @@
+[package]
+name = "scorestrata-cli"
+description = "CLI interface for Scorestrata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ss"
+path = "src/main.rs"
+
+[dependencies]
+scorestrata-core = { path = "../scorestrata-core" }
+scorestrata-theory = { path = "../scorestrata-theory" }
+scorestrata-compiler = { path = "../scorestrata-compiler" }
+scorestrata-validator = { path = "../scorestrata-validator" }
+scorestrata-storage = { path = "../scorestrata-storage" }
+clap.workspace = true
+colored.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true

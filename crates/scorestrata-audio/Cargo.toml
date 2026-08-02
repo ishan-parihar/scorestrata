@@ -1,0 +1,14 @@
+[package]
+name = "scorestrata-audio"
+description = "Audio engine: instruments, FX, mixer, offline render, stems"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+scorestrata-core = { path = "../scorestrata-core" }
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
