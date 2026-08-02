@@ -726,6 +726,7 @@ dependencies = [
  "chrono",
  "clap",
  "colored",
+ "scorestrata-audio",
  "scorestrata-compiler",
  "scorestrata-core",
  "scorestrata-mcp",
@@ -829,6 +830,7 @@ name = "scorestrata-testkit"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "scorestrata-compiler",
  "scorestrata-core",
  "scorestrata-theory",
  "uuid",

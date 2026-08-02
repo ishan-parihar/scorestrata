@@ -4,7 +4,7 @@
 //! Debug commands query real storage modules (event ledger, snapshot graph,
 //! calibration profiles, budget, policy) per architecture spec §19.3.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
@@ -59,6 +59,22 @@ enum Commands {
         /// Validation scope
         #[arg(short, long, default_value = "full")]
         scope: String,
+    },
+    /// Render a project to WAV
+    Render {
+        /// Project path
+        path: String,
+        /// Render mode (master, preview, stems)
+        #[arg(short, long, default_value = "master")]
+        mode: String,
+    },
+    /// Export a project to MIDI
+    ExportMidi {
+        /// Project path
+        path: String,
+        /// Output file path (defaults to <project>/track.mid)
+        #[arg(short, long)]
+        output: Option<String>,
     },
     /// Show system capabilities
     Capabilities,
@@ -190,6 +206,8 @@ fn main() -> Result<()> {
         Commands::Config { action } => handle_config(action)?,
         Commands::Compile { path } => handle_compile(&path)?,
         Commands::Validate { path, scope } => handle_validate(&path, &scope)?,
+        Commands::Render { path, mode } => handle_render(&path, &mode)?,
+        Commands::ExportMidi { path, output } => handle_export_midi(&path, output.as_deref())?,
         Commands::Capabilities => handle_capabilities()?,
         Commands::Trace {
             command_id,
@@ -609,6 +627,114 @@ fn handle_validate(path: &str, scope: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn handle_render(path: &str, mode: &str) -> Result<()> {
+    println!("{}", format!("Rendering: {path} (mode: {mode})").cyan());
+
+    let project_path = Path::new(path);
+    let project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+
+    // Compile to a timeline, then render offline via the audio engine.
+    let timeline = scorestrata_compiler::compile_project(&project)
+        .context("Compilation failed — check project status")?;
+
+    // Map layer IDs to human-readable names for voice assignment.
+    let mut layer_names = std::collections::HashMap::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            layer_names.insert(layer.id.to_string(), layer.name.clone());
+        }
+    }
+
+    use scorestrata_compiler::timeline::EventKind;
+    let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::NoteOn { pitch, velocity } => {
+                let layer_name = layer_names
+                    .get(&e.layer_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| e.layer_id.to_string());
+                Some(scorestrata_audio::render::RenderNote {
+                    pitch: pitch.0,
+                    start_tick: e.tick.0,
+                    duration_ticks: next_note_off(&timeline, e),
+                    velocity: velocity.as_f32(),
+                    layer_name,
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    let result = scorestrata_audio::render::render_notes(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &[],
+    )
+    .context("Render failed")?;
+
+    let render_path = project_path.join("render");
+    std::fs::create_dir_all(&render_path).context("Failed to create render directory")?;
+    let wav_path = render_path.join(format!("{mode}.wav"));
+    std::fs::write(&wav_path, &result.wav_bytes).context("Failed to write WAV")?;
+
+    println!("  Events:            {}", timeline.event_count());
+    println!("  Duration:          {:.2}s", result.duration_seconds);
+    println!("  WAV bytes:         {}", result.wav_bytes.len());
+    println!(
+        "  Checksum (sha256): {}",
+        &result.checksum[..16.min(result.checksum.len())]
+    );
+    println!(
+        "  Output:            {}",
+        wav_path.display().to_string().green()
+    );
+    Ok(())
+}
+
+fn handle_export_midi(path: &str, output: Option<&str>) -> Result<()> {
+    println!("{}", format!("Exporting MIDI: {path}").magenta());
+
+    let project_path = Path::new(path);
+    let project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+
+    let timeline = scorestrata_compiler::compile_project(&project)
+        .context("Compilation failed — check project status")?;
+
+    let midi =
+        scorestrata_compiler::midi_export::export_midi(&timeline).context("MIDI export failed")?;
+
+    let midi_path = output.map_or_else(|| project_path.join("track.mid"), PathBuf::from);
+    std::fs::write(&midi_path, &midi).context("Failed to write MIDI")?;
+
+    println!("  Events: {}", timeline.event_count());
+    println!("  MIDI bytes: {}", midi.len());
+    println!("  Output:    {}", midi_path.display().to_string().green());
+    Ok(())
+}
+
+/// Find the note-off tick for a note-on event (duration to next matching note-off).
+fn next_note_off(
+    timeline: &scorestrata_compiler::TimelineIR,
+    note_on: &scorestrata_compiler::timeline::TimelineEvent,
+) -> u64 {
+    timeline
+        .events
+        .iter()
+        .find(|e| {
+            e.tick.0 > note_on.tick.0
+                && matches!(
+                    &e.kind,
+                    scorestrata_compiler::timeline::EventKind::NoteOff { .. }
+                )
+        })
+        .map_or(480, |e| e.tick.0 - note_on.tick.0)
 }
 
 #[expect(
@@ -1169,6 +1295,51 @@ mod tests {
                 action: PolicyAction::Show { .. }
             }
         ));
+    }
+
+    #[test]
+    fn parse_render_command() {
+        let cli = Cli::try_parse_from(["ss", "render", "my_song", "--mode", "master"]).unwrap();
+        match cli.command {
+            Commands::Render { path, mode } => {
+                assert_eq!(path, "my_song");
+                assert_eq!(mode, "master");
+            }
+            _ => panic!("expected Commands::Render"),
+        }
+    }
+
+    #[test]
+    fn parse_render_command_default_mode() {
+        let cli = Cli::try_parse_from(["ss", "render", "my_song"]).unwrap();
+        match cli.command {
+            Commands::Render { mode, .. } => assert_eq!(mode, "master"),
+            _ => panic!("expected Commands::Render"),
+        }
+    }
+
+    #[test]
+    fn parse_export_midi_command() {
+        let cli = Cli::try_parse_from(["ss", "export-midi", "my_song"]).unwrap();
+        match cli.command {
+            Commands::ExportMidi { path, output } => {
+                assert_eq!(path, "my_song");
+                assert!(output.is_none());
+            }
+            _ => panic!("expected Commands::ExportMidi"),
+        }
+    }
+
+    #[test]
+    fn parse_export_midi_with_output() {
+        let cli = Cli::try_parse_from(["ss", "export-midi", "my_song", "--output", "/tmp/out.mid"])
+            .unwrap();
+        match cli.command {
+            Commands::ExportMidi { output, .. } => {
+                assert_eq!(output.as_deref(), Some("/tmp/out.mid"));
+            }
+            _ => panic!("expected Commands::ExportMidi"),
+        }
     }
 
     #[test]

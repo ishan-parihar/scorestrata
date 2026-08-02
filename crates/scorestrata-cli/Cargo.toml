@@ -15,6 +15,7 @@ scorestrata-theory = { path = "../scorestrata-theory" }
 scorestrata-compiler = { path = "../scorestrata-compiler" }
 scorestrata-validator = { path = "../scorestrata-validator" }
 scorestrata-storage = { path = "../scorestrata-storage" }
+scorestrata-audio = { path = "../scorestrata-audio" }
 scorestrata-mcp = { path = "../scorestrata-mcp" }
 scorestrata-testkit = { path = "../scorestrata-testkit" }
 clap.workspace = true

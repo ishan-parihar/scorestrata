@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 scorestrata-core = { path = "../scorestrata-core" }
 scorestrata-theory = { path = "../scorestrata-theory" }
+scorestrata-compiler = { path = "../scorestrata-compiler" }
 uuid.workspace = true
 chrono.workspace = true
 
