@@ -759,6 +759,129 @@ fn mvas_step_15_debug_plane_and_learning_loop() {
     assert!(templates.summary.contains("quantize_layer_to_scale"));
 }
 
+/// Human escalation workflow (§12.3): when the agent loop stagnates, it
+/// computes a failure report and creates a full human review packet with
+/// validation context, failed metrics, and recommended decisions.
+#[test]
+fn mvas_step_16_human_escalation_workflow() {
+    use scorestrata_mcp::tools::{
+        AttemptedPatchParams, CreateHumanReviewPacketParams, GetFailureReportParams, ToolStatus,
+    };
+
+    // A project the agent cannot fully repair: out-of-scale lead + weak
+    // transitions that a human needs to adjudicate.
+    let mut project = project_with_out_of_scale_lead();
+    for pattern in &mut project.patterns {
+        for note in &mut pattern.notes {
+            note.pitch = scorestrata_core::domain::MidiNote::new(61);
+        }
+    }
+    let project_json = serde_json::to_value(&project).expect("project serializes");
+    let project_id = project.id.to_string();
+
+    // ── 16a. Failure report — why is this failing? ──────────────────
+    let report = scorestrata_mcp::tools::get_failure_report(&GetFailureReportParams {
+        project_id: project_id.clone(),
+        project: Some(project_json.clone()),
+    });
+    // Status mirrors the report's `needs_repair` decision: this project has
+    // a failed metric, so the report is Failed (not "succeeded but escalate").
+    assert!(
+        matches!(report.status, ToolStatus::Failed),
+        "failure report on a broken project is Failed: {}",
+        report.summary
+    );
+    assert!(report.summary.contains("failed metric"));
+    assert!(
+        report.score_delta.contains_key("report.overall_score"),
+        "report includes the overall score"
+    );
+    assert!(
+        report
+            .next_actions
+            .contains(&"create_human_review_packet".to_string()),
+        "failing project is escalated, got: {:?}",
+        report.next_actions
+    );
+
+    // ── 16b. Human review packet — full context for a decision ──────
+    let packet =
+        scorestrata_mcp::tools::create_human_review_packet(&CreateHumanReviewPacketParams {
+            project_id: project_id.clone(),
+            reason: "Stagnation: no improvement after repair loop".to_string(),
+            agent_confidence: 0.4,
+            attempted_patches: vec![AttemptedPatchParams {
+                operation: "quantize_layer_to_scale".to_string(),
+                scope: "lead".to_string(),
+                succeeded: false,
+                score_delta: -0.05,
+                iteration: 7,
+            }],
+            project: Some(project_json.clone()),
+        });
+    assert!(
+        matches!(packet.status, ToolStatus::Succeeded),
+        "packet creation succeeds: {}",
+        packet.summary
+    );
+    assert!(packet.summary.contains("Stagnation"));
+    assert!(
+        packet.summary.contains("recommended decision"),
+        "packet carries recommended decisions, got: {}",
+        packet.summary
+    );
+    assert_eq!(packet.score_delta["packet.recommended_decisions"], "3");
+    assert!(
+        packet
+            .next_actions
+            .contains(&"await_human_decision".to_string()),
+        "project transitions to awaiting a human decision"
+    );
+
+    // ── 16c. The packet payload is round-trippable ──────────────────
+    let packet_prefix = format!("packet://{project_id}/latest?packet=");
+    let packet_payload = packet
+        .evidence_uris
+        .iter()
+        .find_map(|u| u.strip_prefix(&packet_prefix))
+        .expect("packet payload is returned in evidence");
+    let packet_json: serde_json::Value =
+        serde_json::from_str(packet_payload).expect("packet payload parses");
+    assert_eq!(packet_json["project_id"], serde_json::json!(project_id));
+    assert!(
+        packet_json["summary"]
+            .as_str()
+            .unwrap()
+            .contains("Escalation"),
+        "packet summary is present in the payload"
+    );
+    assert!(
+        packet_json["recommended_decisions"]
+            .as_array()
+            .unwrap()
+            .len()
+            == 3,
+        "payload carries the recommended decisions"
+    );
+
+    // ── 16d. State machine reaches NeedsHumanReview ─────────────────
+    // A failing validation (Validating) is the natural escalation point;
+    // the state machine guards the Validating → NeedsHumanReview path.
+    use scorestrata_core::domain::ProjectStatus;
+    use scorestrata_core::state_machine::validate_transition;
+    let from = ProjectStatus::Validating;
+    let to = ProjectStatus::NeedsHumanReview;
+    assert!(
+        validate_transition(from, to).is_ok(),
+        "Validating can escalate to NeedsHumanReview"
+    );
+    // ...but it cannot skip straight from NeedsPolicyReview.
+    assert!(
+        validate_transition(ProjectStatus::NeedsPolicyReview, to).is_err(),
+        "NeedsPolicyReview cannot jump straight to NeedsHumanReview"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

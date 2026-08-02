@@ -11,6 +11,8 @@
 //! - Validation tools: run_validation, get_validation_report, suggest_fixes, compare_candidates
 //! - Debug tools: get_command_trace, get_snapshot_diff, get_candidate_diff,
 //!   isolate_layer, solo_segment, explain_metric (real logic in [`debug_ops`])
+//! - Escalation tools: get_failure_report, create_human_review_packet
+//!   (real §12.3 logic in [`debug_ops`])
 //! - Learning tools: get_lessons, record_lesson, get_repair_templates
 //!   (real logic against [`LessonStore`](scorestrata_storage::lesson_store::LessonStore))
 //! - Engineering tools: get_next_task, claim_task, submit_task_result, run_acceptance_tests
@@ -1113,6 +1115,257 @@ pub fn get_command_trace(params: &GetCommandTraceParams) -> ToolReceipt {
         next_actions: vec![],
         cost: ToolCost {
             cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+// ── Escalation Tools (§10.5, §12.3) ───────────────────────────────
+
+/// Parameters for `get_failure_report` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetFailureReportParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project (when provided, the failure report is real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Get a failure report — why the project is failing and what to do next.
+///
+/// With a project payload, runs the Level-2 symbolic checks and produces a
+/// real [`FailureReport`](crate::debug_ops::FailureReport) with failed
+/// metrics, root causes, and recommended actions (§12.3).
+#[must_use]
+pub fn get_failure_report(params: &GetFailureReportParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "get_failure_report".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Failure report requested for project '{}' but no serialized project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized project payload to compute the failure report".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("get_failure_report", "project", &e),
+        };
+    let report = crate::debug_ops::compute_failure_report(&project);
+    // A report that recommends repair (hard gates failing OR unresolved
+    // metrics) is a failed report — status must not say "Succeeded" while
+    // next_actions says "escalate to human".
+    let needs_repair = !report.hard_gates_passed || !report.failed_metrics.is_empty();
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "report.overall_score".to_string(),
+        format!("{:.3}", report.overall_score),
+    );
+    score_delta.insert(
+        "report.hard_gates".to_string(),
+        if report.hard_gates_passed {
+            "pass".to_string()
+        } else {
+            "fail".to_string()
+        },
+    );
+    score_delta.insert(
+        "report.needs_repair".to_string(),
+        if needs_repair {
+            "yes".to_string()
+        } else {
+            "no".to_string()
+        },
+    );
+    score_delta.insert(
+        "report.failed_metrics".to_string(),
+        report.failed_metrics.len().to_string(),
+    );
+
+    ToolReceipt {
+        tool: "get_failure_report".to_string(),
+        status: if needs_repair {
+            ToolStatus::Failed
+        } else {
+            ToolStatus::Succeeded
+        },
+        summary: format!(
+            "Failure report for project '{}': overall {:.3}, hard gates {}, {} failed metric(s), top issue: {}",
+            params.project_id,
+            report.overall_score,
+            if report.hard_gates_passed {
+                "passing"
+            } else {
+                "failing"
+            },
+            report.failed_metrics.len(),
+            report
+                .top_issues
+                .first()
+                .map_or_else(|| "none".to_string(), |t| t.clone())
+        ),
+        score_delta,
+        evidence_uris: vec![format!("project://{}/failure-report", params.project_id)],
+        focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+        next_actions: report.recommended_actions.clone(),
+        cost: ToolCost {
+            cpu_ms: 4,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `create_human_review_packet` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateHumanReviewPacketParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Reason for escalation.
+    pub reason: String,
+    /// Agent's confidence the current state is acceptable (0.0–1.0).
+    #[serde(default = "default_agent_confidence")]
+    pub agent_confidence: f32,
+    /// Patches the agent already attempted (when provided, the packet
+    /// reports them to the human reviewer).
+    #[serde(default)]
+    pub attempted_patches: Vec<AttemptedPatchParams>,
+    /// Serialized project (when provided, the packet is real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// A patch the agent attempted before escalating (§12.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttemptedPatchParams {
+    /// Patch operation name.
+    pub operation: String,
+    /// Scope of the patch.
+    pub scope: String,
+    /// Whether it succeeded.
+    pub succeeded: bool,
+    /// Score delta achieved.
+    pub score_delta: f32,
+    /// Iteration number.
+    pub iteration: u32,
+}
+
+impl From<&AttemptedPatchParams> for scorestrata_core::debug::AttemptedPatch {
+    fn from(p: &AttemptedPatchParams) -> Self {
+        Self {
+            operation: p.operation.clone(),
+            scope: p.scope.clone(),
+            succeeded: p.succeeded,
+            score_delta: p.score_delta,
+            iteration: p.iteration,
+        }
+    }
+}
+
+fn default_agent_confidence() -> f32 {
+    0.5
+}
+
+/// Create a human review packet with full context for a human decision.
+///
+/// With a project payload, builds a real
+/// [`HumanEscalationPacket`](scorestrata_core::debug::HumanEscalationPacket)
+/// (§12.3) containing the latest validation outcome, failed-metric
+/// explanations, and recommended decisions.
+#[must_use]
+pub fn create_human_review_packet(params: &CreateHumanReviewPacketParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "create_human_review_packet".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Human review packet requested for project '{}' but no serialized project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Supply a serialized project payload to create the packet".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return deserialize_error_receipt("create_human_review_packet", "project", &e);
+            }
+        };
+    let attempted: Vec<scorestrata_core::debug::AttemptedPatch> = params
+        .attempted_patches
+        .iter()
+        .map(scorestrata_core::debug::AttemptedPatch::from)
+        .collect();
+    let packet = crate::debug_ops::build_human_review_packet(
+        &project,
+        &params.reason,
+        attempted,
+        params.agent_confidence,
+    );
+    let packet_json = serde_json::to_value(&packet).unwrap_or_default();
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "packet.failed_metrics".to_string(),
+        packet.failed_metrics.len().to_string(),
+    );
+    score_delta.insert(
+        "packet.attempted_patches".to_string(),
+        packet.attempted_patches.len().to_string(),
+    );
+    score_delta.insert(
+        "packet.recommended_decisions".to_string(),
+        packet.recommended_decisions.len().to_string(),
+    );
+
+    ToolReceipt {
+        tool: "create_human_review_packet".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Created human review packet for project '{}': {} ({} failed metric(s), {} recommended decision(s))",
+            params.project_id,
+            packet.summary,
+            packet.failed_metrics.len(),
+            packet.recommended_decisions.len()
+        ),
+        score_delta,
+        evidence_uris: vec![
+            format!("project://{}/human_review/packet", params.project_id),
+            format!("packet://{}/latest?packet={packet_json}", params.project_id),
+        ],
+        focus_uris: vec![format!("project://{}/human_review", params.project_id)],
+        next_actions: vec!["await_human_decision".to_string()],
+        cost: ToolCost {
+            cpu_ms: 4,
             tool_calls: 1,
             ..Default::default()
         },
@@ -2708,6 +2961,116 @@ mod tests {
         let receipt = get_command_trace(&params);
         assert!(matches!(receipt.status, ToolStatus::Failed));
         assert!(receipt.summary.contains("not found"));
+    }
+
+    #[test]
+    fn get_failure_report_surfaces_issues_with_project() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        for pattern in &mut project.patterns {
+            for note in &mut pattern.notes {
+                note.pitch = scorestrata_core::domain::MidiNote::new(61);
+            }
+        }
+        let params = GetFailureReportParams {
+            project_id: "proj_1".to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = get_failure_report(&params);
+        // Status mirrors the report's `needs_repair` decision: a project with
+        // failed metrics is reported as failed, not "succeeded but escalate".
+        assert!(
+            matches!(receipt.status, ToolStatus::Failed),
+            "failure report on a broken project should be Failed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("failed metric"));
+        assert!(receipt.score_delta.contains_key("report.overall_score"));
+        assert!(
+            receipt
+                .next_actions
+                .contains(&"create_human_review_packet".to_string()),
+            "failed project recommends escalation, got {:?}",
+            receipt.next_actions
+        );
+    }
+
+    #[test]
+    fn get_failure_report_requires_payload() {
+        let params = GetFailureReportParams {
+            project_id: "proj_1".to_string(),
+            project: None,
+        };
+        let receipt = get_failure_report(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("no serialized project payload"));
+    }
+
+    #[test]
+    fn create_human_review_packet_returns_real_packet() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = CreateHumanReviewPacketParams {
+            project_id: "proj_1".to_string(),
+            reason: "Stagnation: no improvement for 3 rounds".to_string(),
+            agent_confidence: 0.6,
+            attempted_patches: vec![AttemptedPatchParams {
+                operation: "apply_transition_fix".to_string(),
+                scope: "chorus_1->verse_2".to_string(),
+                succeeded: false,
+                score_delta: -0.02,
+                iteration: 3,
+            }],
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = create_human_review_packet(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "packet creation should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("human review packet"));
+        assert!(
+            receipt.summary.contains("recommended decision"),
+            "packet reports recommended decisions, got: {}",
+            receipt.summary
+        );
+        assert!(
+            receipt
+                .next_actions
+                .contains(&"await_human_decision".to_string()),
+            "packet transitions to awaiting human decision"
+        );
+        assert!(
+            receipt
+                .evidence_uris
+                .iter()
+                .any(|u| u.starts_with("packet://")),
+            "packet payload is returned in evidence"
+        );
+        assert!(
+            receipt
+                .score_delta
+                .get("packet.attempted_patches")
+                .is_some_and(|v| v == "1"),
+            "attempted patches are reported in the packet, got: {:#?}",
+            receipt.score_delta
+        );
+        assert!(
+            receipt
+                .score_delta
+                .contains_key("packet.recommended_decisions")
+        );
+    }
+
+    #[test]
+    fn create_human_review_packet_requires_payload() {
+        let params = CreateHumanReviewPacketParams {
+            project_id: "proj_1".to_string(),
+            reason: "Test".to_string(),
+            agent_confidence: 0.5,
+            attempted_patches: vec![],
+            project: None,
+        };
+        let receipt = create_human_review_packet(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("no serialized project payload"));
     }
 
     fn sample_lesson_store() -> scorestrata_storage::lesson_store::LessonStore {

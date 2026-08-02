@@ -6,13 +6,15 @@
 //! computations the MCP debug tools surface (the tools are thin adapters).
 
 use scorestrata_core::debug::{
-    CandidateDiff, CandidateScore, CandidateWinner, CommandEvent, CommandTrace, LayerIsolation,
-    MetricExplanation, PatternDiff, RootCauseExplanation, SegmentDiff, SegmentSolo, SnapshotDiff,
+    AttemptedPatch, CandidateDiff, CandidateScore, CandidateWinner, CommandEvent, CommandTrace,
+    HumanEscalationPacket, LayerIsolation, MetricExplanation, PatternDiff, RecommendedDecision,
+    RootCauseExplanation, SegmentDiff, SegmentSolo, SnapshotDiff,
 };
 use scorestrata_core::diagnostic::ValidationReport;
 use scorestrata_core::domain::Project;
 use scorestrata_storage::lesson_store::LessonStore;
 use scorestrata_storage::memory::ProjectMemory;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Diff two project states into a structured [`SnapshotDiff`].
@@ -426,11 +428,15 @@ pub fn compute_metric_explanation(
         // never reaches 1.0: `1.0 - 0.5 * 0.5^n` (1 cause -> 0.75,
         // 2 -> 0.875, 3 -> 0.9375, ...). Bounded and monotonic.
         #[expect(
-            clippy::cast_precision_loss,
-            reason = "Root cause counts fit in f32 for a 0.5-1.0 confidence"
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_wrap,
+            reason = "Root cause counts fit in i32 for the powi exponent"
         )]
         {
-            1.0 - 0.5 * 0.5f32.powi(root_causes.len() as i32)
+            let n = root_causes.len() as i32;
+            // 1.0 - 0.5 * 0.5^n computed via fused multiply-add for accuracy.
+            0.5f32.mul_add(-0.5f32.powi(n), 1.0)
         }
     };
 
@@ -528,6 +534,148 @@ pub fn build_repair_templates(store: &LessonStore) -> Vec<crate::resources::Temp
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     briefs
+}
+
+/// Compute a failure report for a project (§12.3) — what is failing,
+/// why, and what the agent should do next.
+///
+/// Runs the Level-2 symbolic checks, then surfaces the failed metrics
+/// (scorecard entries below their 1.0 target) with root-cause explanations
+/// and the top diagnostics by severity.
+pub fn compute_failure_report(project: &Project) -> FailureReport {
+    let report = project_report(project);
+
+    let failed_metrics: Vec<MetricExplanation> = report
+        .scorecard
+        .metrics
+        .iter()
+        .filter(|m| m.value < 1.0)
+        .filter_map(|m| compute_metric_explanation(project, &m.name))
+        .collect();
+
+    let top_issues: Vec<String> = report
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            d.severity == scorestrata_core::error::Severity::Warning
+                || d.severity == scorestrata_core::error::Severity::Error
+                || d.severity == scorestrata_core::error::Severity::Critical
+        })
+        .take(5)
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+
+    // A project needs agent action when hard gates fail OR any metric is
+    // below target (warnings count too — they are unresolved issues). Only a
+    // clean scorecard recommends approval.
+    let needs_repair = !report.all_hard_gates_passed || !failed_metrics.is_empty();
+    let recommended_actions = if needs_repair {
+        vec![
+            "suggest_fixes".to_string(),
+            "apply_patch".to_string(),
+            "create_human_review_packet".to_string(),
+        ]
+    } else {
+        vec![
+            "approve_current".to_string(),
+            "run_final_validation".to_string(),
+        ]
+    };
+
+    FailureReport {
+        project_id: project.id.to_string(),
+        overall_score: report.scorecard.overall_score,
+        hard_gates_passed: report.all_hard_gates_passed,
+        failed_metrics,
+        top_issues,
+        recommended_actions,
+    }
+}
+
+/// A failure report (§12.3) — the structured answer to "why is this project
+/// failing and what should I do next?".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[must_use]
+pub struct FailureReport {
+    /// Project ID.
+    pub project_id: String,
+    /// Overall validation score (0.0–1.0).
+    pub overall_score: f32,
+    /// Whether all hard gates passed.
+    pub hard_gates_passed: bool,
+    /// Failed metrics with root-cause explanations.
+    pub failed_metrics: Vec<MetricExplanation>,
+    /// Top diagnostics by severity (max 5).
+    pub top_issues: Vec<String>,
+    /// Recommended next actions for the agent.
+    pub recommended_actions: Vec<String>,
+}
+
+/// Build a full human escalation packet (§12.3) from real project state.
+///
+/// Assembles the rich [`HumanEscalationPacket`] with the latest validation
+/// outcome, failed-metric explanations, the patches the agent already
+/// attempted, and recommended decisions for the human reviewer.
+pub fn build_human_review_packet(
+    project: &Project,
+    reason: &str,
+    attempted_patches: Vec<AttemptedPatch>,
+    agent_confidence: f32,
+) -> HumanEscalationPacket {
+    let report = project_report(project);
+    let failed_metrics = compute_failure_report(project).failed_metrics;
+
+    let summary = format!(
+        "Escalation: {reason}. Overall score {:.3}, hard gates {}.",
+        report.scorecard.overall_score,
+        if report.all_hard_gates_passed {
+            "passing"
+        } else {
+            "failing"
+        },
+    );
+
+    let latest_validation = Some(format!(
+        "{} diagnostics ({} critical, {} errors, {} warnings), overall {:.3}",
+        report.summary.info
+            + report.summary.warnings
+            + report.summary.errors
+            + report.summary.critical,
+        report.summary.critical,
+        report.summary.errors,
+        report.summary.warnings,
+        report.scorecard.overall_score,
+    ));
+
+    let recommended_decisions = vec![
+        RecommendedDecision {
+            decision_type: "approve_current".to_string(),
+            description: "Accept the current state as final".to_string(),
+            confidence: agent_confidence,
+        },
+        RecommendedDecision {
+            decision_type: "manual_patch".to_string(),
+            description: "Apply a hand-crafted fix for the top issues".to_string(),
+            confidence: 0.7,
+        },
+        RecommendedDecision {
+            decision_type: "adjust_target".to_string(),
+            description: "Loosen the target score or budget and retry".to_string(),
+            confidence: 0.5,
+        },
+    ];
+
+    HumanEscalationPacket {
+        project_id: project.id.to_string(),
+        summary,
+        latest_validation,
+        candidate_comparison: None,
+        attempted_patches,
+        failed_metrics,
+        recommended_decisions,
+        agent_confidence,
+        timestamp: chrono::Utc::now(),
+    }
 }
 
 /// Build a validation report for a project (Level 2 symbolic checks).
@@ -858,5 +1006,141 @@ mod tests {
         }
         let broken_report = project_report(&broken);
         assert!(broken_report.scorecard.overall_score <= healthy.scorecard.overall_score);
+    }
+
+    #[test]
+    fn failure_report_surfaces_failed_metrics_for_broken_project() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        for pattern in &mut project.patterns {
+            for note in &mut pattern.notes {
+                note.pitch = scorestrata_core::domain::MidiNote::new(61);
+            }
+        }
+        let report = compute_failure_report(&project);
+        assert_eq!(report.project_id, project.id.to_string());
+        assert!(report.overall_score < 1.0);
+        assert!(
+            !report.failed_metrics.is_empty(),
+            "degraded project has failed metrics"
+        );
+        assert!(
+            report
+                .failed_metrics
+                .iter()
+                .any(|m| m.metric_name == "harmony.scale_compliance"),
+            "scale compliance surfaced as a failed metric"
+        );
+        assert!(!report.top_issues.is_empty());
+        assert!(
+            report
+                .recommended_actions
+                .contains(&"create_human_review_packet".to_string()),
+            "broken project recommends escalation"
+        );
+    }
+
+    #[test]
+    fn failure_report_clean_project_recommends_approval() {
+        // The 8-bar loop is fully in-key with a single segment (no weak
+        // transitions), so nothing is failing and the report recommends
+        // approval.
+        let project = scorestrata_testkit::eight_bar_loop();
+        let report = compute_failure_report(&project);
+        assert!(
+            report.failed_metrics.is_empty(),
+            "clean project has no failed metrics: {:?}",
+            report.failed_metrics
+        );
+        assert!(report.hard_gates_passed);
+        assert!(
+            report
+                .recommended_actions
+                .contains(&"approve_current".to_string()),
+            "clean project recommends approval, got: {:?}",
+            report.recommended_actions
+        );
+    }
+
+    #[test]
+    fn failure_report_with_warnings_recommends_repair() {
+        // The melodic_techno fixture has weak-transition warnings, so it is
+        // not failing hard gates but still has unresolved issues — the
+        // report must recommend repair over approval.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let report = compute_failure_report(&project);
+        assert!(
+            !report.failed_metrics.is_empty(),
+            "warning-level issues surface as failed metrics"
+        );
+        assert!(
+            report
+                .recommended_actions
+                .contains(&"create_human_review_packet".to_string()),
+            "unresolved warnings recommend escalation, got: {:?}",
+            report.recommended_actions
+        );
+        assert!(
+            !report
+                .recommended_actions
+                .contains(&"approve_current".to_string()),
+            "warning-level project is not approved outright"
+        );
+    }
+
+    #[test]
+    fn human_review_packet_has_all_sections() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let packet = build_human_review_packet(
+            &project,
+            "Stagnation: no improvement for 3 rounds",
+            vec![AttemptedPatch {
+                operation: "quantize_layer_to_scale".to_string(),
+                scope: "harmony".to_string(),
+                succeeded: true,
+                score_delta: 0.05,
+                iteration: 3,
+            }],
+            0.6,
+        );
+        assert_eq!(packet.project_id, project.id.to_string());
+        assert!(packet.summary.contains("Stagnation"));
+        assert!(packet.latest_validation.is_some());
+        assert_eq!(packet.attempted_patches.len(), 1);
+        assert_eq!(packet.recommended_decisions.len(), 3);
+        assert!((packet.agent_confidence - 0.6).abs() < f32::EPSILON);
+        assert!(
+            packet
+                .recommended_decisions
+                .iter()
+                .any(|d| d.decision_type == "approve_current"),
+            "approve_current is a recommended decision"
+        );
+    }
+
+    #[test]
+    fn human_review_packet_includes_failed_metrics_for_broken_project() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        for pattern in &mut project.patterns {
+            for note in &mut pattern.notes {
+                note.pitch = scorestrata_core::domain::MidiNote::new(61);
+            }
+        }
+        let packet = build_human_review_packet(
+            &project,
+            "Critical error: scale violations persist",
+            vec![],
+            0.3,
+        );
+        assert!(
+            !packet.failed_metrics.is_empty(),
+            "escalation packet carries failed metric explanations"
+        );
+        assert!(
+            packet
+                .failed_metrics
+                .iter()
+                .any(|m| m.metric_name == "harmony.scale_compliance"),
+            "scale compliance among failed metrics"
+        );
     }
 }

@@ -403,6 +403,31 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-HUMAN-ESCALATION".to_string(),
+        title: "Human escalation — failure reports and review packets".to_string(),
+        phase: "6".to_string(),
+        tasks: vec!["ESCALATE-001".to_string()],
+        code: vec![
+            "scorestrata_core::debug".to_string(),
+            "scorestrata_mcp::debug_ops".to_string(),
+            "scorestrata_mcp::tools".to_string(),
+            "scorestrata_agent::kernel".to_string(),
+        ],
+        tests: vec![
+            "debug_ops::tests".to_string(),
+            "tools::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec![
+            "get_failure_report".to_string(),
+            "create_human_review_packet".to_string(),
+        ],
+        cli_commands: vec!["ss human-packet create".to_string()],
+        docs: vec!["architecture.md §12.3".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-CLI-BUNDLE".to_string(),
         title: "CLI wired to real storage and pipeline".to_string(),
         phase: "0".to_string(),
