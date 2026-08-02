@@ -34,12 +34,15 @@ impl IdSeq {
         let mut hasher = sha2::Sha256::new();
         hasher.update(json.as_bytes());
         let digest = hasher.finalize();
-        let seed = u128::from_be_bytes(digest[..16].try_into().expect("16-byte slice"));
+        // The digest is 32 bytes; the first 16 are always available.
+        let mut seed_bytes = [0u8; 16];
+        seed_bytes.copy_from_slice(&digest[..16]);
+        let seed = u128::from_be_bytes(seed_bytes);
         Self { seed, counter: 0 }
     }
 
     /// Next deterministic UUID as a 128-bit value.
-    fn next_u128(&mut self) -> u128 {
+    const fn next_u128(&mut self) -> u128 {
         // Mix the counter into the seed with a golden-ratio avalanche so
         // consecutive IDs are visually distinct but still reproducible.
         let value = self
@@ -65,12 +68,13 @@ pub struct Plan {
 /// the caller should have validated the key beforehand.
 #[must_use]
 pub fn plan_project(config: &ProjectConfig) -> Plan {
-    let scale = Key::parse(&config.key)
-        .map(|key| key.to_scale())
-        .unwrap_or_else(|| Scale {
+    let scale = Key::parse(&config.key).map_or_else(
+        || Scale {
             root: 0,
             pattern: scorestrata_theory::scale::patterns::major(),
-        });
+        },
+        |key| key.to_scale(),
+    );
 
     let mut ids = IdSeq::from_config(config);
     let patterns = build_patterns(&scale, &mut ids);
@@ -142,7 +146,8 @@ fn bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
     let low = MidiNote::new(24);
     let high = MidiNote::new(48);
     let tones = scale.notes_in_range(low, high);
-    let root = *tones.first().unwrap_or(&MidiNote::new(36));
+    let default_root = MidiNote::new(36);
+    let root = *tones.first().unwrap_or(&default_root);
     let fifth = tones.get(4).copied().unwrap_or(root);
     let octave = *tones.last().unwrap_or(&root);
 
@@ -312,23 +317,20 @@ fn build_layers(
         layers.push(make_layer("Bass", "bass_synth", p, 0, segment_bars, ids));
     }
     match role {
+        // Intros and outros stay sparse: rhythm section only.
         SegmentRole::Intro | SegmentRole::Outro => {}
-        SegmentRole::Verse | SegmentRole::Bridge => {
+        // Mid sections carry the lead.
+        SegmentRole::Verse | SegmentRole::Bridge | SegmentRole::Build | SegmentRole::Breakdown => {
             if let Some(p) = lead {
                 layers.push(make_layer("Lead", "lead_synth", p, 12, segment_bars, ids));
             }
         }
-        SegmentRole::Build => {
+        // Chorus (and custom sections) peak with a doubled lead an octave
+        // up — a denser, brighter drop before the build-out.
+        SegmentRole::Chorus | SegmentRole::Custom => {
             if let Some(p) = lead {
                 layers.push(make_layer("Lead", "lead_synth", p, 12, segment_bars, ids));
             }
-        }
-        SegmentRole::Chorus | _ => {
-            if let Some(p) = lead {
-                layers.push(make_layer("Lead", "lead_synth", p, 12, segment_bars, ids));
-            }
-            // Chorus doubles the lead an octave up for a denser, brighter
-            // drop — a natural energy peak before the build-out.
             if let Some(p) = lead {
                 layers.push(make_layer(
                     "Lead Octave",
