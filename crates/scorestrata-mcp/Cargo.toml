@@ -9,9 +9,15 @@ license.workspace = true
 scorestrata-core = { path = "../scorestrata-core" }
 scorestrata-validator = { path = "../scorestrata-validator" }
 scorestrata-theory = { path = "../scorestrata-theory" }
+scorestrata-compiler = { path = "../scorestrata-compiler" }
+scorestrata-audio = { path = "../scorestrata-audio" }
+scorestrata-storage = { path = "../scorestrata-storage" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

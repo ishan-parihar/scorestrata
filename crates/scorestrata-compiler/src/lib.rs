@@ -6,6 +6,7 @@
 #![deny(missing_docs)]
 
 pub mod arrangement;
+pub mod compile;
 pub mod diagnostics;
 pub mod midi_export;
 pub mod passes;
@@ -16,5 +17,7 @@ use scorestrata_core::error::ScorestrataError;
 /// Result type for compiler operations.
 pub type CompilerResult<T> = Result<T, ScorestrataError>;
 
+/// Project → timeline compilation entry points.
+pub use compile::{compile_layer, compile_pattern, compile_project, compile_segment};
 /// The compiler's output: a complete timeline IR.
 pub use timeline::TimelineIR;

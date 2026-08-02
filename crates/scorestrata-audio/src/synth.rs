@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Oscillator waveform type.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Waveform {
     /// Sine wave.
     Sine,

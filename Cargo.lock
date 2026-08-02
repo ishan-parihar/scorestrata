@@ -711,8 +711,10 @@ dependencies = [
 name = "scorestrata-audio"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "scorestrata-core",
  "serde",
+ "sha2",
  "thiserror",
 ]
 
@@ -780,12 +782,18 @@ dependencies = [
 name = "scorestrata-mcp"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "hex",
  "proptest",
+ "scorestrata-audio",
+ "scorestrata-compiler",
  "scorestrata-core",
+ "scorestrata-storage",
  "scorestrata-theory",
  "scorestrata-validator",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 

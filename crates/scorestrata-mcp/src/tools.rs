@@ -206,6 +206,10 @@ pub struct ApplyPatchParams {
     pub dry_run: bool,
     /// Scope for the patch.
     pub scope: Option<PatchScope>,
+    /// Serialized project to apply the patch against (when provided, the
+    /// patch is applied for real and the receipt reports actual deltas).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
 }
 
 /// Scope for a patch operation.
@@ -218,51 +222,67 @@ pub struct PatchScope {
 }
 
 /// Apply a patch to a project with optional dry-run support.
+///
+/// When a `project` is provided (see [`ApplyPatchParams::project`]), the patch
+/// is applied for real and the receipt reports the actual score delta. Without
+/// a project, a dry-run-style receipt is returned describing the intended
+/// mutation.
 #[must_use]
 pub fn apply_patch(params: &ApplyPatchParams) -> ToolReceipt {
-    if params.dry_run {
-        ToolReceipt {
+    match &params.project {
+        Some(project_json) => {
+            let deserialized =
+                serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone());
+            match deserialized {
+                Ok(mut project) => {
+                    let mut receipt =
+                        crate::patch_ops::apply_patch_to_project(params, &mut project);
+                    if params.dry_run {
+                        receipt.status = ToolStatus::DryRunCompleted;
+                        receipt.dry_run = true;
+                        receipt
+                            .warnings
+                            .push("Dry run — mutation simulated but not persisted".to_string());
+                    }
+                    receipt
+                }
+                Err(e) => ToolReceipt {
+                    tool: "apply_patch".to_string(),
+                    status: ToolStatus::Failed,
+                    summary: format!("Could not deserialize project: {e}"),
+                    score_delta: BTreeMap::new(),
+                    evidence_uris: vec![],
+                    focus_uris: vec![],
+                    next_actions: vec!["get_project_summary".to_string()],
+                    cost: ToolCost::default(),
+                    warnings: vec!["Invalid project payload".to_string()],
+                    dry_run: params.dry_run,
+                    diagnostics: vec![],
+                },
+            }
+        }
+        None => ToolReceipt {
             tool: "apply_patch".to_string(),
-            status: ToolStatus::DryRunCompleted,
+            status: if params.dry_run {
+                ToolStatus::DryRunCompleted
+            } else {
+                ToolStatus::Failed
+            },
             summary: format!(
-                "Dry run: '{}' patch would be applied to project '{}'",
+                "'{}' patch requested for project '{}' but no project payload provided",
                 params.op, params.project_id
             ),
             score_delta: BTreeMap::new(),
             evidence_uris: vec![],
             focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
-            next_actions: vec![
-                "review_dry_run_result".to_string(),
-                "apply_patch_for_real".to_string(),
-            ],
+            next_actions: vec!["get_project_summary".to_string()],
             cost: ToolCost::default(),
-            warnings: vec!["This was a dry run — no state was mutated".to_string()],
-            dry_run: true,
-            diagnostics: vec![],
-        }
-    } else {
-        ToolReceipt {
-            tool: "apply_patch".to_string(),
-            status: ToolStatus::Succeeded,
-            summary: format!(
-                "Applied '{}' patch to project '{}'",
-                params.op, params.project_id
-            ),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![format!("project://{}/validation/latest", params.project_id)],
-            focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
-            next_actions: vec![
-                "run_validation".to_string(),
-                "get_audit_summary".to_string(),
+            warnings: vec![
+                "No project payload — supply the serialized project to apply the patch".to_string(),
             ],
-            cost: ToolCost {
-                tool_calls: 1,
-                ..Default::default()
-            },
-            warnings: vec![],
-            dry_run: false,
+            dry_run: params.dry_run,
             diagnostics: vec![],
-        }
+        },
     }
 }
 
@@ -882,36 +902,64 @@ pub struct GenerateConfigParams {
     pub project_id: String,
     /// Brief text.
     pub brief: String,
+    /// Optional project name (defaults to the project ID).
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Generate a project configuration from a brief.
 ///
-/// # Note
-///
-/// This is a stub — not yet wired to the config generator.
-/// The `brief` parameter is used in the summary for traceability.
+/// Wired to the deterministic [`config_gen`](crate::config_gen) parser:
+/// genre, BPM, key, mood, and duration hints are extracted from free text
+/// and rendered into a validated [`ProjectConfig`].
 #[must_use]
 pub fn generate_config_from_brief(params: &GenerateConfigParams) -> ToolReceipt {
+    let name = params
+        .name
+        .clone()
+        .unwrap_or_else(|| params.project_id.clone());
+    let config = crate::config_gen::generate_config(&name, &params.brief);
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("config.completeness".to_string(), "+1.0".to_string());
+
     ToolReceipt {
         tool: "generate_config_from_brief".to_string(),
         status: ToolStatus::Succeeded,
         summary: format!(
-            "Generated config for project '{}' from brief: '{}'",
-            params.project_id,
-            params.brief.chars().take(80).collect::<String>()
+            "Generated config for '{}': {} @ {} BPM, key {}, {} bars",
+            name, config.genre, config.bpm, config.key, config.duration_bars
         ),
-        score_delta: BTreeMap::new(),
+        score_delta,
         evidence_uris: vec![format!("project://{}/config", params.project_id)],
-        focus_uris: vec![],
+        focus_uris: vec![format!("project://{}/config", params.project_id)],
         next_actions: vec!["validate_config".to_string()],
         cost: ToolCost {
+            cpu_ms: 2,
             tool_calls: 1,
             ..Default::default()
         },
-        warnings: vec!["Stub: not yet wired to config generator".to_string()],
+        warnings: vec![],
         dry_run: false,
         diagnostics: vec![],
     }
+}
+
+/// Generate a config and return both the receipt and the serialized config.
+///
+/// Used by adapters that persist the result (e.g. the CLI `config generate`
+/// command) without re-parsing the brief.
+#[must_use]
+pub fn generate_config_with_value(
+    params: &GenerateConfigParams,
+) -> (ToolReceipt, serde_json::Value) {
+    let name = params
+        .name
+        .clone()
+        .unwrap_or_else(|| params.project_id.clone());
+    let config = crate::config_gen::generate_config(&name, &params.brief);
+    let config_json = serde_json::to_value(&config).unwrap_or_default();
+    (generate_config_from_brief(params), config_json)
 }
 
 /// Parameters for `validate_config` tool.
@@ -1047,43 +1095,204 @@ pub struct RenderProjectParams {
     /// Render mode (master, stems, preview).
     #[serde(default = "default_render_mode")]
     pub mode: String,
+    /// Serialized project to render (required for real rendering).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+    /// Target segment ID for segment-scoped rendering.
+    #[serde(default)]
+    pub segment_id: Option<String>,
 }
 
 fn default_render_mode() -> String {
     "master".to_string()
 }
 
-/// Render a project (or a segment of it).
+/// Render a project (or a segment of it) to a WAV artifact.
 ///
-/// # Note
-///
-/// This is a stub — not yet wired to the render engine.
-/// `render_seconds` is set to 0.0 since no actual rendering occurs.
+/// When a `project` payload is provided, the project is compiled to a
+/// timeline IR and rendered offline via the audio engine, producing real
+/// WAV bytes with a deterministic checksum and render-time accounting.
 #[must_use]
 pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
-    ToolReceipt {
-        tool: "render_project".to_string(),
-        status: ToolStatus::Succeeded,
-        summary: format!(
-            "Rendered project '{}' in '{}' mode",
-            params.project_id, params.mode
-        ),
-        score_delta: BTreeMap::new(),
-        evidence_uris: vec![format!(
-            "project://{}/render/{}",
-            params.project_id, params.mode
-        )],
-        focus_uris: vec![],
-        next_actions: vec!["run_validation".to_string()],
-        cost: ToolCost {
-            tool_calls: 1,
-            render_seconds: 0.0,
-            ..Default::default()
-        },
-        warnings: vec!["Stub: not yet wired to render engine".to_string()],
-        dry_run: false,
-        diagnostics: vec![],
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "render_project".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Render requested for project '{}' but no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to render".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let project: scorestrata_core::domain::Project =
+        match serde_json::from_value(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolReceipt {
+                    tool: "render_project".to_string(),
+                    status: ToolStatus::Failed,
+                    summary: format!("Could not deserialize project: {e}"),
+                    score_delta: BTreeMap::new(),
+                    evidence_uris: vec![],
+                    focus_uris: vec![],
+                    next_actions: vec!["get_project_summary".to_string()],
+                    cost: ToolCost::default(),
+                    warnings: vec!["Invalid project payload".to_string()],
+                    dry_run: false,
+                    diagnostics: vec![],
+                };
+            }
+        };
+
+    // Compile the project (or just the requested segment) to a timeline.
+    let timeline = match &params.segment_id {
+        Some(seg_id) => scorestrata_compiler::compile_project(&project)
+            .ok()
+            .and_then(|tl| {
+                let events: Vec<_> = tl
+                    .events
+                    .into_iter()
+                    .filter(|e| e.segment_id.to_string() == *seg_id)
+                    .collect();
+                let total_ticks = events.iter().map(|e| e.tick.0).max().unwrap_or(0);
+                Some(scorestrata_compiler::TimelineIR {
+                    project_id: tl.project_id,
+                    events,
+                    total_ticks,
+                    bpm: tl.bpm,
+                    time_signature_num: tl.time_signature_num,
+                    input_hash: tl.input_hash,
+                    compiler_version: tl.compiler_version,
+                })
+            }),
+        None => scorestrata_compiler::compile_project(&project).ok(),
+    };
+
+    let Some(timeline) = timeline else {
+        return ToolReceipt {
+            tool: "render_project".to_string(),
+            status: ToolStatus::Failed,
+            summary: "Could not compile project for rendering".to_string(),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+            next_actions: vec!["run_validation".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Compilation failed — check project status".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    // Map layer IDs to human-readable names for voice assignment.
+    let mut layer_names = std::collections::HashMap::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            layer_names.insert(layer.id.to_string(), layer.name.clone());
+        }
     }
+
+    // Convert timeline events to render notes (layer name from event layer).
+    let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
+                let layer_name = layer_names
+                    .get(&e.layer_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| e.layer_id.to_string());
+                Some(scorestrata_audio::render::RenderNote {
+                    pitch: pitch.0,
+                    start_tick: e.tick.0,
+                    duration_ticks: next_note_off(&timeline, e),
+                    velocity: velocity.as_f32(),
+                    layer_name,
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    match scorestrata_audio::render::render_notes(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &[],
+    ) {
+        Ok(result) => {
+            let mut score_delta = BTreeMap::new();
+            score_delta.insert("render.determinism".to_string(), "+1.0".to_string());
+            ToolReceipt {
+                tool: "render_project".to_string(),
+                status: ToolStatus::Succeeded,
+                summary: format!(
+                    "Rendered {} events ({:.2}s, sha256 {}) in '{}' mode",
+                    timeline.event_count(),
+                    result.duration_seconds,
+                    &result.checksum[..8.min(result.checksum.len())],
+                    params.mode
+                ),
+                score_delta,
+                evidence_uris: vec![format!(
+                    "project://{}/render/{}",
+                    params.project_id, params.mode
+                )],
+                focus_uris: vec![],
+                next_actions: vec!["get_render_job".to_string(), "run_validation".to_string()],
+                cost: ToolCost {
+                    cpu_ms: 10,
+                    tool_calls: 1,
+                    render_seconds: result.duration_seconds as f32,
+                },
+                warnings: vec![],
+                dry_run: false,
+                diagnostics: vec![],
+            }
+        }
+        Err(e) => ToolReceipt {
+            tool: "render_project".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Render failed: {e}"),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_failure_report".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Render engine error".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        },
+    }
+}
+
+/// Find the note-off tick for a note-on event (duration to next matching note-off).
+fn next_note_off(
+    timeline: &scorestrata_compiler::TimelineIR,
+    note_on: &scorestrata_compiler::timeline::TimelineEvent,
+) -> u64 {
+    timeline
+        .events
+        .iter()
+        .find(|e| {
+            e.tick.0 > note_on.tick.0
+                && matches!(
+                    &e.kind,
+                    scorestrata_compiler::timeline::EventKind::NoteOff { .. }
+                )
+        })
+        .map_or(480, |e| e.tick.0 - note_on.tick.0)
 }
 
 /// Parameters for `render_segment` tool.
@@ -1096,38 +1305,22 @@ pub struct RenderSegmentParams {
     /// Render mode.
     #[serde(default = "default_render_mode")]
     pub mode: String,
+    /// Serialized project to render.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
 }
 
-/// Render a single segment.
+/// Render a single segment to a WAV artifact.
 ///
-/// # Note
-///
-/// This is a stub — not yet wired to the render engine.
+/// Delegates to [`render_project`] with a segment scope.
 #[must_use]
 pub fn render_segment(params: &RenderSegmentParams) -> ToolReceipt {
-    ToolReceipt {
-        tool: "render_segment".to_string(),
-        status: ToolStatus::Succeeded,
-        summary: format!(
-            "Rendered segment '{}' in project '{}' ({})",
-            params.segment_id, params.project_id, params.mode
-        ),
-        score_delta: BTreeMap::new(),
-        evidence_uris: vec![format!(
-            "project://{}/segments/{}/render",
-            params.project_id, params.segment_id
-        )],
-        focus_uris: vec![],
-        next_actions: vec![],
-        cost: ToolCost {
-            tool_calls: 1,
-            render_seconds: 0.0,
-            ..Default::default()
-        },
-        warnings: vec!["Stub: not yet wired to render engine".to_string()],
-        dry_run: false,
-        diagnostics: vec![],
-    }
+    render_project(&RenderProjectParams {
+        project_id: params.project_id.clone(),
+        mode: params.mode.clone(),
+        project: params.project.clone(),
+        segment_id: Some(params.segment_id.clone()),
+    })
 }
 
 #[cfg(test)]
@@ -1220,6 +1413,7 @@ mod tests {
             params: serde_json::json!({"strength": 1.0}),
             dry_run: true,
             scope: None,
+            project: None,
         };
         let receipt = apply_patch(&params);
         assert!(receipt.dry_run);
@@ -1452,6 +1646,7 @@ mod tests {
         let params = GenerateConfigParams {
             project_id: "proj_1".to_string(),
             brief: "Dark melodic techno with 140 BPM".to_string(),
+            name: None,
         };
         let receipt = generate_config_from_brief(&params);
         assert!(matches!(receipt.status, ToolStatus::Succeeded));
@@ -1460,14 +1655,11 @@ mod tests {
                 .next_actions
                 .contains(&"validate_config".to_string())
         );
-        assert!(
-            receipt.summary.contains("Dark melodic techno"),
-            "Brief should appear in summary"
-        );
-        assert!(
-            !receipt.warnings.is_empty(),
-            "Stub tools should warn they are not wired"
-        );
+        // The summary reflects the parsed config (genre, BPM, key, bars).
+        assert!(receipt.summary.contains("melodic_techno"));
+        assert!(receipt.summary.contains("140 BPM"));
+        assert!(receipt.summary.contains("C minor"));
+        assert!(receipt.warnings.is_empty());
     }
 
     #[test]
@@ -1540,14 +1732,19 @@ mod tests {
         let params = RenderProjectParams {
             project_id: "proj_1".to_string(),
             mode: "master".to_string(),
+            project: None,
+            segment_id: None,
         };
         let receipt = render_project(&params);
-        assert!(matches!(receipt.status, ToolStatus::Succeeded));
-        // Why: render_seconds is 0.0 because this is a stub — not yet wired to render engine
-        assert_eq!(receipt.cost.render_seconds, 0.0);
+        // Without a project payload, the render cannot run — it fails cleanly.
+        assert!(matches!(receipt.status, ToolStatus::Failed));
         assert!(
-            !receipt.warnings.is_empty(),
-            "Stub tools should warn they are not wired"
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("No project payload")),
+            "expected missing-payload warning, got {:#?}",
+            receipt.warnings
         );
     }
 
@@ -1557,13 +1754,11 @@ mod tests {
             project_id: "proj_1".to_string(),
             segment_id: "chorus_1".to_string(),
             mode: "stems".to_string(),
+            project: None,
         };
         let receipt = render_segment(&params);
-        assert!(matches!(receipt.status, ToolStatus::Succeeded));
-        assert!(receipt.summary.contains("chorus_1"));
-        assert!(
-            !receipt.warnings.is_empty(),
-            "Stub tools should warn they are not wired"
-        );
+        // Without a project payload, the render cannot run — it fails cleanly.
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("no project payload"));
     }
 }

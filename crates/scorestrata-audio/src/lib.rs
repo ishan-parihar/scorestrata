@@ -1,11 +1,19 @@
 //! # Scorestrata Audio
 //!
 //! Audio engine: instruments, FX, mixer, offline render, stems.
-//! Phase 5 MVP implementation.
+//! Phase 5 + Phase 6 MVP implementation.
+//!
+//! Modules:
+//! - `sampler`: drum sampler instrument
+//! - `synth`: subtractive synth (oscillator + filter + ADSR)
+//! - `mixer`: multi-channel mixer with constant-power pan law
+//! - `wav`: WAV file writer
+//! - `render`: deterministic offline render of timelines to WAV
 
 #![deny(missing_docs)]
 
 pub mod mixer;
+pub mod render;
 pub mod sampler;
 pub mod synth;
 pub mod wav;
