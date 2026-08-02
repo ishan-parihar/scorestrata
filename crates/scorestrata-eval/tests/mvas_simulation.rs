@@ -882,6 +882,121 @@ fn mvas_step_16_human_escalation_workflow() {
     );
 }
 
+#[test]
+fn mvas_step_17_orientation_and_validation_drill_down() {
+    // §10.5/§13.1 L0 orientation + validation drill-down: the 8 tools that let
+    // an agent bootstrap (contracts, onboarding, summary) and then dig into
+    // why a project scores what it scores (report, root causes, evidence,
+    // candidate comparison) — all before committing to a mutation (dry run).
+    use scorestrata_mcp::tools::{
+        CompareCandidatesParams, DryRunPatchParams, GetMetricEvidenceParams,
+        GetProjectSummaryParams, GetRootCausesParams, GetValidationReportParams, ToolStatus,
+    };
+
+    let clean = scorestrata_testkit::melodic_techno_project();
+    let clean_json = serde_json::to_value(&clean).expect("project serializes");
+    let broken = project_with_out_of_scale_lead();
+    let broken_json = serde_json::to_value(&broken).expect("project serializes");
+    let project_id = clean.id.to_string();
+
+    // ── 17a. Orientation: contracts, onboarding packet, project summary ──
+    let contracts = scorestrata_mcp::tools::get_contracts();
+    assert!(matches!(contracts.status, ToolStatus::Succeeded));
+    assert!(
+        contracts.summary.contains("schema"),
+        "contracts receipt lists the schema registry"
+    );
+
+    let onboarding = scorestrata_mcp::tools::get_onboarding_packet();
+    assert!(matches!(onboarding.status, ToolStatus::Succeeded));
+    assert!(onboarding.summary.contains("Onboarding"));
+    assert!(onboarding.summary.contains("tool(s)"));
+
+    let summary = scorestrata_mcp::tools::get_project_summary(&GetProjectSummaryParams {
+        project_id: project_id.clone(),
+        project: Some(clean_json.clone()),
+    });
+    assert!(matches!(summary.status, ToolStatus::Succeeded));
+    assert!(summary.summary.contains("segment(s)"));
+    assert!(summary.score_delta.contains_key("summary.segments"));
+
+    // ── 17b. Validation report (Level 2 symbolic) ──────────────────
+    let report = scorestrata_mcp::tools::get_validation_report(&GetValidationReportParams {
+        project_id: project_id.clone(),
+        level: 2,
+        project: Some(clean_json.clone()),
+    });
+    assert!(matches!(report.status, ToolStatus::Succeeded));
+    assert!(report.summary.contains("overall"));
+    assert!(report.score_delta.contains_key("report.overall_score"));
+    assert!(report.score_delta.contains_key("report.metrics"));
+
+    // ── 17c. Root causes on a metric that is genuinely failing ──────
+    let roots = scorestrata_mcp::tools::get_root_causes(&GetRootCausesParams {
+        project_id: project_id.clone(),
+        metric_name: "harmony.scale_compliance".to_string(),
+        project: Some(broken_json.clone()),
+    });
+    assert!(
+        matches!(roots.status, ToolStatus::Succeeded),
+        "root-cause attribution succeeds for a measured metric: {:#?}",
+        roots
+    );
+    assert!(roots.score_delta.contains_key("metric.value"));
+
+    // ── 17d. Evidence drill-down from a recorded scorecard ──────────
+    let broken_report = scorestrata_mcp::debug_ops::project_report(&broken);
+    let mut warehouse = scorestrata_storage::evidence::EvidenceWarehouse::new();
+    warehouse.record_scorecard(
+        &broken_report.scorecard,
+        2,
+        None,
+        &broken_report.diagnostics,
+    );
+    let evidence = scorestrata_mcp::tools::get_metric_evidence(&GetMetricEvidenceParams {
+        project_id: project_id.clone(),
+        metric_name: "harmony.scale_compliance".to_string(),
+        warehouse: Some(serde_json::to_value(&warehouse).expect("warehouse serializes")),
+    });
+    assert!(matches!(evidence.status, ToolStatus::Succeeded));
+    assert!(evidence.score_delta.contains_key("evidence.entries"));
+    assert!(
+        evidence.summary.contains("sample(s)"),
+        "evidence summary reports sample count"
+    );
+
+    // ── 17e. Candidate comparison picks the higher-scoring option ───
+    let compared = scorestrata_mcp::tools::compare_candidates(&CompareCandidatesParams {
+        project_id: project_id.clone(),
+        candidate_a: "clean".to_string(),
+        candidate_b: "broken".to_string(),
+        project_a: Some(clean_json.clone()),
+        project_b: Some(broken_json.clone()),
+    });
+    assert!(matches!(compared.status, ToolStatus::Succeeded));
+    assert!(compared.score_delta.contains_key("diff.metrics_compared"));
+    assert!(
+        compared.score_delta.get("diff.winner").is_some(),
+        "comparison reports a winner between a clean and a broken candidate"
+    );
+
+    // ── 17f. Dry-run a patch before committing to it ────────────────
+    let dry_run = scorestrata_mcp::tools::dry_run_patch(&DryRunPatchParams {
+        project_id: project_id.clone(),
+        op: "quantize_layer_to_scale".to_string(),
+        params: serde_json::json!({"strength": 1.0}),
+        scope: None,
+        project: Some(clean_json.clone()),
+    });
+    assert!(matches!(dry_run.status, ToolStatus::DryRunCompleted));
+    assert!(dry_run.dry_run);
+    assert!(
+        dry_run.summary.contains("nothing persisted"),
+        "dry-run states the no-mutation guarantee: {}",
+        dry_run.summary
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

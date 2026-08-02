@@ -4,14 +4,16 @@
 //! policy decisions, and next actions per the architecture spec §10.5.
 //!
 //! Tool categories from the architecture:
-//! - Governance tools: get_capabilities, get_contracts, get_policy_profile, check_budget
-//! - Project tools: create_project, generate_config_from_brief, validate_config, approve_config
-//! - Composition tools: plan_arrangement, create_pattern, write_pattern_notes, apply_motivic_variation
-//! - Patch tools: apply_patch, dry_run_patch, quantize_layer_to_scale, add_transition_package
-//! - Validation tools: run_validation, get_validation_report, suggest_fixes, compare_candidates
-//! - Debug tools: get_command_trace, get_snapshot_diff, get_candidate_diff,
-//!   isolate_layer, solo_segment, explain_metric (real logic in [`debug_ops`])
-//! - Escalation tools: get_failure_report, create_human_review_packet
+//! - Governance tools: `get_capabilities`, `get_contracts`, `get_policy_profile`, `check_budget`
+//! - Project tools: `create_project`, `generate_config_from_brief`, `validate_config`, `approve_config`,
+//!   `get_project_summary`, `get_onboarding_packet`
+//! - Composition tools: `plan_arrangement`, `create_pattern`, `write_pattern_notes`, `apply_motivic_variation`
+//! - Patch tools: `apply_patch`, `dry_run_patch`, `quantize_layer_to_scale`, `add_transition_package`
+//! - Validation tools: `run_validation`, `get_validation_report`, `get_root_causes`,
+//!   `get_metric_evidence`, `compare_candidates`, `suggest_fixes`
+//! - Debug tools: `get_command_trace`, `get_snapshot_diff`, `get_candidate_diff`,
+//!   `isolate_layer`, `solo_segment`, `explain_metric` (real logic in [`debug_ops`])
+//! - Escalation tools: `get_failure_report`, `create_human_review_packet`
 //!   (real §12.3 logic in [`debug_ops`])
 //! - Learning tools: get_lessons, record_lesson, get_repair_templates
 //!   (real logic against [`LessonStore`](scorestrata_storage::lesson_store::LessonStore))
@@ -288,6 +290,66 @@ pub fn apply_patch(params: &ApplyPatchParams) -> ToolReceipt {
             diagnostics: vec![],
         },
     }
+}
+
+/// Parameters for `dry_run_patch` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DryRunPatchParams {
+    /// Project ID to patch.
+    pub project_id: String,
+    /// Patch operation name.
+    pub op: String,
+    /// Patch parameters.
+    pub params: serde_json::Value,
+    /// Scope for the patch.
+    pub scope: Option<PatchScope>,
+    /// Serialized project to simulate the patch against.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Dry-run a patch (§5.3, §10.5) — simulate the mutation and report the
+/// expected score delta, events, and diagnostics without persisting anything.
+///
+/// Delegates to [`apply_patch`] with `dry_run` forced on; the underlying
+/// patch logic runs against a working clone so nothing is mutated.
+#[must_use]
+pub fn dry_run_patch(params: &DryRunPatchParams) -> ToolReceipt {
+    let mut receipt = apply_patch(&ApplyPatchParams {
+        project_id: params.project_id.clone(),
+        op: params.op.clone(),
+        params: params.params.clone(),
+        dry_run: true,
+        scope: params.scope.clone(),
+        project: params.project.clone(),
+    });
+    // `apply_patch` already sets DryRunCompleted + the no-mutation warning; we
+    // only refine the tool name and summary here. Two transparency rules:
+    //
+    // 1. Without a serialized project payload no effects can be computed, so
+    //    the summary must say so instead of claiming effects were reported.
+    // 2. A deserialization failure already carries an accurate summary + the
+    //    `dry_run` flag — do not append a misleading "requires payload"
+    //    warning (a payload *was* supplied; it just failed to parse).
+    receipt.tool = "dry_run_patch".to_string();
+    if matches!(receipt.status, ToolStatus::DryRunCompleted) {
+        let no_payload = receipt
+            .warnings
+            .iter()
+            .any(|w| w.contains("No project payload"));
+        receipt.summary = if no_payload {
+            format!(
+                "Dry-run of '{}' requested for project '{}' — no project payload, so no effects could be estimated (nothing persisted)",
+                params.op, params.project_id
+            )
+        } else {
+            format!(
+                "Dry-run of '{}' on project '{}' — mutation simulated, expected effects reported, nothing persisted",
+                params.op, params.project_id
+            )
+        };
+    }
+    receipt
 }
 
 // ── Composition Tools (§10.5) ───────────────────────────────────────
@@ -1883,6 +1945,40 @@ pub fn check_budget(params: &CheckBudgetParams) -> ToolReceipt {
     }
 }
 
+/// List all registered contract schemas (§3.2).
+///
+/// Returns the schema registry contents — every versioned, machine-readable
+/// contract (ProjectConfig, CommandReceipt, Diagnostic, etc.) that agents can
+/// rely on. No payload needed: the registry is a system resource.
+#[must_use]
+pub fn get_contracts() -> ToolReceipt {
+    let names = scorestrata_core::schema_registry::list_schema_names();
+    ToolReceipt {
+        tool: "get_contracts".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Contract registry: {} schema(s) — {}",
+            names.len(),
+            names.join(", ")
+        ),
+        score_delta: BTreeMap::from([(
+            "registry.schema_count".to_string(),
+            names.len().to_string(),
+        )]),
+        evidence_uris: vec!["system://contracts".to_string()],
+        focus_uris: vec![],
+        next_actions: vec!["get_capabilities".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 // ── Project Tools (§10.5) ─────────────────────────────────────────
 
 /// Parameters for `create_project` tool.
@@ -2053,6 +2149,141 @@ pub fn approve_config(params: &ApproveConfigParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `get_project_summary` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetProjectSummaryParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project (when provided, the summary is real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Get a high-level project summary (§13.1 L0 orientation).
+///
+/// With a serialized project payload, builds a real summary from the project
+/// entity — segment/layer counts, current status, suggested next actions.
+#[must_use]
+pub fn get_project_summary(params: &GetProjectSummaryParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        let stub = crate::resources::get_project_summary(&params.project_id);
+        return ToolReceipt {
+            tool: "get_project_summary".to_string(),
+            status: ToolStatus::Succeeded,
+            summary: format!(
+                "Project '{}' summary (stub — no project payload): state {}, {} segment(s), {} layer(s)",
+                params.project_id, stub.state, stub.segment_count, stub.layer_count
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![format!("project://{}/summary", params.project_id)],
+            focus_uris: vec![],
+            next_actions: stub.next_actions.clone(),
+            cost: ToolCost::default(),
+            warnings: vec!["No project payload — summary is a state-only stub".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("get_project_summary", "project", &e),
+        };
+    let summary = crate::resources::get_project_summary_from_project(&project);
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "summary.segments".to_string(),
+        summary.segment_count.to_string(),
+    );
+    score_delta.insert(
+        "summary.layers".to_string(),
+        summary.layer_count.to_string(),
+    );
+    score_delta.insert("summary.bars".to_string(), summary.total_bars.to_string());
+    score_delta.insert("summary.state".to_string(), summary.state.clone());
+    ToolReceipt {
+        tool: "get_project_summary".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Project '{}' ({}) — state {}, {} segment(s), {} layer(s), {} bar(s); next: {}",
+            params.project_id,
+            summary.name,
+            summary.state,
+            summary.segment_count,
+            summary.layer_count,
+            summary.total_bars,
+            summary.next_actions.first().map_or("none", String::as_str)
+        ),
+        score_delta,
+        evidence_uris: vec![format!("project://{}/summary", params.project_id)],
+        focus_uris: vec![],
+        next_actions: summary.next_actions,
+        cost: ToolCost {
+            cpu_ms: 4,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Get the agent onboarding packet (§10.2, §13.1 L0) — system map,
+/// capabilities, contracts, and policy guidance for becoming operational.
+#[must_use]
+pub fn get_onboarding_packet() -> ToolReceipt {
+    let caps = crate::capabilities::get_capabilities();
+    let schema_names = scorestrata_core::schema_registry::list_schema_names();
+    let policy = scorestrata_core::policy::PolicyProfile::default();
+    ToolReceipt {
+        tool: "get_onboarding_packet".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Onboarding: system '{}' v{}, {} feature(s), {} tool(s), {} contract(s), {} resource(s); policy: destructive={}, snapshot-before-patch={}, max-oos={}",
+            caps.system,
+            caps.version,
+            caps.features.len(),
+            caps.tools.len(),
+            schema_names.len(),
+            caps.resources.len(),
+            policy.allow_destructive_commands,
+            policy.require_snapshot_before_patch,
+            policy.max_out_of_scale_ratio
+        ),
+        score_delta: BTreeMap::from([
+            ("onboarding.tools".to_string(), caps.tools.len().to_string()),
+            (
+                "onboarding.contracts".to_string(),
+                schema_names.len().to_string(),
+            ),
+            (
+                "onboarding.resources".to_string(),
+                caps.resources.len().to_string(),
+            ),
+        ]),
+        evidence_uris: vec![
+            "system://capabilities".to_string(),
+            "system://contracts".to_string(),
+            "system://policy-profiles".to_string(),
+        ],
+        focus_uris: vec![],
+        next_actions: vec![
+            "get_contracts".to_string(),
+            "get_policy_profile".to_string(),
+            "check_budget".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 3,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 // ── Validation Tools (§10.5) ──────────────────────────────────────
 
 /// Parameters for `get_audit_summary` tool.
@@ -2114,6 +2345,415 @@ pub fn suggest_fixes(params: &SuggestFixesParams) -> ToolReceipt {
         focus_uris: vec![],
         next_actions: vec!["apply_patch".to_string()],
         cost: ToolCost::default(),
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `get_validation_report` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetValidationReportParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Validation level (1=config, 2=symbolic, 3=timeline, 4=audio, 5=brief).
+    #[serde(default = "default_validation_level")]
+    pub level: u8,
+    /// Serialized project (when provided, the report is real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+fn default_validation_level() -> u8 {
+    2
+}
+
+/// Get the latest validation report for a project (§10.5).
+///
+/// With a serialized project payload, runs the real Level-2 symbolic checks
+/// and returns the scorecard with per-metric values and hard-gate status.
+///
+/// Status answers "did the hard gates pass?" (`all_hard_gates_passed`).
+/// This differs from [`get_failure_report`], which answers "does the project
+/// still need repair?" — a warnings-only project can pass hard gates (report
+/// `Succeeded`) yet still need repair (`get_failure_report` `Failed`). Use
+/// `get_failure_report` when deciding whether to escalate or patch.
+#[must_use]
+pub fn get_validation_report(params: &GetValidationReportParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "get_validation_report".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Validation report requested for project '{}' but no serialized project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+            next_actions: vec!["run_validation".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized project payload to produce a real report".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return deserialize_error_receipt("get_validation_report", "project", &e);
+            }
+        };
+    let report = crate::debug_ops::project_report(&project);
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "report.overall_score".to_string(),
+        format!("{:.3}", report.scorecard.overall_score),
+    );
+    score_delta.insert(
+        "report.metrics".to_string(),
+        report.scorecard.metrics.len().to_string(),
+    );
+    score_delta.insert(
+        "report.hard_failures".to_string(),
+        report.scorecard.hard_failures.to_string(),
+    );
+    score_delta.insert(
+        "report.warnings".to_string(),
+        report.scorecard.warnings.to_string(),
+    );
+    ToolReceipt {
+        tool: "get_validation_report".to_string(),
+        status: if report.all_hard_gates_passed {
+            ToolStatus::Succeeded
+        } else {
+            ToolStatus::Failed
+        },
+        summary: format!(
+            "Validation report for project '{}' (level {}): overall {:.2}, {} metric(s), {} hard failure(s), {} warning(s)",
+            params.project_id,
+            params.level,
+            report.scorecard.overall_score,
+            report.scorecard.metrics.len(),
+            report.scorecard.hard_failures,
+            report.scorecard.warnings
+        ),
+        score_delta,
+        evidence_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+        focus_uris: vec![],
+        next_actions: if report.all_hard_gates_passed {
+            vec!["get_audit_summary".to_string()]
+        } else {
+            vec![
+                "explain_metric".to_string(),
+                "get_root_causes".to_string(),
+                "suggest_fixes".to_string(),
+            ]
+        },
+        cost: ToolCost {
+            cpu_ms: 8,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: report.diagnostics.clone(),
+    }
+}
+
+/// Parameters for `get_root_causes` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetRootCausesParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Metric to attribute root causes for (e.g. `harmony.scale_compliance`).
+    pub metric_name: String,
+    /// Serialized project (when provided, attribution is real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Get root-cause attribution for a metric (§11.4).
+///
+/// With a serialized project payload, runs the real diagnostic attribution
+/// from [`compute_metric_explanation`](crate::debug_ops::compute_metric_explanation)
+/// and returns the attributed causes with evidence URIs.
+#[must_use]
+pub fn get_root_causes(params: &GetRootCausesParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "get_root_causes".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Root-cause attribution for '{}' requested for project '{}' but no serialized project payload provided",
+                params.metric_name, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+            next_actions: vec!["run_validation".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized project payload to attribute root causes".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("get_root_causes", "project", &e),
+        };
+    // The scorecard only contains metrics that produced diagnostics, so a
+    // metric absent from it is healthy — not an error. Treat absence as
+    // "value 1.0, no root causes" so the tool answers the same question
+    // ("what's wrong with this metric?") coherently for healthy projects.
+    let explanation = crate::debug_ops::compute_metric_explanation(&project, &params.metric_name)
+        .unwrap_or(scorestrata_core::debug::MetricExplanation {
+            project_id: project.id.to_string(),
+            metric_name: params.metric_name.clone(),
+            current_value: 1.0,
+            target_value: Some(1.0),
+            root_causes: vec![],
+            evidence_uris: vec![],
+            suggested_actions: vec![],
+            confidence: 0.5,
+        });
+    let cause_list: Vec<String> = explanation
+        .root_causes
+        .iter()
+        .map(|c| format!("{} ({})", c.cause, c.severity))
+        .collect();
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "metric.value".to_string(),
+        format!("{:.3}", explanation.current_value),
+    );
+    score_delta.insert(
+        "metric.root_causes".to_string(),
+        explanation.root_causes.len().to_string(),
+    );
+    ToolReceipt {
+        tool: "get_root_causes".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Root causes for '{}' (value {:.3}): {}",
+            params.metric_name,
+            explanation.current_value,
+            if cause_list.is_empty() {
+                "none — metric healthy".to_string()
+            } else {
+                cause_list.join("; ")
+            }
+        ),
+        score_delta,
+        evidence_uris: explanation.evidence_uris.clone(),
+        focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+        next_actions: explanation.suggested_actions.clone(),
+        cost: ToolCost {
+            cpu_ms: 6,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `get_metric_evidence` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetMetricEvidenceParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Metric to fetch evidence for.
+    pub metric_name: String,
+    /// Serialized evidence warehouse (when provided, evidence is real).
+    #[serde(default)]
+    pub warehouse: Option<serde_json::Value>,
+}
+
+/// Get evidence for a metric (§9.5, §15.1).
+///
+/// With a serialized
+/// [`EvidenceWarehouse`](scorestrata_storage::evidence::EvidenceWarehouse)
+/// payload, returns the recorded metric samples with diagnostics and lineage.
+#[must_use]
+pub fn get_metric_evidence(params: &GetMetricEvidenceParams) -> ToolReceipt {
+    let Some(warehouse_json) = &params.warehouse else {
+        return ToolReceipt {
+            tool: "get_metric_evidence".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Evidence for '{}' requested for project '{}' but no serialized evidence warehouse provided",
+                params.metric_name, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![format!("project://{}/evidence/latest", params.project_id)],
+            next_actions: vec!["run_validation".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized evidence warehouse payload to return evidence".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let warehouse = match serde_json::from_value::<scorestrata_storage::evidence::EvidenceWarehouse>(
+        warehouse_json.clone(),
+    ) {
+        Ok(w) => w,
+        Err(e) => return deserialize_error_receipt("get_metric_evidence", "warehouse", &e),
+    };
+    let entries = warehouse.get_evidence_for_metric(&params.metric_name);
+    let latest = entries.last().copied();
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("evidence.entries".to_string(), entries.len().to_string());
+    if let Some(entry) = latest {
+        score_delta.insert(
+            "evidence.latest_value".to_string(),
+            format!("{:.3}", entry.metric.value),
+        );
+    }
+    ToolReceipt {
+        tool: "get_metric_evidence".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Evidence for '{}': {} sample(s){}",
+            params.metric_name,
+            entries.len(),
+            latest.map_or_else(
+                || String::new(),
+                |e| format!(
+                    ", latest value {:.3} (level {} validation, confidence {:.2})",
+                    e.metric.value, e.validation_level, e.metric.confidence
+                )
+            )
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/evidence/{}",
+            params.project_id, params.metric_name
+        )],
+        focus_uris: vec![format!("project://{}/evidence/latest", params.project_id)],
+        next_actions: vec!["explain_metric".to_string(), "get_root_causes".to_string()],
+        cost: ToolCost {
+            cpu_ms: 3,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `compare_candidates` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompareCandidatesParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Candidate A ID (label).
+    pub candidate_a: String,
+    /// Candidate B ID (label).
+    pub candidate_b: String,
+    /// Serialized project A.
+    #[serde(default)]
+    pub project_a: Option<serde_json::Value>,
+    /// Serialized project B.
+    #[serde(default)]
+    pub project_b: Option<serde_json::Value>,
+}
+
+/// Compare two candidates (§4.1 tournament) with a multi-objective diff.
+///
+/// With both serialized project payloads, runs the real per-metric comparison
+/// and reports the winner (metric-majority with overall-score tiebreak).
+#[must_use]
+pub fn compare_candidates(params: &CompareCandidatesParams) -> ToolReceipt {
+    let (Some(a_json), Some(b_json)) = (&params.project_a, &params.project_b) else {
+        return ToolReceipt {
+            tool: "compare_candidates".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Candidate comparison requested for project '{}' but both serialized candidate payloads are required",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["create_pattern".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply both serialized candidate project payloads to compare".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let candidate_a =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(a_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("compare_candidates", "candidate_a", &e),
+        };
+    let candidate_b =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(b_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("compare_candidates", "candidate_b", &e),
+        };
+    let diff = crate::debug_ops::compute_candidate_diff(&candidate_a, &candidate_b);
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "diff.metrics_compared".to_string(),
+        diff.score_comparison.len().to_string(),
+    );
+    if let Some(winner) = &diff.winner {
+        score_delta.insert("diff.winner".to_string(), format!("{:?}", winner));
+    }
+    let winner_desc = diff.winner.map_or_else(
+        || "tie".to_string(),
+        |w| match w {
+            scorestrata_core::debug::CandidateWinner::A => "Candidate A".to_string(),
+            scorestrata_core::debug::CandidateWinner::B => "Candidate B".to_string(),
+            scorestrata_core::debug::CandidateWinner::Tie => "tie".to_string(),
+        },
+    );
+    ToolReceipt {
+        tool: "compare_candidates".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Compared '{}' vs '{}': {} ({}{})",
+            params.candidate_a,
+            params.candidate_b,
+            winner_desc,
+            diff.score_comparison.len(),
+            if diff.score_comparison.len() == 1 {
+                " metric"
+            } else {
+                " metrics"
+            }
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/diff/candidates/{}/{}",
+            params.project_id, params.candidate_a, params.candidate_b
+        )],
+        focus_uris: vec![],
+        next_actions: if diff.winner.is_some() {
+            vec!["apply_patch".to_string(), "record_lesson".to_string()]
+        } else {
+            vec!["create_pattern".to_string()]
+        },
+        cost: ToolCost {
+            cpu_ms: 6,
+            tool_calls: 1,
+            ..Default::default()
+        },
         warnings: vec![],
         dry_run: false,
         diagnostics: vec![],
@@ -2638,6 +3278,55 @@ mod tests {
         let receipt = apply_patch(&params);
         assert!(receipt.dry_run);
         assert!(matches!(receipt.status, ToolStatus::DryRunCompleted));
+    }
+
+    #[test]
+    fn dry_run_patch_reports_intent_without_project() {
+        let params = DryRunPatchParams {
+            project_id: "proj_123".to_string(),
+            op: "quantize_layer_to_scale".to_string(),
+            params: serde_json::json!({"strength": 1.0}),
+            scope: None,
+            project: None,
+        };
+        let receipt = dry_run_patch(&params);
+        // Stub-transparency: without a project payload we cannot compute the
+        // real preview, so the receipt must say so rather than fabricate one.
+        assert!(matches!(receipt.status, ToolStatus::DryRunCompleted));
+        assert!(receipt.summary.contains("quantize_layer_to_scale"));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("No project payload")),
+            "missing no-project-payload warning: {:#?}",
+            receipt.warnings
+        );
+    }
+
+    #[test]
+    fn dry_run_patch_reports_simulated_effects_with_project() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = DryRunPatchParams {
+            project_id: "proj_1".to_string(),
+            op: "quantize_layer_to_scale".to_string(),
+            params: serde_json::json!({"strength": 1.0}),
+            scope: None,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = dry_run_patch(&params);
+        assert!(matches!(receipt.status, ToolStatus::DryRunCompleted));
+        assert!(receipt.dry_run);
+        assert!(
+            receipt.summary.contains("nothing persisted"),
+            "summary must state no-mutation semantics: {}",
+            receipt.summary
+        );
+        assert!(
+            receipt.warnings.iter().any(|w| w.contains("not persisted")),
+            "dry-run warning must be present: {:#?}",
+            receipt.warnings
+        );
     }
 
     #[test]
@@ -3254,6 +3943,35 @@ mod tests {
         assert!(receipt.evidence_uris[0].contains("budget"));
     }
 
+    #[test]
+    fn get_contracts_lists_schema_registry() {
+        let receipt = get_contracts();
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("Contract registry"));
+        assert!(receipt.score_delta.contains_key("registry.schema_count"));
+        assert!(
+            receipt
+                .evidence_uris
+                .contains(&"system://contracts".to_string())
+        );
+    }
+
+    #[test]
+    fn get_onboarding_packet_reports_capabilities() {
+        let receipt = get_onboarding_packet();
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("Onboarding"));
+        assert!(receipt.score_delta.contains_key("onboarding.tools"));
+        assert!(receipt.score_delta.contains_key("onboarding.contracts"));
+        assert!(
+            receipt
+                .evidence_uris
+                .contains(&"system://capabilities".to_string()),
+            "onboarding cites capabilities, got {:?}",
+            receipt.evidence_uris
+        );
+    }
+
     // ── Project tools tests ─────────────────────────────────────────
 
     #[test]
@@ -3267,6 +3985,39 @@ mod tests {
         assert!(matches!(receipt.status, ToolStatus::Succeeded));
         assert!(receipt.summary.contains("Dark Techno Track"));
         assert!(!receipt.next_actions.is_empty());
+    }
+
+    #[test]
+    fn get_project_summary_reports_real_counts_with_payload() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = GetProjectSummaryParams {
+            project_id: project.id.to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = get_project_summary(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "summary should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("segment(s)"));
+        assert!(receipt.score_delta.contains_key("summary.segments"));
+        assert!(receipt.score_delta.contains_key("summary.layers"));
+        assert!(
+            receipt.evidence_uris[0].contains("/summary"),
+            "summary cites project summary uri"
+        );
+    }
+
+    #[test]
+    fn get_project_summary_without_payload_is_transparent_stub() {
+        let params = GetProjectSummaryParams {
+            project_id: "proj_1".to_string(),
+            project: None,
+        };
+        let receipt = get_project_summary(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("stub"));
+        assert!(!receipt.warnings.is_empty());
     }
 
     #[test]
@@ -3351,6 +4102,153 @@ mod tests {
         let receipt = suggest_fixes(&params);
         assert!(matches!(receipt.status, ToolStatus::Succeeded));
         assert!(receipt.next_actions.contains(&"apply_patch".to_string()));
+    }
+
+    #[test]
+    fn get_validation_report_returns_real_scorecard_with_project() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = GetValidationReportParams {
+            project_id: project.id.to_string(),
+            level: 2,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = get_validation_report(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded)
+                || matches!(receipt.status, ToolStatus::Failed),
+            "report returns real hard-gate status, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("overall"));
+        assert!(receipt.score_delta.contains_key("report.overall_score"));
+        assert!(receipt.score_delta.contains_key("report.metrics"));
+    }
+
+    #[test]
+    fn get_validation_report_requires_payload() {
+        let params = GetValidationReportParams {
+            project_id: "proj_1".to_string(),
+            level: 2,
+            project: None,
+        };
+        let receipt = get_validation_report(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("no serialized project payload"));
+    }
+
+    #[test]
+    fn get_root_causes_attributes_real_causes_with_project() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        for pattern in &mut project.patterns {
+            for note in &mut pattern.notes {
+                note.pitch = scorestrata_core::domain::MidiNote::new(61);
+            }
+        }
+        let params = GetRootCausesParams {
+            project_id: project.id.to_string(),
+            metric_name: "harmony.scale_compliance".to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = get_root_causes(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("Root causes"));
+        assert!(receipt.score_delta.contains_key("metric.root_causes"));
+    }
+
+    #[test]
+    fn get_root_causes_healthy_metric_reports_none() {
+        // The scorecard only contains metrics that produced diagnostics, so a
+        // metric absent from it is healthy — the tool must answer Succeeded
+        // with "none" rather than fail with "not measured".
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = GetRootCausesParams {
+            project_id: project.id.to_string(),
+            metric_name: "harmony.scale_compliance".to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = get_root_causes(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            receipt.summary.contains("none"),
+            "healthy metric reports no root causes: {}",
+            receipt.summary
+        );
+        assert_eq!(
+            receipt.score_delta.get("metric.value").map(String::as_str),
+            Some("1.000")
+        );
+    }
+
+    #[test]
+    fn get_metric_evidence_returns_recorded_samples() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let report = crate::debug_ops::project_report(&project);
+        let mut warehouse = scorestrata_storage::evidence::EvidenceWarehouse::new();
+        warehouse.record_scorecard(&report.scorecard, 2, None, &report.diagnostics);
+        let params = GetMetricEvidenceParams {
+            project_id: project.id.to_string(),
+            metric_name: "harmony.scale_compliance".to_string(),
+            warehouse: Some(serde_json::to_value(&warehouse).unwrap_or_default()),
+        };
+        let receipt = get_metric_evidence(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("sample(s)"));
+        assert!(receipt.score_delta.contains_key("evidence.entries"));
+    }
+
+    #[test]
+    fn get_metric_evidence_requires_warehouse() {
+        let params = GetMetricEvidenceParams {
+            project_id: "proj_1".to_string(),
+            metric_name: "harmony.scale_compliance".to_string(),
+            warehouse: None,
+        };
+        let receipt = get_metric_evidence(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("no serialized evidence warehouse"));
+    }
+
+    #[test]
+    fn compare_candidates_selects_winner() {
+        let project_a = scorestrata_testkit::melodic_techno_project();
+        let mut project_b = project_a.clone();
+        for pattern in &mut project_b.patterns {
+            for note in &mut pattern.notes {
+                note.pitch = scorestrata_core::domain::MidiNote::new(61);
+            }
+        }
+        let params = CompareCandidatesParams {
+            project_id: project_a.id.to_string(),
+            candidate_a: "candidate_a".to_string(),
+            candidate_b: "candidate_b".to_string(),
+            project_a: Some(serde_json::to_value(&project_a).unwrap_or_default()),
+            project_b: Some(serde_json::to_value(&project_b).unwrap_or_default()),
+        };
+        let receipt = compare_candidates(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "comparison should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("Compared"));
+        assert!(receipt.score_delta.contains_key("diff.metrics_compared"));
+        assert!(receipt.score_delta.contains_key("diff.winner"));
+    }
+
+    #[test]
+    fn compare_candidates_requires_both_payloads() {
+        let params = CompareCandidatesParams {
+            project_id: "proj_1".to_string(),
+            candidate_a: "a".to_string(),
+            candidate_b: "b".to_string(),
+            project_a: None,
+            project_b: None,
+        };
+        let receipt = compare_candidates(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .summary
+                .contains("both serialized candidate payloads")
+        );
     }
 
     // ── Render tools tests ──────────────────────────────────────────

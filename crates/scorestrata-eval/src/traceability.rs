@@ -428,6 +428,35 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-ORIENTATION-DRILLDOWN".to_string(),
+        title: "L0 orientation and validation drill-down tools".to_string(),
+        phase: "1".to_string(),
+        tasks: vec!["ORIENT-001".to_string()],
+        code: vec![
+            "scorestrata_core::schema_registry".to_string(),
+            "scorestrata_core::policy".to_string(),
+            "scorestrata_mcp::resources".to_string(),
+            "scorestrata_mcp::debug_ops".to_string(),
+            "scorestrata_mcp::tools".to_string(),
+            "scorestrata_storage::evidence".to_string(),
+        ],
+        tests: vec!["tools::tests".to_string(), "mvas_simulation".to_string()],
+        mcp_tools: vec![
+            "get_contracts".to_string(),
+            "get_onboarding_packet".to_string(),
+            "get_project_summary".to_string(),
+            "get_validation_report".to_string(),
+            "get_root_causes".to_string(),
+            "get_metric_evidence".to_string(),
+            "compare_candidates".to_string(),
+            "dry_run_patch".to_string(),
+        ],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §10.5, §13.1".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-CLI-BUNDLE".to_string(),
         title: "CLI wired to real storage and pipeline".to_string(),
         phase: "0".to_string(),
