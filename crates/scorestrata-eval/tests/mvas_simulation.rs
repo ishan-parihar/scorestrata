@@ -1168,6 +1168,181 @@ fn mvas_step_18_render_jobs_and_engineering_plane() {
     assert!(calibration.summary.contains("-10.0 LUFS"));
 }
 
+#[test]
+fn mvas_step_19_composition_and_patch_mutations() {
+    // §10.5/§11 composition + patch tools: notes and steps are written,
+    // motivic variation applied, patterns placed, instruments retargeted,
+    // goals/energy set, then the mix/patch tools operate on the content.
+    use scorestrata_mcp::tools::{
+        AddDrumFillParams, ApplyMotivicVariationParams, HarmonizeMelodyParams,
+        IncreaseSegmentDensityParams, NormalizeLoudnessTargetParams, PlacePatternInSegmentParams,
+        ReduceMaskingParams, SetEnergyCurveParams, SetLayerInstrumentParams, SetSegmentGoalsParams,
+        ToolStatus, WritePatternNotesParams, WritePatternStepsParams,
+    };
+
+    // Planned patterns are empty, so populate content the way the agent
+    // would — write notes into the lead pattern first.
+    let mut project = scorestrata_testkit::melodic_techno_project();
+    let lead_pattern_id = project.patterns[0].id;
+    if let Some(pattern) = project
+        .patterns
+        .iter_mut()
+        .find(|p| p.id == lead_pattern_id)
+    {
+        // Two spectrally/temporally overlapping notes so de-masking has
+        // real content to act on (planned patterns are otherwise empty).
+        pattern.notes.extend([
+            scorestrata_core::domain::Note {
+                id: scorestrata_core::ids::NoteId::new(),
+                pitch: scorestrata_core::domain::MidiNote::new(60),
+                start: scorestrata_core::domain::Tick::new(0),
+                duration: scorestrata_core::domain::Duration(480),
+                velocity: scorestrata_core::domain::Velocity::new(110),
+                tied: false,
+            },
+            scorestrata_core::domain::Note {
+                id: scorestrata_core::ids::NoteId::new(),
+                pitch: scorestrata_core::domain::MidiNote::new(64),
+                start: scorestrata_core::domain::Tick::new(24),
+                duration: scorestrata_core::domain::Duration(480),
+                velocity: scorestrata_core::domain::Velocity::new(110),
+                tied: false,
+            },
+        ]);
+    }
+    let project_json = serde_json::to_value(&project).expect("project serializes");
+    let project_id = project.id.to_string();
+    let segment_id = project.arrangement.segments[0].id.to_string();
+    let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
+    let pattern_id = project.patterns[0].id.to_string();
+
+    // ── 19a. Composition: notes + steps written, variation applied ──
+    let notes = scorestrata_mcp::tools::write_pattern_notes(&WritePatternNotesParams {
+        project_id: project_id.clone(),
+        pattern_id: pattern_id.clone(),
+        notes: vec![scorestrata_mcp::tools::NoteSpec {
+            pitch: 62,
+            start: 480,
+            duration: 480,
+            velocity: 90,
+        }],
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(notes.status, ToolStatus::Succeeded));
+
+    let steps = scorestrata_mcp::tools::write_pattern_steps(&WritePatternStepsParams {
+        project_id: project_id.clone(),
+        pattern_id: pattern_id.clone(),
+        steps: vec![scorestrata_mcp::tools::StepSpec {
+            index: 0,
+            active: true,
+            velocity: 100,
+        }],
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(steps.status, ToolStatus::Succeeded));
+
+    let varied = scorestrata_mcp::tools::apply_motivic_variation(&ApplyMotivicVariationParams {
+        project_id: project_id.clone(),
+        pattern_id: pattern_id.clone(),
+        variation: "retrograde".to_string(),
+        semitones: 0,
+        project: Some(project_json.clone()),
+    });
+    assert!(
+        matches!(varied.status, ToolStatus::Succeeded),
+        "motivic variation should succeed, got {:#?}",
+        varied
+    );
+
+    // ── 19b. Arrangement: place pattern, retarget instrument ─────────
+    let placed = scorestrata_mcp::tools::place_pattern_in_segment(&PlacePatternInSegmentParams {
+        project_id: project_id.clone(),
+        segment_id: segment_id.clone(),
+        layer_id: layer_id.clone(),
+        pattern_id: pattern_id.clone(),
+        start_tick: 0,
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(placed.status, ToolStatus::Succeeded));
+
+    let retargeted = scorestrata_mcp::tools::set_layer_instrument(&SetLayerInstrumentParams {
+        project_id: project_id.clone(),
+        segment_id: segment_id.clone(),
+        layer_id: layer_id.clone(),
+        instrument: "supersaw".to_string(),
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(retargeted.status, ToolStatus::Succeeded));
+    assert!(retargeted.score_delta.contains_key("layer.instrument"));
+
+    // ── 19c. Goals + energy curve ───────────────────────────────────
+    let goals = scorestrata_mcp::tools::set_segment_goals(&SetSegmentGoalsParams {
+        project_id: project_id.clone(),
+        segment_id: segment_id.clone(),
+        target_energy: 0.8,
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(goals.status, ToolStatus::Succeeded));
+
+    let curve = scorestrata_mcp::tools::set_energy_curve(&SetEnergyCurveParams {
+        project_id: project_id.clone(),
+        curve: vec![scorestrata_mcp::tools::EnergyPointSpec {
+            segment_id: segment_id.clone(),
+            target_energy: 0.9,
+        }],
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(curve.status, ToolStatus::Succeeded));
+
+    // ── 19d. Patch ops: harmonize, drum fill, density, de-mask, loudness ─
+    let harmonized = scorestrata_mcp::tools::harmonize_melody(&HarmonizeMelodyParams {
+        project_id: project_id.clone(),
+        segment_id: segment_id.clone(),
+        layer_id: layer_id.clone(),
+        interval_degrees: 3,
+        project: Some(project_json.clone()),
+    });
+    assert!(
+        matches!(harmonized.status, ToolStatus::Succeeded),
+        "harmonize should succeed on populated layer, got {:#?}",
+        harmonized
+    );
+
+    let fill = scorestrata_mcp::tools::add_drum_fill(&AddDrumFillParams {
+        project_id: project_id.clone(),
+        segment_id: segment_id.clone(),
+        layer_id: layer_id.clone(),
+        steps: 4,
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(fill.status, ToolStatus::Succeeded));
+
+    let dense = scorestrata_mcp::tools::increase_segment_density(&IncreaseSegmentDensityParams {
+        project_id: project_id.clone(),
+        segment_id: segment_id.clone(),
+        factor: 2,
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(dense.status, ToolStatus::Succeeded));
+
+    let demasked = scorestrata_mcp::tools::reduce_masking(&ReduceMaskingParams {
+        project_id: project_id.clone(),
+        segment_id: segment_id.clone(),
+        amount: 0.15,
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(demasked.status, ToolStatus::Succeeded));
+
+    let loud = scorestrata_mcp::tools::normalize_loudness_target(&NormalizeLoudnessTargetParams {
+        project_id: project_id.clone(),
+        target_lufs: Some(-10.0),
+        project: Some(project_json.clone()),
+    });
+    assert!(matches!(loud.status, ToolStatus::Succeeded));
+    assert!(loud.summary.contains("LUFS"));
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

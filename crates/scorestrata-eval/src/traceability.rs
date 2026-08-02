@@ -513,6 +513,32 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-COMPOSITION-PATCH".to_string(),
+        title: "Composition and patch mutation tools".to_string(),
+        phase: "5".to_string(),
+        tasks: vec!["COMP-003".to_string()],
+        code: vec!["scorestrata_mcp::tools".to_string()],
+        tests: vec!["tools::tests".to_string(), "mvas_simulation".to_string()],
+        mcp_tools: vec![
+            "write_pattern_notes".to_string(),
+            "write_pattern_steps".to_string(),
+            "apply_motivic_variation".to_string(),
+            "place_pattern_in_segment".to_string(),
+            "set_layer_instrument".to_string(),
+            "set_segment_goals".to_string(),
+            "set_energy_curve".to_string(),
+            "harmonize_melody".to_string(),
+            "add_drum_fill".to_string(),
+            "increase_segment_density".to_string(),
+            "reduce_masking".to_string(),
+            "normalize_loudness_target".to_string(),
+        ],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §10.5, §11".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-CLI-BUNDLE".to_string(),
         title: "CLI wired to real storage and pipeline".to_string(),
         phase: "0".to_string(),

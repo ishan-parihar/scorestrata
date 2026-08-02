@@ -7,8 +7,12 @@
 //! - Governance tools: `get_capabilities`, `get_contracts`, `get_policy_profile`, `check_budget`
 //! - Project tools: `create_project`, `generate_config_from_brief`, `validate_config`, `approve_config`,
 //!   `get_project_summary`, `get_onboarding_packet`
-//! - Composition tools: `plan_arrangement`, `create_pattern`, `write_pattern_notes`, `apply_motivic_variation`
-//! - Patch tools: `apply_patch`, `dry_run_patch`, `quantize_layer_to_scale`, `add_transition_package`
+//! - Composition tools: `plan_arrangement`, `create_pattern`, `write_pattern_notes`,
+//!   `write_pattern_steps`, `apply_motivic_variation`, `place_pattern_in_segment`,
+//!   `set_layer_instrument`, `set_segment_goals`, `set_energy_curve`
+//! - Patch tools: `apply_patch`, `dry_run_patch`, `quantize_layer_to_scale`, `add_transition_package`,
+//!   `harmonize_melody`, `add_drum_fill`, `increase_segment_density`, `reduce_masking`,
+//!   `normalize_loudness_target`
 //! - Validation tools: `run_validation`, `get_validation_report`, `get_root_causes`,
 //!   `get_metric_evidence`, `compare_candidates`, `suggest_fixes`
 //! - Debug tools: `get_command_trace`, `get_snapshot_diff`, `get_candidate_diff`,
@@ -353,6 +357,716 @@ pub fn dry_run_patch(params: &DryRunPatchParams) -> ToolReceipt {
     receipt
 }
 
+/// Parameters for `harmonize_melody` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HarmonizeMelodyParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID containing the melody layer.
+    pub segment_id: String,
+    /// Layer ID of the melody to harmonize.
+    pub layer_id: String,
+    /// Interval to add (in scale degrees; 3 = third).
+    #[serde(default = "default_third")]
+    pub interval_degrees: u32,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+fn default_third() -> u32 {
+    3
+}
+
+/// Add a harmony voice a third below the melody, in-key (§10.5, §11).
+///
+/// For every note in the target layer's patterns, appends a harmony note
+/// pitched an interval below, snapped into the project scale when possible.
+#[must_use]
+pub fn harmonize_melody(params: &HarmonizeMelodyParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "harmonize_melody".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot harmonize layer '{}': no project payload provided",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("harmonize_melody", "project", &e),
+        };
+    let scale = scorestrata_theory::key::Key::parse(&project.config.key).map(|k| k.to_scale());
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "harmonize_melody".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(layer) = segment
+        .layers
+        .iter_mut()
+        .find(|l| l.id.to_string() == params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "harmonize_melody".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in segment '{}'",
+                params.layer_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown layer ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let pattern_ids: Vec<_> = layer
+        .pattern_instances
+        .iter()
+        .map(|pi| pi.pattern_id)
+        .collect();
+    let mut harmony_notes = 0usize;
+    for pattern in &mut project.patterns {
+        if !pattern_ids.contains(&pattern.id) {
+            continue;
+        }
+        let original: Vec<scorestrata_core::domain::Note> = pattern.notes.clone();
+        for note in &original {
+            let base = i32::from(note.pitch.0);
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "Clamped to 0..=127 before casting to u8"
+            )] // Clamp the interval to a sane range so pathological values
+            // (e.g. > i32::MAX) degrade honestly instead of silently
+            // substituting a magic default.
+            let interval = i32::try_from(params.interval_degrees)
+                .unwrap_or(i32::MAX)
+                .clamp(1, 24);
+            let below = (base - interval).clamp(0, 127) as u8;
+            let harmony_pitch = match &scale {
+                Some(scale) => scale.quantize(&scorestrata_core::domain::MidiNote::new(below)),
+                None => scorestrata_core::domain::MidiNote::new(below),
+            };
+            pattern.notes.push(scorestrata_core::domain::Note {
+                id: scorestrata_core::ids::NoteId::new(),
+                pitch: harmony_pitch,
+                start: note.start,
+                duration: note.duration,
+                velocity: scorestrata_core::domain::Velocity::new(
+                    note.velocity.0.saturating_sub(10),
+                ),
+                tied: false,
+            });
+            harmony_notes += 1;
+        }
+    }
+    if pattern_ids.is_empty() {
+        return ToolReceipt {
+            tool: "harmonize_melody".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' references no patterns — nothing to harmonize",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["No pattern instances on layer".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    if harmony_notes == 0 {
+        return ToolReceipt {
+            tool: "harmonize_melody".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' references patterns with no notes — nothing to harmonize",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Referenced patterns contain no notes".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("harmony.notes_added".to_string(), harmony_notes.to_string());
+    ToolReceipt {
+        tool: "harmonize_melody".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Added {harmony_notes} harmony note(s) below layer '{}' (interval: {} degrees, in-key: {})",
+            params.layer_id,
+            params.interval_degrees,
+            scale.is_some()
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers/{}",
+            params.project_id, params.segment_id, params.layer_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 4,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `add_drum_fill` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddDrumFillParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID containing the drum layer.
+    pub segment_id: String,
+    /// Layer ID of the drum layer.
+    pub layer_id: String,
+    /// Number of fill steps to add.
+    #[serde(default = "default_fill_steps")]
+    pub steps: u32,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+fn default_fill_steps() -> u32 {
+    4
+}
+
+/// Add a drum fill to a layer's pattern step sequencer (§10.5, §11).
+#[must_use]
+pub fn add_drum_fill(params: &AddDrumFillParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "add_drum_fill".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot add drum fill to layer '{}': no project payload provided",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("add_drum_fill", "project", &e),
+        };
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "add_drum_fill".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(layer) = segment
+        .layers
+        .iter_mut()
+        .find(|l| l.id.to_string() == params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "add_drum_fill".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in segment '{}'",
+                params.layer_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown layer ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let pattern_ids: Vec<_> = layer
+        .pattern_instances
+        .iter()
+        .map(|pi| pi.pattern_id)
+        .collect();
+    let mut steps_added = 0usize;
+    for pattern in &mut project.patterns {
+        if !pattern_ids.contains(&pattern.id) {
+            continue;
+        }
+        let base_index = pattern.steps.len() as u32;
+        for i in 0..params.steps {
+            pattern.steps.push(scorestrata_core::domain::Step {
+                id: scorestrata_core::ids::StepId::new(),
+                index: base_index + i,
+                active: i % 2 == 0,
+                velocity: scorestrata_core::domain::Velocity::new(120),
+            });
+            steps_added += 1;
+        }
+    }
+    if steps_added == 0 {
+        return ToolReceipt {
+            tool: "add_drum_fill".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' references no patterns — nothing to fill",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["No pattern instances on layer".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("drum.steps_added".to_string(), steps_added.to_string());
+    ToolReceipt {
+        tool: "add_drum_fill".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Added {steps_added} fill step(s) to drum layer '{}'",
+            params.layer_id
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers/{}/steps",
+            params.project_id, params.segment_id, params.layer_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `increase_segment_density` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncreaseSegmentDensityParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID to densify.
+    pub segment_id: String,
+    /// Density factor (1 = no change, 2 = double note count).
+    #[serde(default = "default_density_factor")]
+    pub factor: u32,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+fn default_density_factor() -> u32 {
+    2
+}
+
+/// Increase a segment's note density by doubling notes with a swing offset (§10.5, §11).
+#[must_use]
+pub fn increase_segment_density(params: &IncreaseSegmentDensityParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "increase_segment_density".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot densify segment '{}': no project payload provided",
+                params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("increase_segment_density", "project", &e),
+        };
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "increase_segment_density".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let pattern_ids: Vec<_> = segment
+        .layers
+        .iter()
+        .flat_map(|l| l.pattern_instances.iter().map(|pi| pi.pattern_id))
+        .collect();
+    let extra = params.factor.saturating_sub(1).max(1);
+    let mut notes_added = 0usize;
+    for pattern in &mut project.patterns {
+        if !pattern_ids.contains(&pattern.id) {
+            continue;
+        }
+        let original: Vec<scorestrata_core::domain::Note> = pattern.notes.clone();
+        for note in &original {
+            for i in 1..=extra {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "Velocity reduction stays in u8 range (5 * small i)"
+                )]
+                let velocity_cut = (5 * i) as u8;
+                pattern.notes.push(scorestrata_core::domain::Note {
+                    id: scorestrata_core::ids::NoteId::new(),
+                    pitch: note.pitch,
+                    start: scorestrata_core::domain::Tick::new(
+                        note.start
+                            .0
+                            .saturating_add(note.duration.0 / u64::from(i + 1)),
+                    ),
+                    duration: note.duration,
+                    velocity: scorestrata_core::domain::Velocity::new(
+                        note.velocity.0.saturating_sub(velocity_cut),
+                    ),
+                    tied: false,
+                });
+                notes_added += 1;
+            }
+        }
+    }
+    if pattern_ids.is_empty() {
+        return ToolReceipt {
+            tool: "increase_segment_density".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Segment '{}' references no patterns — nothing to densify",
+                params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["No pattern instances in segment".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    if notes_added == 0 {
+        return ToolReceipt {
+            tool: "increase_segment_density".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Segment '{}' references patterns with no notes — nothing to densify",
+                params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Referenced patterns contain no notes".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("segment.notes_added".to_string(), notes_added.to_string());
+    ToolReceipt {
+        tool: "increase_segment_density".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Increased density of segment '{}': {notes_added} note(s) added (factor {})",
+            params.segment_id, params.factor
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}",
+            params.project_id, params.segment_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 4,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `reduce_masking` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReduceMaskingParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID to de-mask.
+    pub segment_id: String,
+    /// Velocity reduction applied to overlapping notes (0.0–1.0).
+    #[serde(default = "default_masking_amount")]
+    pub amount: f32,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+fn default_masking_amount() -> f32 {
+    0.15
+}
+
+/// Reduce masking by lowering velocity of notes that overlap in pitch and time (§10.5, §11).
+///
+/// Notes in the same pitch register that start within one tick window of
+/// another note get their velocity reduced by `amount`, clearing spectral
+/// overlap.
+#[must_use]
+pub fn reduce_masking(params: &ReduceMaskingParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "reduce_masking".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot reduce masking in segment '{}': no project payload provided",
+                params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("reduce_masking", "project", &e),
+        };
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "reduce_masking".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let pattern_ids: Vec<_> = segment
+        .layers
+        .iter()
+        .flat_map(|l| l.pattern_instances.iter().map(|pi| pi.pattern_id))
+        .collect();
+    let mut velocity_reduced = 0usize;
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Amount is a small f32 fraction; product clamped to 0..=127"
+    )]
+    let reduction = (127.0 * params.amount.clamp(0.0, 1.0)) as u8;
+    for pattern in &mut project.patterns {
+        if !pattern_ids.contains(&pattern.id) {
+            continue;
+        }
+        // Two passes: clone to avoid borrow conflicts, then detect overlaps.
+        let notes_snapshot: Vec<scorestrata_core::domain::Note> = pattern.notes.clone();
+        for note in &mut pattern.notes {
+            let overlapping = notes_snapshot.iter().any(|other| {
+                other.id != note.id
+                    && (other.pitch.0 as i16 - i16::from(note.pitch.0)).unsigned_abs() <= 7
+                    && other.start.0.abs_diff(note.start.0) <= 48
+            });
+            if overlapping && note.velocity.0 > reduction {
+                note.velocity =
+                    scorestrata_core::domain::Velocity::new(note.velocity.0 - reduction);
+                velocity_reduced += 1;
+            }
+        }
+    }
+    if velocity_reduced == 0 {
+        return ToolReceipt {
+            tool: "reduce_masking".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "No overlapping notes found in segment '{}' — nothing to de-mask",
+                params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["No spectral overlap detected".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "mix.masking_reduced".to_string(),
+        velocity_reduced.to_string(),
+    );
+    ToolReceipt {
+        tool: "reduce_masking".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Reduced masking in segment '{}': lowered velocity of {velocity_reduced} overlapping note(s) by {:.0}%",
+            params.segment_id,
+            params.amount * 100.0
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/mix",
+            params.project_id, params.segment_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 3,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `normalize_loudness_target` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NormalizeLoudnessTargetParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Target loudness in LUFS (falls back to genre-calibrated target).
+    #[serde(default)]
+    pub target_lufs: Option<f32>,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Normalize a project's loudness to a genre-calibrated target (§10.5, §11.6).
+///
+/// Delegates to the real `apply_patch` `normalize_loudness_target` operation.
+#[must_use]
+pub fn normalize_loudness_target(params: &NormalizeLoudnessTargetParams) -> ToolReceipt {
+    let mut op_params = serde_json::json!({});
+    if let Some(target) = params.target_lufs {
+        op_params["target_lufs"] = serde_json::json!(target);
+    }
+    let mut receipt = apply_patch(&ApplyPatchParams {
+        project_id: params.project_id.clone(),
+        op: "normalize_loudness_target".to_string(),
+        params: op_params,
+        dry_run: false,
+        scope: None,
+        project: params.project.clone(),
+    });
+    receipt.tool = "normalize_loudness_target".to_string();
+    receipt
+}
+
 // ── Composition Tools (§10.5) ───────────────────────────────────────
 
 /// Parameters for `create_pattern` tool.
@@ -449,6 +1163,887 @@ pub fn plan_arrangement(params: &PlanArrangementParams) -> ToolReceipt {
             ..Default::default()
         },
         warnings,
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `write_pattern_notes` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WritePatternNotesParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Pattern ID to write notes into.
+    pub pattern_id: String,
+    /// Notes to append.
+    pub notes: Vec<NoteSpec>,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// A note specification for `write_pattern_notes`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteSpec {
+    /// MIDI pitch.
+    pub pitch: u8,
+    /// Start tick.
+    pub start: u64,
+    /// Duration in ticks.
+    pub duration: u64,
+    /// Velocity.
+    pub velocity: u8,
+}
+
+/// Append notes to a pattern (§10.5).
+#[must_use]
+pub fn write_pattern_notes(params: &WritePatternNotesParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "write_pattern_notes".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot write {} note(s) to pattern '{}': no project payload provided",
+                params.notes.len(),
+                params.pattern_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("write_pattern_notes", "project", &e),
+        };
+    let Some(pattern) = project
+        .patterns
+        .iter_mut()
+        .find(|p| p.id.to_string() == params.pattern_id)
+    else {
+        return ToolReceipt {
+            tool: "write_pattern_notes".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Pattern '{}' not found in project", params.pattern_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown pattern ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut written = 0usize;
+    for spec in &params.notes {
+        pattern.notes.push(scorestrata_core::domain::Note {
+            id: scorestrata_core::ids::NoteId::new(),
+            pitch: scorestrata_core::domain::MidiNote::new(spec.pitch),
+            start: scorestrata_core::domain::Tick::new(spec.start),
+            duration: scorestrata_core::domain::Duration(spec.duration),
+            velocity: scorestrata_core::domain::Velocity::new(spec.velocity),
+            tied: false,
+        });
+        written += 1;
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("pattern.notes".to_string(), pattern.notes.len().to_string());
+    ToolReceipt {
+        tool: "write_pattern_notes".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Wrote {written} note(s) to pattern '{}' ({} total)",
+            params.pattern_id,
+            pattern.notes.len()
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/patterns/{}",
+            params.project_id, params.pattern_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `write_pattern_steps` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WritePatternStepsParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Pattern ID to write steps into.
+    pub pattern_id: String,
+    /// Steps to append.
+    pub steps: Vec<StepSpec>,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// A step specification for `write_pattern_steps`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepSpec {
+    /// Step index (0-based).
+    pub index: u32,
+    /// Whether the step is active.
+    pub active: bool,
+    /// Velocity if active.
+    pub velocity: u8,
+}
+
+/// Append steps to a pattern's step sequencer (§10.5).
+#[must_use]
+pub fn write_pattern_steps(params: &WritePatternStepsParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "write_pattern_steps".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot write {} step(s) to pattern '{}': no project payload provided",
+                params.steps.len(),
+                params.pattern_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("write_pattern_steps", "project", &e),
+        };
+    let Some(pattern) = project
+        .patterns
+        .iter_mut()
+        .find(|p| p.id.to_string() == params.pattern_id)
+    else {
+        return ToolReceipt {
+            tool: "write_pattern_steps".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Pattern '{}' not found in project", params.pattern_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown pattern ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut written = 0usize;
+    for spec in &params.steps {
+        pattern.steps.push(scorestrata_core::domain::Step {
+            id: scorestrata_core::ids::StepId::new(),
+            index: spec.index,
+            active: spec.active,
+            velocity: scorestrata_core::domain::Velocity::new(spec.velocity),
+        });
+        written += 1;
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("pattern.steps".to_string(), pattern.steps.len().to_string());
+    ToolReceipt {
+        tool: "write_pattern_steps".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Wrote {written} step(s) to pattern '{}' ({} total)",
+            params.pattern_id,
+            pattern.steps.len()
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/patterns/{}/steps",
+            params.project_id, params.pattern_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `apply_motivic_variation` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyMotivicVariationParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Pattern ID to vary.
+    pub pattern_id: String,
+    /// Variation name (`transpose`, `retrograde`, `syncopate`).
+    pub variation: String,
+    /// Semitone offset for `transpose`.
+    #[serde(default)]
+    pub semitones: i32,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Apply a motivic variation to a pattern's notes (§10.5).
+///
+/// Supported variations:
+/// - `transpose`: shift every note pitch by `semitones` (clamped to MIDI range).
+/// - `retrograde`: reverse the order of the notes.
+/// - `syncopate`: offset every other note's start by half its duration.
+#[must_use]
+pub fn apply_motivic_variation(params: &ApplyMotivicVariationParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "apply_motivic_variation".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot apply '{}' to pattern '{}': no project payload provided",
+                params.variation, params.pattern_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("apply_motivic_variation", "project", &e),
+        };
+    let Some(pattern) = project
+        .patterns
+        .iter_mut()
+        .find(|p| p.id.to_string() == params.pattern_id)
+    else {
+        return ToolReceipt {
+            tool: "apply_motivic_variation".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Pattern '{}' not found in project", params.pattern_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown pattern ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let affected = pattern.notes.len();
+    if affected == 0 {
+        return ToolReceipt {
+            tool: "apply_motivic_variation".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Pattern '{}' has no notes — nothing to vary",
+                params.pattern_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Pattern contains no notes".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    match params.variation.as_str() {
+        "transpose" => {
+            for note in &mut pattern.notes {
+                let base = i32::from(note.pitch.0);
+                let shifted = (base + params.semitones).clamp(0, 127);
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "Clamped to 0..=127 before casting to u8"
+                )]
+                let shifted = shifted as u8;
+                note.pitch = scorestrata_core::domain::MidiNote::new(shifted);
+            }
+        }
+        "retrograde" => {
+            pattern.notes.reverse();
+        }
+        "syncopate" => {
+            for (i, note) in pattern.notes.iter_mut().enumerate() {
+                if i % 2 == 1 {
+                    note.start = scorestrata_core::domain::Tick::new(
+                        note.start.0.saturating_add(note.duration.0 / 2),
+                    );
+                }
+            }
+        }
+        other => {
+            return ToolReceipt {
+                tool: "apply_motivic_variation".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!(
+                    "Unsupported variation '{}' (expected transpose|retrograde|syncopate)",
+                    other
+                ),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec![],
+                cost: ToolCost::default(),
+                warnings: vec!["Unknown variation".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("pattern.variation".to_string(), params.variation.clone());
+    score_delta.insert("pattern.affected_notes".to_string(), affected.to_string());
+    ToolReceipt {
+        tool: "apply_motivic_variation".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Applied '{}' variation to {} note(s) in pattern '{}'",
+            params.variation, affected, params.pattern_id
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/patterns/{}",
+            params.project_id, params.pattern_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `place_pattern_in_segment` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlacePatternInSegmentParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID to place into.
+    pub segment_id: String,
+    /// Layer ID to place into.
+    pub layer_id: String,
+    /// Pattern ID to place.
+    pub pattern_id: String,
+    /// Start tick within the segment.
+    #[serde(default)]
+    pub start_tick: u64,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Place a pattern instance into a segment's layer (§10.5).
+#[must_use]
+pub fn place_pattern_in_segment(params: &PlacePatternInSegmentParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "place_pattern_in_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot place pattern '{}' into '{}': no project payload provided",
+                params.pattern_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("place_pattern_in_segment", "project", &e),
+        };
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "place_pattern_in_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(layer) = segment
+        .layers
+        .iter_mut()
+        .find(|l| l.id.to_string() == params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "place_pattern_in_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in segment '{}'",
+                params.layer_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown layer ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Ok(pattern_id) = params
+        .pattern_id
+        .parse::<scorestrata_core::ids::PatternId>()
+    else {
+        return ToolReceipt {
+            tool: "place_pattern_in_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Pattern '{}' is not a valid pattern ID", params.pattern_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Invalid pattern ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    layer
+        .pattern_instances
+        .push(scorestrata_core::domain::PatternInstance {
+            id: scorestrata_core::ids::PatternInstanceId::new(),
+            pattern_id,
+            start_tick: scorestrata_core::domain::Tick::new(params.start_tick),
+            transpose: 0,
+            velocity_multiplier: 1.0,
+        });
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "layer.pattern_instances".to_string(),
+        layer.pattern_instances.len().to_string(),
+    );
+    ToolReceipt {
+        tool: "place_pattern_in_segment".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Placed pattern '{}' into layer '{}' of segment '{}' (instance #{})",
+            params.pattern_id,
+            params.layer_id,
+            params.segment_id,
+            layer.pattern_instances.len()
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers/{}",
+            params.project_id, params.segment_id, params.layer_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `set_layer_instrument` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetLayerInstrumentParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID containing the layer.
+    pub segment_id: String,
+    /// Layer ID to retarget.
+    pub layer_id: String,
+    /// Instrument name (e.g. `supersaw`, `analog_bass`, `clap`).
+    pub instrument: String,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Set a layer's instrument (§10.5).
+#[must_use]
+pub fn set_layer_instrument(params: &SetLayerInstrumentParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_layer_instrument".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set instrument on layer '{}': no project payload provided",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_layer_instrument", "project", &e),
+        };
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "set_layer_instrument".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(layer) = segment
+        .layers
+        .iter_mut()
+        .find(|l| l.id.to_string() == params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "set_layer_instrument".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in segment '{}'",
+                params.layer_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown layer ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let old_instrument = std::mem::replace(&mut layer.instrument, params.instrument.clone());
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("layer.instrument".to_string(), params.instrument.clone());
+    ToolReceipt {
+        tool: "set_layer_instrument".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Layer '{}' instrument changed from '{}' to '{}'",
+            params.layer_id, old_instrument, params.instrument
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers/{}",
+            params.project_id, params.segment_id, params.layer_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `set_segment_goals` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetSegmentGoalsParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID to set goals for.
+    pub segment_id: String,
+    /// Target energy level (0.0–1.0).
+    pub target_energy: f32,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Set a segment's energy goal (§10.5).
+///
+/// Upserts the segment's `EnergyPoint` in the arrangement's energy curve.
+#[must_use]
+pub fn set_segment_goals(params: &SetSegmentGoalsParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_segment_goals".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set goals on segment '{}': no project payload provided",
+                params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_segment_goals", "project", &e),
+        };
+    let Ok(segment_id) = params
+        .segment_id
+        .parse::<scorestrata_core::ids::SegmentId>()
+    else {
+        return ToolReceipt {
+            tool: "set_segment_goals".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' is not a valid segment ID", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Invalid segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let exists = project
+        .arrangement
+        .segments
+        .iter()
+        .any(|s| s.id == segment_id);
+    if !exists {
+        return ToolReceipt {
+            tool: "set_segment_goals".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    // Upsert the energy point.
+    let mut replaced = false;
+    for point in &mut project.arrangement.energy_curve {
+        if point.segment_id == segment_id {
+            point.target_energy = params.target_energy;
+            replaced = true;
+        }
+    }
+    if !replaced {
+        project
+            .arrangement
+            .energy_curve
+            .push(scorestrata_core::domain::EnergyPoint {
+                segment_id,
+                target_energy: params.target_energy,
+            });
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "segment.energy_target".to_string(),
+        format!("{:.2}", params.target_energy),
+    );
+    ToolReceipt {
+        tool: "set_segment_goals".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Segment '{}' energy goal set to {:.2} ({} point(s) in curve)",
+            params.segment_id,
+            params.target_energy,
+            project.arrangement.energy_curve.len()
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/arrangement/energy",
+            params.project_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `set_energy_curve` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetEnergyCurveParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment energy targets.
+    pub curve: Vec<EnergyPointSpec>,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// An energy target spec for `set_energy_curve`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnergyPointSpec {
+    /// Segment ID.
+    pub segment_id: String,
+    /// Target energy level (0.0–1.0).
+    pub target_energy: f32,
+}
+
+/// Replace a project's energy curve (§10.5).
+#[must_use]
+pub fn set_energy_curve(params: &SetEnergyCurveParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_energy_curve".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set energy curve for project '{}': no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_energy_curve", "project", &e),
+        };
+    let mut curve = Vec::with_capacity(params.curve.len());
+    for spec in &params.curve {
+        let Ok(sid) = spec.segment_id.parse::<scorestrata_core::ids::SegmentId>() else {
+            return ToolReceipt {
+                tool: "set_energy_curve".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Segment '{}' is not a valid segment ID", spec.segment_id),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec![],
+                cost: ToolCost::default(),
+                warnings: vec!["Invalid segment ID".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        };
+        curve.push(scorestrata_core::domain::EnergyPoint {
+            segment_id: sid,
+            target_energy: spec.target_energy,
+        });
+    }
+    let count = curve.len();
+    project.arrangement.energy_curve = curve;
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("arrangement.energy_points".to_string(), count.to_string());
+    ToolReceipt {
+        tool: "set_energy_curve".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Energy curve set for project '{}': {count} target point(s)",
+            params.project_id
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/arrangement/energy",
+            params.project_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
         dry_run: false,
         diagnostics: vec![],
     }
@@ -4188,6 +5783,347 @@ mod tests {
         let receipt = plan_arrangement(&params);
         assert!(matches!(receipt.status, ToolStatus::Failed));
         assert!(!receipt.warnings.is_empty());
+    }
+
+    // ── Composition mutation tools tests ────────────────────────────
+
+    #[test]
+    fn write_pattern_notes_appends_real_notes() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let pattern_id = project.patterns[0].id.to_string();
+        let params = WritePatternNotesParams {
+            project_id: project.id.to_string(),
+            pattern_id: pattern_id.clone(),
+            notes: vec![NoteSpec {
+                pitch: 60,
+                start: 0,
+                duration: 480,
+                velocity: 100,
+            }],
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = write_pattern_notes(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("1 note"));
+        assert!(receipt.score_delta.contains_key("pattern.notes"));
+    }
+
+    #[test]
+    fn write_pattern_notes_requires_payload() {
+        let params = WritePatternNotesParams {
+            project_id: "proj_1".to_string(),
+            pattern_id: "pat_1".to_string(),
+            notes: vec![],
+            project: None,
+        };
+        let receipt = write_pattern_notes(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("No project payload")),
+            "expected transparency warning, got {:#?}",
+            receipt.warnings
+        );
+    }
+
+    #[test]
+    fn write_pattern_steps_appends_real_steps() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let pattern_id = project.patterns[0].id.to_string();
+        let params = WritePatternStepsParams {
+            project_id: project.id.to_string(),
+            pattern_id: pattern_id.clone(),
+            steps: vec![StepSpec {
+                index: 0,
+                active: true,
+                velocity: 110,
+            }],
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = write_pattern_steps(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("1 step"));
+        assert!(receipt.score_delta.contains_key("pattern.steps"));
+    }
+
+    #[test]
+    fn apply_motivic_variation_transposes_notes() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let pattern_id = project.patterns[0].id.to_string();
+        plant_note(&mut project, 60, 0);
+        let params = ApplyMotivicVariationParams {
+            project_id: project.id.to_string(),
+            pattern_id: pattern_id.clone(),
+            variation: "transpose".to_string(),
+            semitones: 3,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = apply_motivic_variation(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("transpose"));
+        assert!(receipt.score_delta.contains_key("pattern.affected_notes"));
+    }
+
+    #[test]
+    fn apply_motivic_variation_rejects_unknown() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        plant_note(&mut project, 60, 0);
+        let params = ApplyMotivicVariationParams {
+            project_id: project.id.to_string(),
+            pattern_id: project.patterns[0].id.to_string(),
+            variation: "quantum_flip".to_string(),
+            semitones: 0,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = apply_motivic_variation(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("Unsupported variation"));
+    }
+
+    #[test]
+    fn apply_motivic_variation_refuses_empty_pattern() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = ApplyMotivicVariationParams {
+            project_id: project.id.to_string(),
+            pattern_id: project.patterns[0].id.to_string(),
+            variation: "transpose".to_string(),
+            semitones: 3,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = apply_motivic_variation(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("no notes"));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("contains no notes")),
+            "expected empty-pattern warning, got {:#?}",
+            receipt.warnings
+        );
+    }
+
+    /// Plant a single note into the project's first pattern (the planned
+    /// fixture's patterns are otherwise empty).
+    fn plant_note(project: &mut scorestrata_core::domain::Project, pitch: u8, start: u64) {
+        let target = project.patterns[0].id;
+        if let Some(pattern) = project.patterns.iter_mut().find(|p| p.id == target) {
+            pattern.notes.push(scorestrata_core::domain::Note {
+                id: scorestrata_core::ids::NoteId::new(),
+                pitch: scorestrata_core::domain::MidiNote::new(pitch),
+                start: scorestrata_core::domain::Tick::new(start),
+                duration: scorestrata_core::domain::Duration(480),
+                velocity: scorestrata_core::domain::Velocity::new(100),
+                tied: false,
+            });
+        }
+    }
+
+    #[test]
+    fn place_pattern_in_segment_adds_instance() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
+        let pattern_id = project.patterns[0].id.to_string();
+        let params = PlacePatternInSegmentParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            layer_id: layer_id.clone(),
+            pattern_id: pattern_id.clone(),
+            start_tick: 0,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = place_pattern_in_segment(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.score_delta.contains_key("layer.pattern_instances"));
+    }
+
+    #[test]
+    fn set_layer_instrument_changes_instrument() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
+        let params = SetLayerInstrumentParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            layer_id: layer_id.clone(),
+            instrument: "supersaw".to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = set_layer_instrument(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("layer.instrument")
+                .map(String::as_str),
+            Some("supersaw")
+        );
+    }
+
+    #[test]
+    fn set_segment_goals_upserts_energy_point() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let params = SetSegmentGoalsParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            target_energy: 0.8,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = set_segment_goals(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("energy goal"));
+        assert!(receipt.score_delta.contains_key("segment.energy_target"));
+    }
+
+    #[test]
+    fn set_energy_curve_replaces_curve() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let params = SetEnergyCurveParams {
+            project_id: project.id.to_string(),
+            curve: vec![EnergyPointSpec {
+                segment_id: segment_id.clone(),
+                target_energy: 0.6,
+            }],
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = set_energy_curve(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("arrangement.energy_points")
+                .map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn harmonize_melody_adds_scale_notes() {
+        // Realistic flow: the agent writes melodic notes first (planned
+        // patterns are empty), then harmonizes below them.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
+        let pattern_id = project.arrangement.segments[0].layers[0].pattern_instances[0].pattern_id;
+        if let Some(pattern) = project.patterns.iter_mut().find(|p| p.id == pattern_id) {
+            pattern.notes.push(scorestrata_core::domain::Note {
+                id: scorestrata_core::ids::NoteId::new(),
+                pitch: scorestrata_core::domain::MidiNote::new(60),
+                start: scorestrata_core::domain::Tick::new(0),
+                duration: scorestrata_core::domain::Duration(480),
+                velocity: scorestrata_core::domain::Velocity::new(100),
+                tied: false,
+            });
+        }
+        let params = HarmonizeMelodyParams {
+            project_id: project.id.to_string(),
+            segment_id,
+            layer_id,
+            interval_degrees: 3,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = harmonize_melody(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("harmony note"));
+        assert!(receipt.score_delta.contains_key("harmony.notes_added"));
+    }
+
+    #[test]
+    fn add_drum_fill_appends_steps() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
+        let params = AddDrumFillParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            layer_id: layer_id.clone(),
+            steps: 4,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = add_drum_fill(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("fill step"));
+        assert!(receipt.score_delta.contains_key("drum.steps_added"));
+    }
+
+    #[test]
+    fn increase_segment_density_duplicates_notes() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let params = IncreaseSegmentDensityParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            factor: 2,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = increase_segment_density(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.score_delta.contains_key("segment.notes_added"));
+    }
+
+    #[test]
+    fn reduce_masking_reduces_overlap_velocity() {
+        // Plant two spectrally/temporally overlapping notes so the tool has
+        // real masking to reduce (planned patterns are otherwise empty).
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let pattern_ids: Vec<_> = project.arrangement.segments[0]
+            .layers
+            .iter()
+            .flat_map(|l| l.pattern_instances.iter().map(|pi| pi.pattern_id))
+            .collect();
+        for pattern in &mut project.patterns {
+            if !pattern_ids.contains(&pattern.id) {
+                continue;
+            }
+            pattern.notes.extend([
+                scorestrata_core::domain::Note {
+                    id: scorestrata_core::ids::NoteId::new(),
+                    pitch: scorestrata_core::domain::MidiNote::new(60),
+                    start: scorestrata_core::domain::Tick::new(0),
+                    duration: scorestrata_core::domain::Duration(480),
+                    velocity: scorestrata_core::domain::Velocity::new(110),
+                    tied: false,
+                },
+                scorestrata_core::domain::Note {
+                    id: scorestrata_core::ids::NoteId::new(),
+                    pitch: scorestrata_core::domain::MidiNote::new(64),
+                    start: scorestrata_core::domain::Tick::new(24),
+                    duration: scorestrata_core::domain::Duration(480),
+                    velocity: scorestrata_core::domain::Velocity::new(110),
+                    tied: false,
+                },
+            ]);
+        }
+        let params = ReduceMaskingParams {
+            project_id: project.id.to_string(),
+            segment_id,
+            amount: 0.15,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = reduce_masking(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("masking"));
+        assert!(receipt.score_delta.contains_key("mix.masking_reduced"));
+    }
+
+    #[test]
+    fn normalize_loudness_target_delegates_to_real_op() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = NormalizeLoudnessTargetParams {
+            project_id: project.id.to_string(),
+            target_lufs: Some(-10.0),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = normalize_loudness_target(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("LUFS"));
+        assert!(receipt.evidence_uris.iter().any(|u| u.contains("loudness")));
     }
 
     #[test]
