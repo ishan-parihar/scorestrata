@@ -62,6 +62,141 @@ impl GenreProfile {
     }
 }
 
+/// The default loudness target (LUFS) for genres without a dedicated profile.
+///
+/// Matches the streaming-master convention used across the validator.
+pub const DEFAULT_LOUDNESS_TARGET_LUFS: f32 = -14.0;
+
+/// Canonical genre → loudness-target table (LUFS), from architecture §11.6.
+///
+/// Kept as a `const` table so [`loudness_target_for`] — called on every
+/// `normalize_loudness_target` patch — does not allocate profile structs.
+/// Must stay in sync with [`default_genre_profiles`].
+const GENRE_LOUDNESS_TARGETS: &[(&str, f32)] = &[
+    ("melodic_techno", -10.0),
+    ("techno", -10.0),
+    ("house", -12.0),
+    ("ambient", -16.0),
+    ("cinematic", -16.0),
+    ("trance", -9.0),
+    ("dubstep", -8.0),
+    ("lo-fi", -16.0),
+];
+
+/// Build the curated default genre profiles from the architecture spec §11.6.
+///
+/// The spec's example TOML defines two reference profiles; we extend the set
+/// to cover every genre the config generator can produce so loudness
+/// normalization and audio validation always have a calibrated target.
+/// Note: the full literals are intentionally duplicated rather than built
+/// from `GenreProfile::new()` + overrides — this keeps the curated spec
+/// values visible at a glance and prevents accidental drift.
+#[must_use]
+pub fn default_genre_profiles() -> Vec<GenreProfile> {
+    vec![
+        GenreProfile {
+            name: "melodic_techno".to_string(),
+            bpm_range: (120, 126),
+            kick_pattern: "four_on_floor".to_string(),
+            bass_syncopation: "medium_high".to_string(),
+            chorus_energy_delta_min: 0.15,
+            drum_density_min: 0.75,
+            spectral_brightness_target: 0.62,
+            loudness_target_lufs: -10.0,
+            metric_weights: BTreeMap::new(),
+        },
+        GenreProfile {
+            name: "techno".to_string(),
+            bpm_range: (128, 140),
+            kick_pattern: "four_on_floor".to_string(),
+            bass_syncopation: "medium".to_string(),
+            chorus_energy_delta_min: 0.12,
+            drum_density_min: 0.7,
+            spectral_brightness_target: 0.58,
+            loudness_target_lufs: -10.0,
+            metric_weights: BTreeMap::new(),
+        },
+        GenreProfile {
+            name: "house".to_string(),
+            bpm_range: (118, 126),
+            kick_pattern: "four_on_floor".to_string(),
+            bass_syncopation: "medium".to_string(),
+            chorus_energy_delta_min: 0.12,
+            drum_density_min: 0.7,
+            spectral_brightness_target: 0.55,
+            loudness_target_lufs: -12.0,
+            metric_weights: BTreeMap::new(),
+        },
+        GenreProfile {
+            name: "ambient".to_string(),
+            bpm_range: (70, 100),
+            kick_pattern: "sparse_or_none".to_string(),
+            bass_syncopation: "low".to_string(),
+            chorus_energy_delta_min: 0.05,
+            drum_density_min: 0.10,
+            spectral_brightness_target: 0.48,
+            loudness_target_lufs: -16.0,
+            metric_weights: BTreeMap::new(),
+        },
+        GenreProfile {
+            name: "cinematic".to_string(),
+            bpm_range: (80, 100),
+            kick_pattern: "sparse_or_none".to_string(),
+            bass_syncopation: "low".to_string(),
+            chorus_energy_delta_min: 0.10,
+            drum_density_min: 0.3,
+            spectral_brightness_target: 0.5,
+            loudness_target_lufs: -16.0,
+            metric_weights: BTreeMap::new(),
+        },
+        GenreProfile {
+            name: "trance".to_string(),
+            bpm_range: (132, 144),
+            kick_pattern: "four_on_floor".to_string(),
+            bass_syncopation: "medium".to_string(),
+            chorus_energy_delta_min: 0.15,
+            drum_density_min: 0.75,
+            spectral_brightness_target: 0.6,
+            loudness_target_lufs: -9.0,
+            metric_weights: BTreeMap::new(),
+        },
+        GenreProfile {
+            name: "dubstep".to_string(),
+            bpm_range: (136, 146),
+            kick_pattern: "half_time".to_string(),
+            bass_syncopation: "high".to_string(),
+            chorus_energy_delta_min: 0.18,
+            drum_density_min: 0.6,
+            spectral_brightness_target: 0.5,
+            loudness_target_lufs: -8.0,
+            metric_weights: BTreeMap::new(),
+        },
+        GenreProfile {
+            name: "lo-fi".to_string(),
+            bpm_range: (70, 90),
+            kick_pattern: "sparse_or_none".to_string(),
+            bass_syncopation: "low".to_string(),
+            chorus_energy_delta_min: 0.05,
+            drum_density_min: 0.2,
+            spectral_brightness_target: 0.35,
+            loudness_target_lufs: -16.0,
+            metric_weights: BTreeMap::new(),
+        },
+    ]
+}
+
+/// The calibrated loudness target (LUFS) for a genre, if a profile exists.
+///
+/// Returns `None` for unknown genres so callers can fall back to
+/// [`DEFAULT_LOUDNESS_TARGET_LUFS`]. Allocation-free — reads the const table.
+#[must_use]
+pub fn loudness_target_for(genre: &str) -> Option<f32> {
+    GENRE_LOUDNESS_TARGETS
+        .iter()
+        .find(|(g, _)| *g == genre)
+        .map(|(_, lufs)| *lufs)
+}
+
 /// A human preference signal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferenceSignal {
@@ -567,6 +702,35 @@ mod tests {
         assert_eq!(profile.name, "melodic_techno");
         assert_eq!(profile.bpm_range, (120, 130));
         assert!((profile.loudness_target_lufs - (-14.0)).abs() < 0.01);
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "Test asserts spec values are present")]
+    #[expect(clippy::float_cmp, reason = "Spec values are exact f32 literals")]
+    fn default_genre_profiles_match_spec_targets() {
+        let profiles = default_genre_profiles();
+        assert!(!profiles.is_empty());
+        let by_name = |name: &str| profiles.iter().find(|p| p.name == name);
+        // §11.6 spec values.
+        assert_eq!(
+            by_name("melodic_techno").unwrap().loudness_target_lufs,
+            -10.0
+        );
+        assert_eq!(by_name("ambient").unwrap().loudness_target_lufs, -16.0);
+        assert_eq!(
+            by_name("melodic_techno").unwrap().chorus_energy_delta_min,
+            0.15
+        );
+        assert_eq!(by_name("ambient").unwrap().chorus_energy_delta_min, 0.05);
+    }
+
+    #[test]
+    fn loudness_target_for_known_and_unknown_genres() {
+        assert_eq!(loudness_target_for("melodic_techno"), Some(-10.0));
+        assert_eq!(loudness_target_for("ambient"), Some(-16.0));
+        assert_eq!(loudness_target_for("house"), Some(-12.0));
+        assert_eq!(loudness_target_for("jazz"), None);
+        assert_eq!(loudness_target_for(""), None);
     }
 
     #[test]

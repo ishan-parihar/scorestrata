@@ -49,6 +49,10 @@ pub fn apply_patch_to_project(params: &ApplyPatchParams, project: &mut Project) 
 }
 
 /// Quantize a layer's notes to the project key and measure the real score delta.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Receipt construction is verbose by design"
+)]
 fn apply_quantize(params: &ApplyPatchParams, project: &mut Project) -> ToolReceipt {
     let Some(scope) = &params.scope else {
         return failed_receipt(params, "quantize_layer_to_scale requires a scope");
@@ -99,7 +103,7 @@ fn apply_quantize(params: &ApplyPatchParams, project: &mut Project) -> ToolRecei
     let mut after_violations = 0usize;
     let mut notes_quantized = 0usize;
 
-    for pattern in project.patterns.iter_mut() {
+    for pattern in &mut project.patterns {
         if !pattern_ids.contains(&pattern.id) {
             continue;
         }
@@ -122,12 +126,24 @@ fn apply_quantize(params: &ApplyPatchParams, project: &mut Project) -> ToolRecei
         .sum();
 
     let before_ratio = if total_notes > 0 {
-        (total_notes - before_violations) as f32 / total_notes as f32
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Note counts fit in f32 for ratio computation"
+        )]
+        {
+            (total_notes - before_violations) as f32 / total_notes as f32
+        }
     } else {
         1.0
     };
     let after_ratio = if total_notes > 0 {
-        (total_notes - after_violations) as f32 / total_notes as f32
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Note counts fit in f32 for ratio computation"
+        )]
+        {
+            (total_notes - after_violations) as f32 / total_notes as f32
+        }
     } else {
         1.0
     };
@@ -229,12 +245,28 @@ fn apply_transition(params: &ApplyPatchParams, project: &mut Project) -> ToolRec
 /// velocity in the project so a re-render lands on target. Reports the real
 /// measured before/after loudness and the applied gain (real DSP patch per
 /// §10.5 `normalize_loudness_target`).
+#[expect(
+    clippy::too_many_lines,
+    reason = "Receipt construction and render pipeline are verbose by design"
+)]
 fn apply_normalize_loudness(params: &ApplyPatchParams, project: &mut Project) -> ToolReceipt {
+    // Genre-calibrated target per §11.6: explicit param wins, then the
+    // project's genre profile, then the streaming default (-14 LUFS).
     let target_lufs: f32 = params
         .params
         .get("target_lufs")
         .and_then(serde_json::Value::as_f64)
-        .map_or(-14.0, |v| v as f32);
+        .map_or_else(
+            || {
+                scorestrata_storage::calibration::loudness_target_for(&project.config.genre)
+                    .unwrap_or(scorestrata_storage::calibration::DEFAULT_LOUDNESS_TARGET_LUFS)
+            },
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "LUFS targets are small f64 literals that fit exactly in f32"
+            )]
+            |v| v as f32,
+        );
 
     // Render the current project to measure loudness.
     let timeline = match scorestrata_compiler::compile_project(project) {
@@ -291,10 +323,17 @@ fn apply_normalize_loudness(params: &ApplyPatchParams, project: &mut Project) ->
     // clamp at 127, so a very quiet mix may undershoot the exact target;
     // the receipt reports the target it aimed for.
     let mut velocity_adjusted = 0usize;
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "Clamped to 1.0..=127.0 before truncating to u8 velocity"
+    )]
+    let scale_velocity =
+        |old: u8, gain: f32| (f32::from(old) * gain).round().clamp(1.0, 127.0) as u8;
     for pattern in &mut project.patterns {
         for note in &mut pattern.notes {
             let old = note.velocity.0;
-            let new_vel = (f32::from(old) * gain_linear).round().clamp(1.0, 127.0) as u8;
+            let new_vel = scale_velocity(old, gain_linear);
             if old != new_vel {
                 velocity_adjusted += 1;
             }
@@ -303,7 +342,7 @@ fn apply_normalize_loudness(params: &ApplyPatchParams, project: &mut Project) ->
         for step in &mut pattern.steps {
             if step.active {
                 let old = step.velocity.0;
-                let new_vel = (f32::from(old) * gain_linear).round().clamp(1.0, 127.0) as u8;
+                let new_vel = scale_velocity(old, gain_linear);
                 if old != new_vel {
                     velocity_adjusted += 1;
                 }
@@ -323,8 +362,7 @@ fn apply_normalize_loudness(params: &ApplyPatchParams, project: &mut Project) ->
         tool: "apply_patch".to_string(),
         status: ToolStatus::Succeeded,
         summary: format!(
-            "Normalized loudness {before_lufs:.1} LUFS → targeting {target_lufs:.1} LUFS (gain {gain_db:+.1} dB, {} velocities adjusted)",
-            velocity_adjusted
+            "Normalized loudness {before_lufs:.1} LUFS → targeting {target_lufs:.1} LUFS (gain {gain_db:+.1} dB, {velocity_adjusted} velocities adjusted)",
         ),
         score_delta,
         evidence_uris: vec![format!(
@@ -336,6 +374,10 @@ fn apply_normalize_loudness(params: &ApplyPatchParams, project: &mut Project) ->
         cost: ToolCost {
             cpu_ms: 15,
             tool_calls: 1,
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Render durations are small values that fit in f32"
+            )]
             render_seconds: before.duration_seconds as f32,
         },
         warnings: vec![],
@@ -535,6 +577,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::unwrap_used, reason = "Test asserts known-valid key")]
     fn quantize_fixes_out_of_scale_notes() {
         let mut project = out_of_scale_project();
         let key = Key::parse("C minor").unwrap();
@@ -611,8 +654,7 @@ mod tests {
         let receipt = apply_patch_to_project(&params, &mut project);
         assert!(
             matches!(receipt.status, ToolStatus::Succeeded),
-            "normalize should succeed, got {:#?}",
-            receipt
+            "normalize should succeed, got {receipt:#?}"
         );
         assert!(receipt.summary.contains("LUFS"));
         assert!(receipt.summary.contains("dB"));

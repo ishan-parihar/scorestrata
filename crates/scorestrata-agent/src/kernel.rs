@@ -231,6 +231,10 @@ pub struct AgentConfig {
     pub hard_gate_metrics: Vec<String>,
     /// Hard gate thresholds (metric → minimum value).
     pub hard_gate_thresholds: Vec<(String, f32)>,
+    /// Genre for calibration lookups (§11.6). When set, the loudness gate
+    /// in audio diagnosis uses the genre's calibrated target instead of the
+    /// generic `loudness_lufs` threshold.
+    pub genre: Option<String>,
 }
 
 impl Default for AgentConfig {
@@ -246,6 +250,7 @@ impl Default for AgentConfig {
                 ("loudness_lufs".to_string(), -14.0),
                 ("true_peak_dbtp".to_string(), -1.0),
             ],
+            genre: None,
         }
     }
 }
@@ -328,6 +333,66 @@ impl AgentKernel {
     #[must_use]
     pub fn new(project_id: ProjectId) -> Self {
         Self::with_config(project_id, AgentConfig::default())
+    }
+
+    /// Build a mix/audio [`Diagnosis`] from a render's Level-4 metrics.
+    ///
+    /// Wires the audio engine's loudness analysis (§11.4) into the agent
+    /// loop: the L1 micro-repair loop can then generate a
+    /// `normalize_loudness_target` candidate for a clipping or under-loud
+    /// master. Returns `None` when the master is already within tolerance.
+    #[must_use]
+    pub fn diagnosis_from_audio_metrics(
+        &self,
+        integrated_lufs: f32,
+        true_peak_dbtp: f32,
+    ) -> Option<Diagnosis> {
+        // Genre-calibrated target per §11.6 wins over the generic gate so a
+        // melodic_techno project (target −10 LUFS) is diagnosed correctly.
+        let loudness_target = self
+            .config
+            .genre
+            .as_deref()
+            .and_then(scorestrata_storage::calibration::loudness_target_for)
+            .or_else(|| {
+                self.config
+                    .hard_gate_thresholds
+                    .iter()
+                    .find(|(m, _)| m == "loudness_lufs")
+                    .map(|(_, t)| *t)
+            })
+            .unwrap_or(scorestrata_storage::calibration::DEFAULT_LOUDNESS_TARGET_LUFS);
+        let peak_limit = self
+            .config
+            .hard_gate_thresholds
+            .iter()
+            .find(|(m, _)| m == "true_peak_dbtp")
+            .map_or(-1.0, |(_, t)| *t);
+
+        // A mix is problematic when the true peak exceeds the limit (clipping)
+        // or the loudness is far below the target (inaudible master).
+        let peak_issue = true_peak_dbtp > peak_limit;
+        let quiet_issue = integrated_lufs < loudness_target - 6.0;
+
+        if peak_issue || quiet_issue {
+            // Severity scales with how far the peak exceeds the limit.
+            let severity = if peak_issue {
+                ((true_peak_dbtp - peak_limit) / 6.0).clamp(0.3, 1.0)
+            } else {
+                0.4
+            };
+            Some(Diagnosis {
+                metric: "audio.loudness".to_string(),
+                scope: "mix".to_string(),
+                current_value: integrated_lufs,
+                target_value: loudness_target,
+                severity,
+                is_hard_failure: peak_issue,
+                evidence_uri: Some("project://audio/lufs".to_string()),
+            })
+        } else {
+            None
+        }
     }
 
     /// Create a new agent kernel with custom configuration.
@@ -469,6 +534,24 @@ impl AgentKernel {
                 scope: diagnosis.scope.clone(),
                 diagnosis_metric: diagnosis.metric.clone(),
                 estimated_delta: diagnosis.severity * 0.5,
+                is_repair: true,
+                template_id: None,
+            });
+        }
+
+        // Mix issues (clipping / under-loud master) repair via loudness
+        // normalization — the real patch op wired in the MCP layer (§10.5).
+        if diagnosis.scope == "mix" || diagnosis.metric.starts_with("audio.") {
+            candidates.push(Candidate {
+                id: format!("cand_mix_{}_{}", self.iteration, candidates.len()),
+                operation: "normalize_loudness_target".to_string(),
+                description: format!(
+                    "Normalize master loudness toward {} LUFS",
+                    diagnosis.target_value
+                ),
+                scope: diagnosis.scope.clone(),
+                diagnosis_metric: diagnosis.metric.clone(),
+                estimated_delta: diagnosis.severity * 0.6,
                 is_repair: true,
                 template_id: None,
             });
@@ -822,6 +905,78 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(clippy::expect_used, reason = "Test asserts diagnosis presence")]
+    fn audio_diagnosis_detects_clipping_master() {
+        let kernel = AgentKernel::new(ProjectId::new());
+        // True peak above the -1 dBTP limit is a hard failure.
+        let diag = kernel
+            .diagnosis_from_audio_metrics(-12.0, 1.8)
+            .expect("clipping master produces a diagnosis");
+        assert_eq!(diag.scope, "mix");
+        assert!(diag.is_hard_failure);
+        assert!(diag.severity > 0.3);
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "Test asserts diagnosis presence")]
+    #[expect(clippy::float_cmp, reason = "Target is an exact f32 literal")]
+    fn audio_diagnosis_detects_under_loud_master() {
+        let kernel = AgentKernel::new(ProjectId::new());
+        // -30 LUFS is far below the -14 target.
+        let diag = kernel
+            .diagnosis_from_audio_metrics(-30.0, -10.0)
+            .expect("under-loud master produces a diagnosis");
+        assert_eq!(diag.scope, "mix");
+        assert!(!diag.is_hard_failure);
+        assert_eq!(diag.target_value, -14.0);
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "Test asserts diagnosis presence")]
+    #[expect(clippy::float_cmp, reason = "Target is an exact f32 literal")]
+    fn audio_diagnosis_uses_genre_calibrated_target() {
+        let config = AgentConfig {
+            genre: Some("melodic_techno".to_string()),
+            ..AgentConfig::default()
+        };
+        let kernel = AgentKernel::with_config(ProjectId::new(), config);
+        // A melodic_techno project targets -10 LUFS (§11.6), so a -18 LUFS
+        // master is below target - 6 tolerance while still above the
+        // generic -14 gate - 6 tolerance. Only the genre target flags it.
+        let diag = kernel
+            .diagnosis_from_audio_metrics(-18.0, -3.0)
+            .expect("genre-calibrated under-loud master produces a diagnosis");
+        assert_eq!(diag.scope, "mix");
+        assert_eq!(diag.target_value, -10.0);
+        // The generic config (-14 target) does NOT flag a -18 LUFS master
+        // (above -14 - 6 = -20), proving the genre calibration matters.
+        let generic = AgentKernel::new(ProjectId::new());
+        assert!(generic.diagnosis_from_audio_metrics(-18.0, -3.0).is_none());
+    }
+
+    #[test]
+    fn audio_diagnosis_none_when_within_tolerance() {
+        let kernel = AgentKernel::new(ProjectId::new());
+        assert!(kernel.diagnosis_from_audio_metrics(-14.0, -3.0).is_none());
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, reason = "Test asserts diagnosis presence")]
+    fn l1_micro_repair_suggests_normalize_for_mix_issue() {
+        let mut kernel = AgentKernel::new(ProjectId::new());
+        let diag = kernel
+            .diagnosis_from_audio_metrics(-12.0, 1.8)
+            .expect("diagnosis exists");
+        let candidates = kernel.l1_micro_repair(&diag, &[]);
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.operation == "normalize_loudness_target"),
+            "mix diagnosis yields a normalize_loudness_target candidate"
+        );
+    }
+
+    #[test]
     fn kernel_should_create_with_defaults() {
         let kernel = AgentKernel::new(ProjectId::new());
         assert_eq!(kernel.state, KernelState::Initializing);
@@ -840,6 +995,7 @@ mod tests {
             max_candidates_per_iteration: 3,
             hard_gate_metrics: vec!["loudness_lufs".to_string()],
             hard_gate_thresholds: vec![("loudness_lufs".to_string(), -14.0)],
+            ..AgentConfig::default()
         };
         let kernel = AgentKernel::with_config(ProjectId::new(), config);
         assert_eq!(kernel.config.max_iterations, 5);
@@ -1119,6 +1275,7 @@ mod tests {
             max_candidates_per_iteration: 2,
             hard_gate_metrics: vec![],
             hard_gate_thresholds: vec![],
+            ..AgentConfig::default()
         };
         let mut kernel = AgentKernel::with_config(ProjectId::new(), config);
 

@@ -471,6 +471,115 @@ fn mvas_step_13_level4_audio_validation_loop() {
     assert!(!re_render.events.is_empty());
 }
 
+/// Level-6 regression + genre-calibrated loudness (§11.6/§11.7): the agent
+/// loop detects loudness drift between renders and the mix diagnosis
+/// produces a normalize candidate targeting the genre's calibrated LUFS.
+#[test]
+fn mvas_step_14_genre_calibrated_loudness_and_render_regression() {
+    use scorestrata_agent::kernel::AgentKernel;
+    use scorestrata_mcp::patch_ops::apply_patch_to_project;
+    use scorestrata_mcp::tools::{ApplyPatchParams, ToolStatus};
+
+    // ── Genre-calibrated target (§11.6) ─────────────────────────────
+    // A melodic-techno project targets -10 LUFS, not the -14 default.
+    assert_eq!(
+        scorestrata_storage::calibration::loudness_target_for("melodic_techno"),
+        Some(-10.0)
+    );
+    assert_eq!(
+        scorestrata_storage::calibration::loudness_target_for("ambient"),
+        Some(-16.0)
+    );
+    assert_eq!(
+        scorestrata_storage::calibration::loudness_target_for("jazz"),
+        None
+    );
+
+    // Build a melodic-techno project.
+    let config = scorestrata_mcp::config_gen::generate_config(
+        "mvas_calib",
+        "Dark melodic techno at 128 BPM in C minor, 8 bars",
+    );
+    assert_eq!(config.genre, "melodic_techno");
+    let plan = scorestrata_compiler::plan::plan_project(&config);
+    let mut project = scorestrata_testkit::minimal_project();
+    project.config = config;
+    project.arrangement = plan.arrangement;
+    project.patterns = plan.patterns;
+
+    // ── normalize uses the genre target (-10) ───────────────────────
+    let params = ApplyPatchParams {
+        project_id: project.id.to_string(),
+        op: "normalize_loudness_target".to_string(),
+        params: serde_json::json!({}),
+        dry_run: false,
+        scope: None,
+        project: None,
+    };
+    let receipt = apply_patch_to_project(&params, &mut project);
+    assert!(
+        matches!(receipt.status, ToolStatus::Succeeded),
+        "normalize succeeds: {}",
+        receipt.summary
+    );
+    assert!(
+        receipt.summary.contains("targeting -10.0"),
+        "receipt uses the genre-calibrated -10 LUFS target, got: {}",
+        receipt.summary
+    );
+
+    // ── Render regression detection (§11.7 Level 6) ─────────────────
+    use scorestrata_validator::regression_check::{
+        RenderRegressionConfig, RenderSignature, detect_render_regression,
+        render_regression_diagnostics,
+    };
+    let baseline = RenderSignature {
+        checksum: "base_checksum_123".to_string(),
+        integrated_lufs: -10.0,
+        true_peak_dbtp: -1.8,
+    };
+    // A drifted render after some patch.
+    let drifted = RenderSignature {
+        checksum: "drifted_checksum_456".to_string(),
+        integrated_lufs: -7.2,
+        true_peak_dbtp: -0.4,
+    };
+    let config6 = RenderRegressionConfig::default();
+    let regression = detect_render_regression(&baseline, &drifted, &config6);
+    assert!(regression.loudness_drifted);
+    assert!(regression.peak_drifted);
+    assert!(regression.checksum_changed);
+    let diags = render_regression_diagnostics(&regression);
+    assert!(
+        diags.iter().any(|d| d.code == "RENDER_LOUDNESS_DRIFT"),
+        "loudness drift diagnostic"
+    );
+    assert!(
+        diags.iter().any(|d| d.code == "RENDER_PEAK_DRIFT"),
+        "peak drift diagnostic"
+    );
+    // The drift diagnostic suggests normalize — the agent loop can repair.
+    assert!(diags.iter().any(|d| {
+        d.suggested_patches
+            .iter()
+            .any(|p| p.op == "normalize_loudness_target")
+    }));
+
+    // ── Agent kernel turns the drifted render into a mix diagnosis ──
+    let mut kernel = AgentKernel::new(project.id);
+    let diag = kernel
+        .diagnosis_from_audio_metrics(-7.2, -0.4)
+        .expect("clipping/drifted master yields a diagnosis");
+    assert_eq!(diag.scope, "mix");
+    let candidates = kernel.l1_micro_repair(&diag, &[]);
+    assert!(
+        candidates
+            .iter()
+            .any(|c| c.operation == "normalize_loudness_target"),
+        "agent loop proposes the loudness repair"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,
