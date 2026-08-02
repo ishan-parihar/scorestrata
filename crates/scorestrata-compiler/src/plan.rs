@@ -276,7 +276,7 @@ fn build_segments(config: &ProjectConfig, patterns: &[Pattern], ids: &mut IdSeq)
             SegmentRole::Outro => "Outro",
             _ => "Section",
         };
-        let layers = build_layers(patterns, role, ids);
+        let layers = build_layers(patterns, role, bars, ids);
         segments.push(Segment {
             id: SegmentId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
             name: name.to_string(),
@@ -294,63 +294,88 @@ fn build_segments(config: &ProjectConfig, patterns: &[Pattern], ids: &mut IdSeq)
 ///
 /// Every segment gets drums + bass; melodic layers are thinned out in the
 /// Intro (no lead) and Build (lead only) to create a natural energy ramp.
-fn build_layers(patterns: &[Pattern], role: SegmentRole, ids: &mut IdSeq) -> Vec<Layer> {
+fn build_layers(
+    patterns: &[Pattern],
+    role: SegmentRole,
+    segment_bars: u32,
+    ids: &mut IdSeq,
+) -> Vec<Layer> {
     let drum = patterns.first();
     let bass = patterns.get(1);
     let lead = patterns.get(2);
 
     let mut layers = Vec::new();
     if let Some(p) = drum {
-        layers.push(make_layer("Drums", "drum_sampler", p, 0, ids));
+        layers.push(make_layer("Drums", "drum_sampler", p, 0, segment_bars, ids));
     }
     if let Some(p) = bass {
-        layers.push(make_layer("Bass", "bass_synth", p, 0, ids));
+        layers.push(make_layer("Bass", "bass_synth", p, 0, segment_bars, ids));
     }
     match role {
         SegmentRole::Intro | SegmentRole::Outro => {}
         SegmentRole::Verse | SegmentRole::Bridge => {
             if let Some(p) = lead {
-                layers.push(make_layer("Lead", "lead_synth", p, 12, ids));
+                layers.push(make_layer("Lead", "lead_synth", p, 12, segment_bars, ids));
             }
         }
         SegmentRole::Build => {
             if let Some(p) = lead {
-                layers.push(make_layer("Lead", "lead_synth", p, 12, ids));
+                layers.push(make_layer("Lead", "lead_synth", p, 12, segment_bars, ids));
             }
         }
         SegmentRole::Chorus | _ => {
             if let Some(p) = lead {
-                layers.push(make_layer("Lead", "lead_synth", p, 12, ids));
+                layers.push(make_layer("Lead", "lead_synth", p, 12, segment_bars, ids));
             }
             // Chorus doubles the lead an octave up for a denser, brighter
             // drop — a natural energy peak before the build-out.
             if let Some(p) = lead {
-                layers.push(make_layer("Lead Octave", "lead_synth", p, 24, ids));
+                layers.push(make_layer(
+                    "Lead Octave",
+                    "lead_synth",
+                    p,
+                    24,
+                    segment_bars,
+                    ids,
+                ));
             }
         }
     }
     layers
 }
 
-/// Create a layer referencing the pattern once at the segment start.
+/// Create a layer repeating the pattern once per bar across the segment.
+///
+/// A 1-bar pattern placed in an 8-bar segment must repeat 8 times for the
+/// loop to actually be 8 bars long — otherwise the compiled timeline would
+/// only contain one bar of material.
 fn make_layer(
     name: &str,
     instrument: &str,
     pattern: &Pattern,
     transpose: i32,
+    segment_bars: u32,
     ids: &mut IdSeq,
 ) -> Layer {
+    let ticks_per_bar = u64::from(PPQ) * u64::from(TimeSignature::default().numerator);
+    let repeat_every = u64::from(pattern.bars.max(1)) * ticks_per_bar;
+    let instance_count = segment_bars.div_ceil(pattern.bars.max(1));
+
+    let pattern_instances = (0..instance_count)
+        .map(|i| PatternInstance {
+            id: PatternInstanceId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+            pattern_id: pattern.id,
+            start_tick: Tick::new(repeat_every * u64::from(i)),
+            transpose,
+            velocity_multiplier: 1.0,
+        })
+        .collect();
+
     Layer {
         id: LayerId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
         name: name.to_string(),
         instrument: instrument.to_string(),
-        pattern_instances: vec![PatternInstance {
-            id: PatternInstanceId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
-            pattern_id: pattern.id,
-            start_tick: Tick::new(0),
-            transpose,
-            velocity_multiplier: 1.0,
-        }],
+        pattern_instances,
     }
 }
 

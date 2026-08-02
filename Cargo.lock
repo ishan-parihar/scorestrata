@@ -773,11 +773,18 @@ name = "scorestrata-eval"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "scorestrata-agent",
+ "scorestrata-audio",
  "scorestrata-compiler",
  "scorestrata-core",
+ "scorestrata-mcp",
+ "scorestrata-storage",
+ "scorestrata-testkit",
+ "scorestrata-theory",
  "scorestrata-validator",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

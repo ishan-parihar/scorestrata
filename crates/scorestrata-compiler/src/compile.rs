@@ -18,6 +18,20 @@ fn track_id_for_layer(layer_id: &LayerId) -> TrackId {
     TrackId::from_uuid(*layer_id.as_uuid())
 }
 
+/// Map a step velocity to a GM drum pitch.
+///
+/// The planner writes kick/snare/hat steps with distinct velocity tiers;
+/// the compiler reconstructs the drum voice from that tier so step patterns
+/// compile into real percussion events.
+#[must_use]
+const fn drum_pitch_for_velocity(velocity: u8) -> u8 {
+    match velocity {
+        105.. => 36,    // kick (C1)
+        95..=104 => 38, // snare (D1)
+        _ => 42,        // closed hat (F#1)
+    }
+}
+
 use crate::arrangement::expand_arrangement;
 use crate::timeline::{EventKind, TimelineEvent, TimelineIR};
 
@@ -75,6 +89,7 @@ pub fn compile_project(project: &Project) -> Result<TimelineIR, ScorestrataError
                 let instance_start = u64::from(instance.start_tick.0);
                 let transpose = i64::from(instance.transpose);
 
+                // Note-based patterns (melody, bass, pads).
                 for note in &pattern.notes {
                     let abs_tick = segment_start_tick + instance_start + note.start.0;
                     #[expect(
@@ -110,6 +125,49 @@ pub fn compile_project(project: &Project) -> Result<TimelineIR, ScorestrataError
                         pattern_id: Some(pattern.id),
                     });
                     next_event_id += 1;
+                }
+
+                // Step-sequencer patterns (drums): each active step becomes
+                // a 16th-note hit. The GM drum pitch is inferred from the
+                // step velocity tier set by the planner (kick=110, snare=100,
+                // hat=85); steps without a tier map to a closed hat.
+                if !pattern.steps.is_empty() {
+                    let sixteenth = u64::from(scorestrata_core::domain::PPQ) / 4;
+                    for step in &pattern.steps {
+                        if !step.active {
+                            continue;
+                        }
+                        let abs_tick =
+                            segment_start_tick + instance_start + u64::from(step.index) * sixteenth;
+                        let pitch = drum_pitch_for_velocity(step.velocity.0);
+                        let track_id = track_id_for_layer(&layer.id);
+                        events.push(TimelineEvent {
+                            id: next_event_id,
+                            tick: scorestrata_core::domain::Tick::new(abs_tick),
+                            kind: EventKind::NoteOn {
+                                pitch: scorestrata_core::domain::MidiNote::new(pitch),
+                                velocity: step.velocity,
+                            },
+                            track_id,
+                            segment_id: segment.id,
+                            layer_id: layer.id,
+                            pattern_id: Some(pattern.id),
+                        });
+                        next_event_id += 1;
+
+                        events.push(TimelineEvent {
+                            id: next_event_id,
+                            tick: scorestrata_core::domain::Tick::new(abs_tick + sixteenth),
+                            kind: EventKind::NoteOff {
+                                pitch: scorestrata_core::domain::MidiNote::new(pitch),
+                            },
+                            track_id,
+                            segment_id: segment.id,
+                            layer_id: layer.id,
+                            pattern_id: Some(pattern.id),
+                        });
+                        next_event_id += 1;
+                    }
                 }
             }
         }

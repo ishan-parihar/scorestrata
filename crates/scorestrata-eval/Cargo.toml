@@ -14,5 +14,14 @@ serde_json.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 
+[dev-dependencies]
+scorestrata-theory = { path = "../scorestrata-theory" }
+scorestrata-audio = { path = "../scorestrata-audio" }
+scorestrata-storage = { path = "../scorestrata-storage" }
+scorestrata-agent = { path = "../scorestrata-agent" }
+scorestrata-mcp = { path = "../scorestrata-mcp" }
+scorestrata-testkit = { path = "../scorestrata-testkit" }
+tempfile = "3"
+
 [lints]
 workspace = true
