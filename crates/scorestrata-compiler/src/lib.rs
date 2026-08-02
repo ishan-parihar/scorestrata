@@ -10,6 +10,7 @@ pub mod compile;
 pub mod diagnostics;
 pub mod midi_export;
 pub mod passes;
+pub mod plan;
 pub mod timeline;
 
 use scorestrata_core::error::ScorestrataError;

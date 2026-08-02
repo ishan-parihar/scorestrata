@@ -15,10 +15,13 @@ scorestrata-theory = { path = "../scorestrata-theory" }
 scorestrata-compiler = { path = "../scorestrata-compiler" }
 scorestrata-validator = { path = "../scorestrata-validator" }
 scorestrata-storage = { path = "../scorestrata-storage" }
+scorestrata-mcp = { path = "../scorestrata-mcp" }
+scorestrata-testkit = { path = "../scorestrata-testkit" }
 clap.workspace = true
 colored.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
 
 [lints]
 workspace = true

@@ -723,11 +723,14 @@ name = "scorestrata-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "colored",
  "scorestrata-compiler",
  "scorestrata-core",
+ "scorestrata-mcp",
  "scorestrata-storage",
+ "scorestrata-testkit",
  "scorestrata-theory",
  "scorestrata-validator",
  "serde_json",

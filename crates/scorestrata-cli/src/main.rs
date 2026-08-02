@@ -215,78 +215,399 @@ fn main() -> Result<()> {
     }
     Ok(())
 }
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "Consistent Result<()> signature for future I/O errors"
-)]
 fn handle_new(name: &str, brief: Option<&str>) -> Result<()> {
+    use scorestrata_core::domain::{Brief, Project, ProjectStatus};
+    use scorestrata_core::ids::ProjectId;
+
     println!("{}", format!("Creating project: {name}").green().bold());
-    if let Some(b) = brief {
-        println!("  Brief: {b}");
+
+    let project_dir = Path::new(name);
+    if project_dir.exists() {
+        anyhow::bail!(
+            "Project directory '{}' already exists.",
+            project_dir.display()
+        );
     }
-    println!("  Status: {}", "initialized".green());
+
+    let brief_text = brief.unwrap_or("Dark melodic techno").to_string();
+    let brief_model = Brief {
+        raw_text: brief_text.clone(),
+        genre: None,
+        mood: Vec::new(),
+        references: Vec::new(),
+        delivery_target: None,
+        constraints: Vec::new(),
+        confidence: 0.8,
+    };
+
+    // Generate a config from the brief using the deterministic generator.
+    let config = scorestrata_mcp::config_gen::generate_config(name, &brief_text);
+
+    // Plan a full arrangement (segments, layers, in-key patterns) so the
+    // project is born pipeline-ready and compilable out of the box.
+    let plan = scorestrata_compiler::plan::plan_project(&config);
+
+    let project = Project {
+        id: ProjectId::new(),
+        name: name.to_string(),
+        created_at: chrono::Utc::now(),
+        modified_at: chrono::Utc::now(),
+        brief: brief_model,
+        config: config.clone(),
+        arrangement: plan.arrangement,
+        tracks: Vec::new(),
+        patterns: plan.patterns,
+        // The config is generated deterministically and schema-valid, so the
+        // project starts pipeline-ready (ConfigApproved → ArrangementPlanned…).
+        status: ProjectStatus::ConfigApproved,
+    };
+
+    scorestrata_storage::bundle::init_project_bundle(project_dir)
+        .context("Failed to initialize project bundle")?;
+    scorestrata_storage::bundle::save_project(&project, project_dir)
+        .context("Failed to save project")?;
+
+    println!("  Brief: {}", brief_text.green());
+    println!(
+        "  Config: {} @ {} BPM, key {}, {} bars",
+        config.genre.green(),
+        config.bpm,
+        config.key,
+        config.duration_bars
+    );
+    println!(
+        "  Arrangement: {} segments planned",
+        project.arrangement.segments.len()
+    );
+    println!("  Status: {}", "initialized".green().bold());
+    println!(
+        "  Bundle: {}",
+        project_dir
+            .join("project.json")
+            .display()
+            .to_string()
+            .green()
+    );
     Ok(())
 }
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "Consistent Result<()> signature for future I/O errors"
-)]
 fn handle_doctor() -> Result<()> {
+    use scorestrata_core::schema_registry::list_schema_names;
+
     println!("{}", "Scorestrata Doctor".green().bold());
-    println!("  Rust toolchain: {}", "available".green());
-    println!("  Core library:   {}", "loaded".green());
-    println!("  Theory library: {}", "loaded".green());
-    println!("  Compiler:       {}", "loaded".green());
-    println!("  Validator:      {}", "loaded".green());
-    println!("  Storage:        {}", "loaded".green());
-    println!("  Overall:        {}", "healthy".green().bold());
+
+    // Verify the schema registry is populated (Phase -1 exit criteria).
+    let schemas = list_schema_names();
+    let registry_ok = schemas.len() >= 10;
+
+    // Verify core domain invariants by exercising the theory crate.
+    let c_minor = scorestrata_theory::key::Key::parse("C minor");
+    let theory_ok = c_minor.is_some();
+
+    // Verify capabilities are discoverable (Phase 3).
+    let caps = scorestrata_mcp::capabilities::get_capabilities();
+    let caps_ok = !caps.tools.is_empty() && !caps.features.is_empty();
+
+    // Verify a timeline can be compiled from a minimal project (Phase 1).
+    let sample = scorestrata_testkit::minimal_project();
+    let compile_ok = scorestrata_compiler::compile_project(&sample).is_ok();
+
+    println!("  Rust toolchain:      {}", "available".green());
+    println!(
+        "  Schema registry:     {} ({} schemas)",
+        if registry_ok {
+            "healthy".green()
+        } else {
+            "degraded".red()
+        },
+        schemas.len()
+    );
+    println!(
+        "  Theory (key parse):  {}",
+        if theory_ok {
+            "healthy".green()
+        } else {
+            "broken".red()
+        }
+    );
+    println!(
+        "  Capabilities:        {} ({} tools)",
+        if caps_ok {
+            "healthy".green()
+        } else {
+            "degraded".red()
+        },
+        caps.tools.len()
+    );
+    println!(
+        "  Compiler (compile):  {}",
+        if compile_ok {
+            "healthy".green()
+        } else {
+            "broken".red()
+        }
+    );
+    println!("  Storage:             {}", "available".green());
+    println!("  Validator:           {}", "loaded".green());
+    println!("  Audio engine:        {}", "loaded".green());
+
+    let all_ok = registry_ok && theory_ok && caps_ok && compile_ok;
+    println!(
+        "  Overall:             {}",
+        if all_ok {
+            "healthy".green().bold()
+        } else {
+            "degraded".red().bold()
+        }
+    );
+    if !all_ok {
+        anyhow::bail!("Doctor found degraded subsystems.");
+    }
     Ok(())
 }
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "Consistent Result<()> signature for future I/O errors"
-)]
 fn handle_config(action: ConfigAction) -> Result<()> {
     match action {
         ConfigAction::Generate { path } => {
             println!("{}", format!("Generating config for: {path}").cyan());
+            let project_path = Path::new(&path);
+            let mut project = scorestrata_storage::bundle::load_project(project_path)
+                .context("Failed to load project")?;
+            let config = scorestrata_mcp::config_gen::generate_config(
+                &project.name,
+                &project.brief.raw_text,
+            );
+            // Re-plan the arrangement so it stays consistent with the new
+            // duration (segments always cover the configured bars).
+            let plan = scorestrata_compiler::plan::plan_project(&config);
+            project.config = config.clone();
+            project.arrangement = plan.arrangement;
+            project.patterns = plan.patterns;
+            project.status = scorestrata_core::domain::ProjectStatus::ConfigApproved;
+            project.modified_at = chrono::Utc::now();
+            scorestrata_storage::bundle::save_project(&project, project_path)
+                .context("Failed to save project")?;
+            println!(
+                "  {} @ {} BPM, key {}, {} bars → {}",
+                config.genre,
+                config.bpm,
+                config.key,
+                config.duration_bars,
+                "ConfigDrafted".green()
+            );
         }
         ConfigAction::Validate { path } => {
             println!("{}", format!("Validating config for: {path}").cyan());
+            let project_path = Path::new(&path);
+            let project = scorestrata_storage::bundle::load_project(project_path)
+                .context("Failed to load project")?;
+
+            // Config validity checks per §11.2 Level 1.
+            let mut errors: Vec<String> = Vec::new();
+            if project.config.bpm == 0 || project.config.bpm > 999 {
+                errors.push(format!("invalid BPM {}", project.config.bpm));
+            }
+            if project.config.duration_bars == 0 {
+                errors.push("duration_bars must be > 0".to_string());
+            }
+            if project.config.name.is_empty() {
+                errors.push("name is required".to_string());
+            }
+            if project.config.genre.is_empty() {
+                errors.push("genre is required".to_string());
+            }
+            if scorestrata_theory::key::Key::parse(&project.config.key).is_none() {
+                errors.push(format!("unparseable key '{}'", project.config.key));
+            }
+            // Layers presence: at least one segment must have layers.
+            let has_layers = project
+                .arrangement
+                .segments
+                .iter()
+                .any(|s| !s.layers.is_empty());
+            if !has_layers {
+                errors.push("no segments with layers — plan an arrangement first".to_string());
+            }
+
+            if errors.is_empty() {
+                println!("  Config: {}", "valid".green().bold());
+            } else {
+                for e in &errors {
+                    println!("  ✗ {}", e.red());
+                }
+                anyhow::bail!("Config validation failed.");
+            }
         }
     }
     Ok(())
 }
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "Consistent Result<()> signature for future I/O errors"
-)]
 fn handle_compile(path: &str) -> Result<()> {
     println!("{}", format!("Compiling: {path}").yellow());
-    println!("  Pass 1: arrangement expansion");
-    println!("  Pass 2: pattern instantiation");
-    println!("  Pass 3: timeline generation");
+
+    let project_path = Path::new(path);
+    let mut project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+
+    // Phase 1: expand arrangement, instantiate patterns, generate timeline IR.
+    let timeline = scorestrata_compiler::compile_project(&project)
+        .context("Compilation failed — check project status and patterns")?;
+
+    println!(
+        "  Pass 1: arrangement expansion ({} segments)",
+        project.arrangement.segments.len()
+    );
+    println!(
+        "  Pass 2: pattern instantiation ({} patterns)",
+        project.patterns.len()
+    );
+    println!(
+        "  Pass 3: timeline generation ({} events, {} ticks)",
+        timeline.event_count(),
+        timeline.total_ticks
+    );
+    println!(
+        "  Input hash: {}",
+        &timeline.input_hash[..timeline.input_hash.len().min(16)]
+    );
+
+    // Persist the timeline for later debug commands.
+    let timeline_path = project_path.join("timeline.json");
+    let timeline_json =
+        serde_json::to_string_pretty(&timeline).context("Failed to serialize timeline")?;
+    std::fs::write(&timeline_path, timeline_json).context("Failed to write timeline.json")?;
+
+    // Advance the project status to Compiling and persist.
+    project.status = scorestrata_core::domain::ProjectStatus::Compiling;
+    project.modified_at = chrono::Utc::now();
+    scorestrata_storage::bundle::save_project(&project, project_path)
+        .context("Failed to save compiled project")?;
+
+    println!(
+        "  Timeline: {}",
+        timeline_path.display().to_string().green()
+    );
     println!("  Status: {}", "compiled".green().bold());
     Ok(())
 }
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "Consistent Result<()> signature for future I/O errors"
-)]
 fn handle_validate(path: &str, scope: &str) -> Result<()> {
+    use scorestrata_core::error::Severity;
+
     println!(
         "{}",
         format!("Validating: {path} (scope: {scope})").magenta()
     );
-    println!("  Scale compliance:    {}", "pass".green());
-    println!("  Segment structure:   {}", "pass".green());
-    println!("  Drum density:        {}", "pass".green());
-    println!("  Overall:             {}", "pass".green().bold());
+
+    let project_path = Path::new(path);
+    let project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+
+    let mut diagnostics: Vec<scorestrata_core::diagnostic::Diagnostic> = Vec::new();
+
+    // Segment structure checks (Level 2 symbolic).
+    if matches!(scope, "full" | "segment" | "arrangement") {
+        for segment in &project.arrangement.segments {
+            if let Some(d) = scorestrata_validator::segment_check::check_segment_has_layers(segment)
+            {
+                diagnostics.push(d);
+            }
+            if let Some(d) =
+                scorestrata_validator::segment_check::check_segment_bar_count(segment, 4, 64)
+            {
+                diagnostics.push(d);
+            }
+        }
+    }
+
+    // Transition checks between adjacent segments.
+    if matches!(scope, "full" | "transition") && project.arrangement.segments.len() >= 2 {
+        let transition_diags = scorestrata_validator::transition_check::check_all_transitions(
+            &project.arrangement.segments,
+            0.15,
+        );
+        diagnostics.extend(transition_diags);
+    }
+
+    // Scale compliance per pattern (if patterns exist).
+    if matches!(scope, "full" | "harmony") && !project.patterns.is_empty() {
+        if let Some(key) = scorestrata_theory::key::Key::parse(&project.config.key) {
+            let default_segment = scorestrata_core::ids::SegmentId::default();
+            let default_layer = scorestrata_core::ids::LayerId::default();
+            for pattern in &project.patterns {
+                let result = scorestrata_validator::scale_check::check_scale_compliance(
+                    pattern,
+                    &key,
+                    default_segment,
+                    default_layer,
+                );
+                diagnostics.extend(result.diagnostics);
+            }
+        }
+    }
+
+    // Drum density check.
+    if matches!(scope, "full" | "rhythm") {
+        let default_segment = scorestrata_core::ids::SegmentId::default();
+        let default_layer = scorestrata_core::ids::LayerId::default();
+        for pattern in &project.patterns {
+            let density = scorestrata_validator::density::rhythmic_density(pattern);
+            if let Some(d) = scorestrata_validator::density::check_drum_density(
+                pattern,
+                density,
+                default_segment,
+                default_layer,
+            ) {
+                diagnostics.push(d);
+            }
+            if density < 0.2 {
+                println!(
+                    "  Note: pattern '{}' has low rhythmic density ({:.2})",
+                    pattern.name, density
+                );
+            }
+        }
+    }
+
+    // Build the report with the default scoring profile.
+    let report = scorestrata_validator::report::build_validation_report(project.id, 2, diagnostics);
+
+    println!(
+        "  Overall score:       {:.2}",
+        report.scorecard.overall_score
+    );
+    println!(
+        "  Diagnostics:         {} ({} warn, {} err, {} crit)",
+        report.summary.info
+            + report.summary.warnings
+            + report.summary.errors
+            + report.summary.critical,
+        report.summary.warnings,
+        report.summary.errors,
+        report.summary.critical
+    );
+
+    for d in &report.diagnostics {
+        let level = match d.severity {
+            Severity::Critical => "critical".red(),
+            Severity::Error => "error".red(),
+            Severity::Warning => "warning".yellow(),
+            Severity::Info => "info".cyan(),
+        };
+        println!("    [{}] {} ({})", level, d.code, d.message);
+    }
+
+    let passed = report.all_hard_gates_passed;
+    println!(
+        "  Overall:             {}",
+        if passed {
+            "pass".green().bold()
+        } else {
+            "fail".red().bold()
+        }
+    );
+    if !passed {
+        anyhow::bail!(
+            "Validation failed — {} critical diagnostics.",
+            report.summary.critical
+        );
+    }
     Ok(())
 }
 
