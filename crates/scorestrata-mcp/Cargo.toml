@@ -21,6 +21,7 @@ chrono.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+scorestrata-testkit = { path = "../scorestrata-testkit" }
 
 [lints]
 workspace = true

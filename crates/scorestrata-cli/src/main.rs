@@ -670,6 +670,60 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
         })
         .collect();
 
+    let render_path = project_path.join("render");
+    std::fs::create_dir_all(&render_path).context("Failed to create render directory")?;
+
+    // Stems mode: write one WAV per layer plus the master mix (§16 stems).
+    if mode == "stems" {
+        let (stems, master) = scorestrata_audio::render::render_stems(
+            &notes,
+            timeline.bpm,
+            scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+            &[],
+        )
+        .context("Stems render failed")?;
+
+        let stems_dir = render_path.join("stems");
+        std::fs::create_dir_all(&stems_dir).context("Failed to create stems directory")?;
+        for stem in &stems {
+            let safe_name = stem.layer_name.replace([' ', '/'], "_");
+            let stem_path = stems_dir.join(format!("{safe_name}.wav"));
+            std::fs::write(&stem_path, &stem.wav_bytes).context("Failed to write stem WAV")?;
+        }
+        let master_path = render_path.join("master.wav");
+        std::fs::write(&master_path, &master.wav_bytes).context("Failed to write master WAV")?;
+
+        println!("  Events:            {}", timeline.event_count());
+        println!("  Duration:          {:.2}s", master.duration_seconds);
+        println!("  Stems:             {}", stems.len());
+        for stem in &stems {
+            println!(
+                "    - {}  ({:.1} LUFS, {:.1} dBTP, sha256 {})",
+                stem.layer_name,
+                stem.analysis.integrated_lufs,
+                stem.analysis.true_peak_dbtp,
+                &stem.checksum[..8.min(stem.checksum.len())]
+            );
+        }
+        println!(
+            "  Master LUFS:       {:.1}",
+            master.analysis.integrated_lufs
+        );
+        println!(
+            "  Master true peak:  {:.1} dBTP",
+            master.analysis.true_peak_dbtp
+        );
+        println!(
+            "  Master checksum:   {}",
+            &master.checksum[..16.min(master.checksum.len())]
+        );
+        println!(
+            "  Output:            {}",
+            stems_dir.display().to_string().green()
+        );
+        return Ok(());
+    }
+
     let result = scorestrata_audio::render::render_notes(
         &notes,
         timeline.bpm,
@@ -678,14 +732,24 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
     )
     .context("Render failed")?;
 
-    let render_path = project_path.join("render");
-    std::fs::create_dir_all(&render_path).context("Failed to create render directory")?;
     let wav_path = render_path.join(format!("{mode}.wav"));
     std::fs::write(&wav_path, &result.wav_bytes).context("Failed to write WAV")?;
 
     println!("  Events:            {}", timeline.event_count());
     println!("  Duration:          {:.2}s", result.duration_seconds);
     println!("  WAV bytes:         {}", result.wav_bytes.len());
+    println!(
+        "  Integrated LUFS:   {:.1}",
+        result.analysis.integrated_lufs
+    );
+    println!(
+        "  True peak:         {:.1} dBTP",
+        result.analysis.true_peak_dbtp
+    );
+    println!(
+        "  Crest factor:      {:.1} dB",
+        result.analysis.crest_factor
+    );
     println!(
         "  Checksum (sha256): {}",
         &result.checksum[..16.min(result.checksum.len())]
@@ -1320,6 +1384,15 @@ mod tests {
         let cli = Cli::try_parse_from(["ss", "render", "my_song"]).unwrap();
         match cli.command {
             Commands::Render { mode, .. } => assert_eq!(mode, "master"),
+            _ => panic!("expected Commands::Render"),
+        }
+    }
+
+    #[test]
+    fn parse_render_command_stems_mode() {
+        let cli = Cli::try_parse_from(["ss", "render", "my_song", "--mode", "stems"]).unwrap();
+        match cli.command {
+            Commands::Render { mode, .. } => assert_eq!(mode, "stems"),
             _ => panic!("expected Commands::Render"),
         }
     }

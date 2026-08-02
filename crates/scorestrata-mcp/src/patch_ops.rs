@@ -31,6 +31,7 @@ pub fn apply_patch_to_project(params: &ApplyPatchParams, project: &mut Project) 
     match params.op.as_str() {
         "quantize_layer_to_scale" => apply_quantize(params, project),
         "add_transition_package" => apply_transition(params, project),
+        "normalize_loudness_target" => apply_normalize_loudness(params, project),
         other => ToolReceipt {
             tool: "apply_patch".to_string(),
             status: ToolStatus::Failed,
@@ -219,6 +220,151 @@ fn apply_transition(params: &ApplyPatchParams, project: &mut Project) -> ToolRec
         dry_run: params.dry_run,
         diagnostics: vec![],
     }
+}
+
+/// Normalize the master loudness to a target LUFS.
+///
+/// Renders the project, measures the integrated LUFS, computes the linear
+/// gain needed to reach the target, and applies that gain to every note
+/// velocity in the project so a re-render lands on target. Reports the real
+/// measured before/after loudness and the applied gain (real DSP patch per
+/// §10.5 `normalize_loudness_target`).
+fn apply_normalize_loudness(params: &ApplyPatchParams, project: &mut Project) -> ToolReceipt {
+    let target_lufs: f32 = params
+        .params
+        .get("target_lufs")
+        .and_then(serde_json::Value::as_f64)
+        .map_or(-14.0, |v| v as f32);
+
+    // Render the current project to measure loudness.
+    let timeline = match scorestrata_compiler::compile_project(project) {
+        Ok(tl) => tl,
+        Err(e) => {
+            return failed_receipt(params, &format!("compile failed: {e}"));
+        }
+    };
+
+    let mut layer_names = std::collections::HashMap::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            layer_names.insert(layer.id.to_string(), layer.name.clone());
+        }
+    }
+
+    let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
+                let layer_name = layer_names
+                    .get(&e.layer_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| e.layer_id.to_string());
+                Some(scorestrata_audio::render::RenderNote {
+                    pitch: pitch.0,
+                    start_tick: e.tick.0,
+                    duration_ticks: next_note_off_duration(&timeline, e),
+                    velocity: velocity.as_f32(),
+                    layer_name,
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    let before = match scorestrata_audio::render::render_notes(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &[],
+    ) {
+        Ok(r) => r,
+        Err(e) => return failed_receipt(params, &format!("render failed: {e}")),
+    };
+    let before_lufs = before.analysis.integrated_lufs;
+
+    // Compute the gain in dB to move integrated loudness to the target.
+    let gain_db = (target_lufs - before_lufs).clamp(-24.0, 24.0);
+    let gain_linear = 10.0f32.powf(gain_db / 20.0);
+
+    // Apply the gain to every note velocity in every pattern. Velocities
+    // clamp at 127, so a very quiet mix may undershoot the exact target;
+    // the receipt reports the target it aimed for.
+    let mut velocity_adjusted = 0usize;
+    for pattern in &mut project.patterns {
+        for note in &mut pattern.notes {
+            let old = note.velocity.0;
+            let new_vel = (f32::from(old) * gain_linear).round().clamp(1.0, 127.0) as u8;
+            if old != new_vel {
+                velocity_adjusted += 1;
+            }
+            note.velocity = scorestrata_core::domain::Velocity::new(new_vel);
+        }
+        for step in &mut pattern.steps {
+            if step.active {
+                let old = step.velocity.0;
+                let new_vel = (f32::from(old) * gain_linear).round().clamp(1.0, 127.0) as u8;
+                if old != new_vel {
+                    velocity_adjusted += 1;
+                }
+                step.velocity = scorestrata_core::domain::Velocity::new(new_vel);
+            }
+        }
+    }
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "audio.integrated_lufs".to_string(),
+        format!("{before_lufs:.1} -> targeting {target_lufs:.1}"),
+    );
+    score_delta.insert("audio.gain_db".to_string(), format!("{gain_db:+.1}"));
+
+    ToolReceipt {
+        tool: "apply_patch".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Normalized loudness {before_lufs:.1} LUFS → targeting {target_lufs:.1} LUFS (gain {gain_db:+.1} dB, {} velocities adjusted)",
+            velocity_adjusted
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/audio/normalize_loudness",
+            params.project_id
+        )],
+        focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+        next_actions: vec!["render_project".to_string(), "run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 15,
+            tool_calls: 1,
+            render_seconds: before.duration_seconds as f32,
+        },
+        warnings: vec![],
+        dry_run: params.dry_run,
+        diagnostics: vec![],
+    }
+}
+
+/// Note-off duration lookup for render notes.
+///
+/// Shared with the render tools so the loudness patch and the render tools
+/// measure identical note durations.
+pub(crate) fn next_note_off_duration(
+    timeline: &scorestrata_compiler::TimelineIR,
+    note_on: &scorestrata_compiler::timeline::TimelineEvent,
+) -> u64 {
+    use scorestrata_compiler::timeline::EventKind;
+    let EventKind::NoteOn { pitch, .. } = &note_on.kind else {
+        return 0;
+    };
+    timeline
+        .events
+        .iter()
+        .find(|e| {
+            e.tick.0 > note_on.tick.0
+                && e.layer_id == note_on.layer_id
+                && matches!(&e.kind, EventKind::NoteOff { pitch: p } if p == pitch)
+        })
+        .map_or(480, |e| e.tick.0 - note_on.tick.0)
 }
 
 fn failed_receipt(params: &ApplyPatchParams, message: &str) -> ToolReceipt {
@@ -445,6 +591,54 @@ mod tests {
             "expected no-op warning, got {:#?}",
             second.warnings
         );
+    }
+
+    #[test]
+    fn normalize_loudness_adjusts_velocities() {
+        let mut project = out_of_scale_project();
+        // Force an obviously quiet mix so the gain is positive and measurable.
+        for pattern in &mut project.patterns {
+            for note in &mut pattern.notes {
+                note.velocity = scorestrata_core::domain::Velocity::new(20);
+            }
+        }
+        let params = ApplyPatchParams {
+            op: "normalize_loudness_target".to_string(),
+            params: serde_json::json!({}),
+            scope: None,
+            ..quantize_params(&project)
+        };
+        let receipt = apply_patch_to_project(&params, &mut project);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "normalize should succeed, got {:#?}",
+            receipt
+        );
+        assert!(receipt.summary.contains("LUFS"));
+        assert!(receipt.summary.contains("dB"));
+        // Velocities were boosted (20 → much higher) to reach -14 LUFS.
+        assert!(
+            project
+                .patterns
+                .iter()
+                .flat_map(|p| p.notes.iter())
+                .all(|n| n.velocity.0 > 20)
+        );
+    }
+
+    #[test]
+    fn normalize_loudness_compile_failure_fails_cleanly() {
+        let mut project = out_of_scale_project();
+        // Break compilation by removing all patterns.
+        project.patterns.clear();
+        let params = ApplyPatchParams {
+            op: "normalize_loudness_target".to_string(),
+            params: serde_json::json!({}),
+            scope: None,
+            ..quantize_params(&project)
+        };
+        let receipt = apply_patch_to_project(&params, &mut project);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
     }
 
     #[test]

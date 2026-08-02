@@ -1216,7 +1216,7 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
                 Some(scorestrata_audio::render::RenderNote {
                     pitch: pitch.0,
                     start_tick: e.tick.0,
-                    duration_ticks: next_note_off(&timeline, e),
+                    duration_ticks: crate::patch_ops::next_note_off_duration(&timeline, e),
                     velocity: velocity.as_f32(),
                     layer_name,
                 })
@@ -1232,16 +1232,43 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
         &[],
     ) {
         Ok(result) => {
+            // Level-4 audio validation: surface LUFS / true peak / clipping
+            // diagnostics on the receipt so the agent loop can react to mix
+            // issues without a separate round trip.
+            let audio_diags =
+                scorestrata_validator::audio_check::generate_audio_diagnostics(&result.analysis);
+            let mut warnings = audio_diags
+                .iter()
+                .map(|d| d.message.clone())
+                .collect::<Vec<_>>();
+            if warnings.is_empty() {
+                warnings.push(format!(
+                    "Level-4 audio: {:.1} LUFS, {:.1} dBTP, no clipping",
+                    result.analysis.integrated_lufs, result.analysis.true_peak_dbtp
+                ));
+            }
+
             let mut score_delta = BTreeMap::new();
             score_delta.insert("render.determinism".to_string(), "+1.0".to_string());
+            score_delta.insert(
+                "audio.true_peak_dbtp".to_string(),
+                format!("{:.1}", result.analysis.true_peak_dbtp),
+            );
+            score_delta.insert(
+                "audio.integrated_lufs".to_string(),
+                format!("{:.1}", result.analysis.integrated_lufs),
+            );
+
             ToolReceipt {
                 tool: "render_project".to_string(),
                 status: ToolStatus::Succeeded,
                 summary: format!(
-                    "Rendered {} events ({:.2}s, sha256 {}) in '{}' mode",
+                    "Rendered {} events ({:.2}s, sha256 {}, {:.1} LUFS, {:.1} dBTP) in '{}' mode",
                     timeline.event_count(),
                     result.duration_seconds,
                     &result.checksum[..8.min(result.checksum.len())],
+                    result.analysis.integrated_lufs,
+                    result.analysis.true_peak_dbtp,
                     params.mode
                 ),
                 score_delta,
@@ -1250,15 +1277,19 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
                     params.project_id, params.mode
                 )],
                 focus_uris: vec![],
-                next_actions: vec!["get_render_job".to_string(), "run_validation".to_string()],
+                next_actions: vec![
+                    "get_render_job".to_string(),
+                    "run_validation".to_string(),
+                    "apply_patch".to_string(),
+                ],
                 cost: ToolCost {
                     cpu_ms: 10,
                     tool_calls: 1,
                     render_seconds: result.duration_seconds as f32,
                 },
-                warnings: vec![],
+                warnings,
                 dry_run: false,
-                diagnostics: vec![],
+                diagnostics: audio_diags,
             }
         }
         Err(e) => ToolReceipt {
@@ -1275,30 +1306,6 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
             diagnostics: vec![],
         },
     }
-}
-
-/// Find the note-off tick for a note-on event (duration to matching note-off).
-///
-/// The matching note-off must share the note-on's **pitch and layer** —
-/// matching by time alone would pair a note with a different layer's
-/// release whenever layers overlap.
-fn next_note_off(
-    timeline: &scorestrata_compiler::TimelineIR,
-    note_on: &scorestrata_compiler::timeline::TimelineEvent,
-) -> u64 {
-    use scorestrata_compiler::timeline::EventKind;
-    let EventKind::NoteOn { pitch, .. } = &note_on.kind else {
-        return 0;
-    };
-    timeline
-        .events
-        .iter()
-        .find(|e| {
-            e.tick.0 > note_on.tick.0
-                && e.layer_id == note_on.layer_id
-                && matches!(&e.kind, EventKind::NoteOff { pitch: p } if p == pitch)
-        })
-        .map_or(480, |e| e.tick.0 - note_on.tick.0)
 }
 
 /// Parameters for `render_segment` tool.
@@ -1327,6 +1334,178 @@ pub fn render_segment(params: &RenderSegmentParams) -> ToolReceipt {
         project: params.project.clone(),
         segment_id: Some(params.segment_id.clone()),
     })
+}
+
+/// Parameters for `render_stems` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderStemsParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project to render.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Render each layer to its own WAV stem plus a mixed master.
+///
+/// Produces real per-layer WAV artifacts with deterministic checksums and
+/// per-stem Level-4 loudness analysis (deterministic stems per §16).
+#[must_use]
+pub fn render_stems(params: &RenderStemsParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "render_stems".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Stems render requested for project '{}' but no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to render".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let project: scorestrata_core::domain::Project =
+        match serde_json::from_value(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolReceipt {
+                    tool: "render_stems".to_string(),
+                    status: ToolStatus::Failed,
+                    summary: format!("Could not deserialize project: {e}"),
+                    score_delta: BTreeMap::new(),
+                    evidence_uris: vec![],
+                    focus_uris: vec![],
+                    next_actions: vec!["get_project_summary".to_string()],
+                    cost: ToolCost::default(),
+                    warnings: vec!["Invalid project payload".to_string()],
+                    dry_run: false,
+                    diagnostics: vec![],
+                };
+            }
+        };
+
+    let timeline = match scorestrata_compiler::compile_project(&project) {
+        Ok(tl) => tl,
+        Err(e) => {
+            return ToolReceipt {
+                tool: "render_stems".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Could not compile project: {e}"),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec!["run_validation".to_string()],
+                cost: ToolCost::default(),
+                warnings: vec!["Compilation failed".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    };
+
+    // Map layer IDs to human-readable names for voice assignment.
+    let mut layer_names = std::collections::HashMap::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            layer_names.insert(layer.id.to_string(), layer.name.clone());
+        }
+    }
+
+    let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
+                let layer_name = layer_names
+                    .get(&e.layer_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| e.layer_id.to_string());
+                Some(scorestrata_audio::render::RenderNote {
+                    pitch: pitch.0,
+                    start_tick: e.tick.0,
+                    duration_ticks: crate::patch_ops::next_note_off_duration(&timeline, e),
+                    velocity: velocity.as_f32(),
+                    layer_name,
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    match scorestrata_audio::render::render_stems(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &[],
+    ) {
+        Ok((stems, master)) => {
+            let stem_summary = stems
+                .iter()
+                .map(|s| format!("{}:{:.1}LUFS", s.layer_name, s.analysis.integrated_lufs))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let evidence_uris = stems
+                .iter()
+                .map(|s| {
+                    format!(
+                        "project://{}/render/stems/{}",
+                        params.project_id, s.layer_name
+                    )
+                })
+                .collect();
+            let mut score_delta = BTreeMap::new();
+            score_delta.insert("render.stems".to_string(), format!("+{}", stems.len()));
+            score_delta.insert(
+                "audio.integrated_lufs".to_string(),
+                format!("{:.1}", master.analysis.integrated_lufs),
+            );
+
+            ToolReceipt {
+                tool: "render_stems".to_string(),
+                status: ToolStatus::Succeeded,
+                summary: format!(
+                    "Rendered {} stems ({:.2}s master, sha256 {}): {stem_summary}",
+                    stems.len(),
+                    master.duration_seconds,
+                    &master.checksum[..8.min(master.checksum.len())]
+                ),
+                score_delta,
+                evidence_uris,
+                focus_uris: vec![format!("project://{}/render/stems", params.project_id)],
+                next_actions: vec!["render_project".to_string(), "run_validation".to_string()],
+                cost: ToolCost {
+                    cpu_ms: 20,
+                    tool_calls: u32::try_from(stems.len()).unwrap_or(u32::MAX),
+                    render_seconds: master.duration_seconds as f32,
+                },
+                warnings: vec![],
+                dry_run: false,
+                diagnostics: vec![],
+            }
+        }
+        Err(e) => ToolReceipt {
+            tool: "render_stems".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Stems render failed: {e}"),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_failure_report".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Render engine error".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1766,5 +1945,43 @@ mod tests {
         // Without a project payload, the render cannot run — it fails cleanly.
         assert!(matches!(receipt.status, ToolStatus::Failed));
         assert!(receipt.summary.contains("no project payload"));
+    }
+
+    #[test]
+    fn render_stems_without_payload_fails_cleanly() {
+        let params = RenderStemsParams {
+            project_id: "proj_1".to_string(),
+            project: None,
+        };
+        let receipt = render_stems(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("No project payload"))
+        );
+    }
+
+    #[test]
+    fn render_stems_with_project_produces_stems() {
+        // Build a real project (planner-populated with patterns) via the
+        // testkit and serialize it — a minimal project has no pattern
+        // instances, so it would compile to zero events and zero stems.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let project_json = serde_json::to_value(&project).expect("project serializes");
+        let params = RenderStemsParams {
+            project_id: project.id.to_string(),
+            project: Some(project_json),
+        };
+        let receipt = render_stems(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "stems render should succeed, got {:#?}",
+            receipt
+        );
+        assert!(receipt.summary.contains("stems"));
+        assert!(receipt.score_delta.contains_key("render.stems"));
+        assert!(!receipt.evidence_uris.is_empty());
     }
 }

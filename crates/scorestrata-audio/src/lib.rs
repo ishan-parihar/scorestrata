@@ -9,9 +9,11 @@
 //! - `mixer`: multi-channel mixer with constant-power pan law
 //! - `wav`: WAV file writer
 //! - `render`: deterministic offline render of timelines to WAV
+//! - `analysis`: Level 4 audio metrics (LUFS, true peak, clipping, …)
 
 #![deny(missing_docs)]
 
+pub mod analysis;
 pub mod mixer;
 pub mod render;
 pub mod sampler;

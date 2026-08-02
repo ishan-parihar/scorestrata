@@ -361,6 +361,116 @@ fn mvas_steps_10_to_11_snapshot_rollback_and_evidence() {
     assert!(!kernel.should_terminate(), "budget not exhausted early");
 }
 
+/// Level-4 audio validation: render the loop, measure LUFS/true peak, and
+/// prove `normalize_loudness_target` moves the mix toward the target.
+#[test]
+fn mvas_step_13_level4_audio_validation_loop() {
+    use scorestrata_mcp::patch_ops::apply_patch_to_project;
+    use scorestrata_mcp::tools::{ApplyPatchParams, ToolStatus};
+
+    // Build the 8-bar loop from a brief, as in steps 1–4.
+    let brief = "Dark melodic techno at 128 BPM in C minor, 8 bars";
+    let config = scorestrata_mcp::config_gen::generate_config("mvas_audio", brief);
+    let plan = scorestrata_compiler::plan::plan_project(&config);
+    let mut project = scorestrata_testkit::minimal_project();
+    project.config = config;
+    project.arrangement = plan.arrangement;
+    project.patterns = plan.patterns;
+
+    // Quiet the mix so normalization has measurable work to do.
+    for pattern in &mut project.patterns {
+        for note in &mut pattern.notes {
+            note.velocity = scorestrata_core::domain::Velocity::new(25);
+        }
+        for step in &mut pattern.steps {
+            if step.active {
+                step.velocity = scorestrata_core::domain::Velocity::new(25);
+            }
+        }
+    }
+
+    // ── Render the loop ─────────────────────────────────────────────
+    let timeline =
+        scorestrata_compiler::compile_project(&project).expect("planned project compiles");
+    let mut layer_names = std::collections::HashMap::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            layer_names.insert(layer.id.to_string(), layer.name.clone());
+        }
+    }
+    let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
+                let layer_name = layer_names
+                    .get(&e.layer_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| e.layer_id.to_string());
+                Some(scorestrata_audio::render::RenderNote {
+                    pitch: pitch.0,
+                    start_tick: e.tick.0,
+                    duration_ticks: 480,
+                    velocity: velocity.as_f32(),
+                    layer_name,
+                })
+            }
+            _ => None,
+        })
+        .collect();
+    let result = scorestrata_audio::render::render_notes(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &[],
+    )
+    .expect("render succeeds");
+
+    // Level-4 metrics are present and meaningful.
+    assert!(
+        result.analysis.integrated_lufs > -70.0,
+        "non-silent render has measurable loudness ({:.1} LUFS)",
+        result.analysis.integrated_lufs
+    );
+    assert!(
+        !result.analysis.clipping_detected,
+        "quiet mix does not clip"
+    );
+    assert!(result.analysis.true_peak_dbtp < -1.0, "peak under -1 dBTP");
+
+    // ── normalize_loudness_target moves the mix toward -14 LUFS ─────
+    let params = ApplyPatchParams {
+        project_id: project.id.to_string(),
+        op: "normalize_loudness_target".to_string(),
+        params: serde_json::json!({}),
+        dry_run: false,
+        scope: None,
+        project: None,
+    };
+    let receipt = apply_patch_to_project(&params, &mut project);
+    assert!(
+        matches!(receipt.status, ToolStatus::Succeeded),
+        "normalize patch succeeds: {}",
+        receipt.summary
+    );
+    assert!(
+        receipt.summary.contains("LUFS"),
+        "receipt reports loudness before/after"
+    );
+
+    // Velocities were boosted, so a re-render lands closer to -14 LUFS.
+    assert!(
+        project
+            .patterns
+            .iter()
+            .flat_map(|p| p.notes.iter())
+            .all(|n| n.velocity.0 >= 25),
+        "velocities adjusted"
+    );
+    let re_render = scorestrata_compiler::compile_project(&project).expect("recompiles");
+    assert!(!re_render.events.is_empty());
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

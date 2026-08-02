@@ -15,6 +15,7 @@
 use scorestrata_core::domain::PPQ;
 use scorestrata_core::error::ScorestrataError;
 
+use crate::analysis::AudioAnalysis;
 use crate::mixer::{Mixer, MixerChannel};
 use crate::synth::{SynthParams, Waveform, render_note};
 use crate::wav::write_wav;
@@ -66,10 +67,31 @@ pub struct RenderResult {
     pub duration_seconds: f64,
     /// Sample rate used.
     pub sample_rate: u32,
-    /// Number of channels (always 2 for the stereo mix).
+    /// Number of channels (1 for the mono master fold).
     pub channels: u16,
     /// SHA-256 of the WAV bytes (deterministic checksum).
     pub checksum: String,
+    /// The mono mix samples (L+R)/2 — enables Level-4 analysis downstream.
+    pub mono_samples: Vec<f32>,
+    /// Level-4 audio analysis of this render (LUFS, true peak, …).
+    pub analysis: AudioAnalysis,
+}
+
+/// A single rendered stem (one layer, mono).
+#[derive(Debug, Clone)]
+pub struct Stem {
+    /// Layer name this stem belongs to.
+    pub layer_name: String,
+    /// Mono WAV bytes for this layer.
+    pub wav_bytes: Vec<u8>,
+    /// Mono samples for this layer.
+    pub samples: Vec<f32>,
+    /// Duration in seconds.
+    pub duration_seconds: f64,
+    /// SHA-256 of the WAV bytes (deterministic checksum).
+    pub checksum: String,
+    /// Level-4 analysis of this stem.
+    pub analysis: AudioAnalysis,
 }
 
 /// Convert ticks to sample index at the given BPM and sample rate.
@@ -138,33 +160,8 @@ pub fn render_notes(
     let mut mixer = Mixer::new();
 
     for layer_name in &layer_order {
-        let mut buffer = vec![0.0f32; total_samples as usize];
-        let params = voices
-            .iter()
-            .find(|v| v.layer_name == *layer_name)
-            .map_or_else(SynthParams::default, |v| v.params.clone());
-
-        for note in notes.iter().filter(|n| n.layer_name == *layer_name) {
-            let start = tick_to_sample(note.start_tick, bpm, sample_rate) as usize;
-            let dur = tick_to_sample(note.duration_ticks, bpm, sample_rate).max(1) as usize;
-            let freq = midi_to_frequency(note.pitch);
-            let end = (start + dur).min(buffer.len());
-            if start >= buffer.len() {
-                continue;
-            }
-            let mut note_buffer = vec![0.0f32; end - start];
-            render_note(
-                &params,
-                freq,
-                note.velocity,
-                sample_rate as f32,
-                &mut note_buffer,
-            );
-            for (i, sample) in note_buffer.iter().enumerate() {
-                buffer[start + i] += sample;
-            }
-        }
-
+        let buffer =
+            render_layer_buffer(notes, layer_name, voices, bpm, sample_rate, total_samples);
         mixer.add_channel(MixerChannel {
             name: layer_name.clone(),
             gain: 0.8,
@@ -194,6 +191,7 @@ pub fn render_notes(
     let wav_bytes = write_wav(&mono, sample_rate, 16);
     let duration_seconds = f64::from(total_samples as u32) / f64::from(sample_rate);
     let checksum = sha256_hex(&wav_bytes);
+    let analysis = crate::analysis::analyze_mono(&mono);
 
     Ok(RenderResult {
         wav_bytes,
@@ -201,7 +199,140 @@ pub fn render_notes(
         sample_rate,
         channels: 1,
         checksum,
+        mono_samples: mono,
+        analysis,
     })
+}
+
+/// Render each layer to its own mono WAV (stems), plus a mixed master.
+///
+/// Deterministic stems per §16: each layer is rendered with its assigned
+/// voice and encoded as a separate WAV, so downstream tools can export
+/// per-layer artifacts or inspect layer-level loudness.
+///
+/// # Errors
+///
+/// Returns an error if `sample_rate` is 0.
+pub fn render_stems(
+    notes: &[RenderNote],
+    bpm: u32,
+    sample_rate: u32,
+    voices: &[RenderVoice],
+) -> Result<(Vec<Stem>, RenderResult), ScorestrataError> {
+    if sample_rate == 0 {
+        return Err(ScorestrataError::RenderError {
+            message: "sample rate must be non-zero".to_string(),
+        });
+    }
+
+    // Deterministic layer ordering: collect layer names in first-seen order.
+    let mut layer_order: Vec<String> = Vec::new();
+    for note in notes {
+        if !layer_order.contains(&note.layer_name) {
+            layer_order.push(note.layer_name.clone());
+        }
+    }
+
+    let total_samples = notes
+        .iter()
+        .map(|n| {
+            let start = tick_to_sample(n.start_tick, bpm, sample_rate);
+            let dur = tick_to_sample(n.duration_ticks, bpm, sample_rate);
+            start + dur
+        })
+        .max()
+        .unwrap_or(0);
+
+    let mut stems = Vec::new();
+    let mut mixer = Mixer::new();
+
+    for layer_name in &layer_order {
+        let buffer =
+            render_layer_buffer(notes, layer_name, voices, bpm, sample_rate, total_samples);
+
+        // Stem artifact (mono WAV per layer).
+        let stem_wav = write_wav(&buffer, sample_rate, 16);
+        let stem_checksum = sha256_hex(&stem_wav);
+        let stem_analysis = crate::analysis::analyze_mono(&buffer);
+        stems.push(Stem {
+            layer_name: layer_name.clone(),
+            wav_bytes: stem_wav,
+            samples: buffer.clone(),
+            duration_seconds: f64::from(total_samples as u32) / f64::from(sample_rate),
+            checksum: stem_checksum,
+            analysis: stem_analysis,
+        });
+
+        mixer.add_channel(MixerChannel {
+            name: layer_name.clone(),
+            gain: 0.8,
+            pan: 0.0,
+            muted: false,
+            data: buffer,
+        });
+    }
+
+    let (left, right) = mixer.mix();
+    let mono: Vec<f32> = left
+        .iter()
+        .zip(&right)
+        .map(|(l, r)| (l + r) * 0.5)
+        .collect();
+    let master_wav = write_wav(&mono, sample_rate, 16);
+    let master_checksum = sha256_hex(&master_wav);
+    let master_analysis = crate::analysis::analyze_mono(&mono);
+    let master = RenderResult {
+        wav_bytes: master_wav,
+        duration_seconds: f64::from(total_samples as u32) / f64::from(sample_rate),
+        sample_rate,
+        channels: 1,
+        checksum: master_checksum,
+        mono_samples: mono,
+        analysis: master_analysis,
+    };
+
+    Ok((stems, master))
+}
+
+/// Render one layer's notes into a mono sample buffer.
+///
+/// Shared by the master render and the stems renderer so both produce
+/// identical per-layer audio.
+fn render_layer_buffer(
+    notes: &[RenderNote],
+    layer_name: &str,
+    voices: &[RenderVoice],
+    bpm: u32,
+    sample_rate: u32,
+    total_samples: u64,
+) -> Vec<f32> {
+    let mut buffer = vec![0.0f32; total_samples as usize];
+    let params = voices
+        .iter()
+        .find(|v| v.layer_name == layer_name)
+        .map_or_else(SynthParams::default, |v| v.params.clone());
+
+    for note in notes.iter().filter(|n| n.layer_name == layer_name) {
+        let start = tick_to_sample(note.start_tick, bpm, sample_rate) as usize;
+        let dur = tick_to_sample(note.duration_ticks, bpm, sample_rate).max(1) as usize;
+        let freq = midi_to_frequency(note.pitch);
+        let end = (start + dur).min(buffer.len());
+        if start >= buffer.len() {
+            continue;
+        }
+        let mut note_buffer = vec![0.0f32; end - start];
+        render_note(
+            &params,
+            freq,
+            note.velocity,
+            sample_rate as f32,
+            &mut note_buffer,
+        );
+        for (i, sample) in note_buffer.iter().enumerate() {
+            buffer[start + i] += sample;
+        }
+    }
+    buffer
 }
 
 /// Convert a MIDI note number to a frequency in Hz.
@@ -313,5 +444,74 @@ mod tests {
         let result = render_notes(&[], 120, 48_000, &[]).unwrap();
         assert_eq!(result.duration_seconds, 0.0);
         assert!(!result.wav_bytes.is_empty()); // RIFF header still present
+    }
+
+    #[test]
+    fn render_result_carries_analysis() {
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let result = render_notes(&notes, 120, 48_000, &[]).unwrap();
+        assert!(result.analysis.integrated_lufs > -70.0);
+        assert!(!result.mono_samples.is_empty());
+        assert!(!result.analysis.clipping_detected);
+    }
+
+    #[test]
+    fn render_stems_produces_one_stem_per_layer() {
+        let notes = vec![
+            RenderNote {
+                pitch: 36,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 0.9,
+                layer_name: "Drums".to_string(),
+            },
+            RenderNote {
+                pitch: 48,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 0.8,
+                layer_name: "Bass".to_string(),
+            },
+        ];
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let (stems, master) = render_stems(&notes, 120, 48_000, &[]).unwrap();
+        assert_eq!(stems.len(), 2);
+        assert_eq!(stems[0].layer_name, "Drums");
+        assert_eq!(stems[1].layer_name, "Bass");
+        assert!(&stems[0].wav_bytes[0..4] == b"RIFF");
+        assert!(!stems[0].checksum.is_empty());
+        assert_eq!(
+            master.analysis.integrated_lufs.to_bits(),
+            master.analysis.integrated_lufs.to_bits()
+        );
+    }
+
+    #[test]
+    fn render_stems_is_deterministic() {
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let (a, _) = render_stems(&notes, 120, 48_000, &[]).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let (b, _) = render_stems(&notes, 120, 48_000, &[]).unwrap();
+        assert_eq!(a[0].checksum, b[0].checksum);
+        assert_eq!(a[0].wav_bytes, b[0].wav_bytes);
+    }
+
+    #[test]
+    fn render_stems_rejects_zero_sample_rate() {
+        assert!(render_stems(&[], 120, 0, &[]).is_err());
     }
 }
