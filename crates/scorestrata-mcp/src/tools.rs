@@ -5181,6 +5181,11 @@ pub struct GetMetricEvidenceParams {
     /// Serialized evidence warehouse (when provided, evidence is real).
     #[serde(default)]
     pub warehouse: Option<serde_json::Value>,
+    /// Serialized lineage store (§8.3 `MetricLineage`) — when provided, the
+    /// receipt reports the metric's trajectory (total delta, improvement/
+    /// regression counts) from real history.
+    #[serde(default)]
+    pub lineage: Option<serde_json::Value>,
 }
 
 /// Get evidence for a metric (§9.5, §15.1).
@@ -5190,12 +5195,15 @@ pub struct GetMetricEvidenceParams {
 /// payload, returns the recorded metric samples with diagnostics and lineage.
 #[must_use]
 pub fn get_metric_evidence(params: &GetMetricEvidenceParams) -> ToolReceipt {
-    let Some(warehouse_json) = &params.warehouse else {
+    // Evidence (warehouse) and lineage are independent payloads (§9.5, §8.3).
+    // The tool only fails when NEITHER is supplied; a caller with just a
+    // lineage store can still get the trajectory, and vice versa.
+    if params.warehouse.is_none() && params.lineage.is_none() {
         return ToolReceipt {
             tool: "get_metric_evidence".to_string(),
             status: ToolStatus::Failed,
             summary: format!(
-                "Evidence for '{}' requested for project '{}' but no serialized evidence warehouse provided",
+                "Evidence for '{}' requested for project '{}' but no serialized evidence warehouse or lineage store provided",
                 params.metric_name, params.project_id
             ),
             score_delta: BTreeMap::new(),
@@ -5204,42 +5212,100 @@ pub fn get_metric_evidence(params: &GetMetricEvidenceParams) -> ToolReceipt {
             next_actions: vec!["run_validation".to_string()],
             cost: ToolCost::default(),
             warnings: vec![
-                "Supply a serialized evidence warehouse payload to return evidence".to_string(),
+                "Supply a serialized evidence warehouse or lineage store payload".to_string(),
             ],
             dry_run: false,
             diagnostics: vec![],
         };
-    };
-    let warehouse = match serde_json::from_value::<scorestrata_storage::evidence::EvidenceWarehouse>(
-        warehouse_json.clone(),
-    ) {
-        Ok(w) => w,
-        Err(e) => return deserialize_error_receipt("get_metric_evidence", "warehouse", &e),
-    };
-    let entries = warehouse.get_evidence_for_metric(&params.metric_name);
-    let latest = entries.last().copied();
-    let mut score_delta = BTreeMap::new();
-    score_delta.insert("evidence.entries".to_string(), entries.len().to_string());
-    if let Some(entry) = latest {
-        score_delta.insert(
-            "evidence.latest_value".to_string(),
-            format!("{:.3}", entry.metric.value),
-        );
     }
+    let mut score_delta = BTreeMap::new();
+    let mut warnings = Vec::new();
+
+    // ── Evidence from the warehouse (§9.5) ──
+    let evidence_text = match &params.warehouse {
+        Some(json) => {
+            match serde_json::from_value::<scorestrata_storage::evidence::EvidenceWarehouse>(
+                json.clone(),
+            ) {
+                Ok(warehouse) => {
+                    let entries = warehouse.get_evidence_for_metric(&params.metric_name);
+                    let latest = entries.last().copied();
+                    score_delta.insert("evidence.entries".to_string(), entries.len().to_string());
+                    if let Some(entry) = latest {
+                        score_delta.insert(
+                            "evidence.latest_value".to_string(),
+                            format!("{:.3}", entry.metric.value),
+                        );
+                    }
+                    format!(
+                        "{} sample(s){}",
+                        entries.len(),
+                        latest.map_or_else(
+                            || String::new(),
+                            |e| format!(
+                                ", latest value {:.3} (level {} validation, confidence {:.2})",
+                                e.metric.value, e.validation_level, e.metric.confidence
+                            )
+                        )
+                    )
+                }
+                Err(e) => {
+                    warnings.push(format!("Malformed evidence warehouse payload: {e}"));
+                    "0 sample(s)".to_string()
+                }
+            }
+        }
+        None => {
+            warnings
+                .push("No evidence warehouse payload — evidence counts unavailable".to_string());
+            "0 sample(s)".to_string()
+        }
+    };
+
+    // ── Lineage trajectory from the store (§8.3, §15.1) ──
+    let lineage_text = match &params.lineage {
+        Some(json) => {
+            match serde_json::from_value::<scorestrata_storage::lineage::LineageStore>(json.clone())
+            {
+                Ok(store) => match store.get(&params.metric_name) {
+                    Some(lineage) => {
+                        let total = lineage
+                            .total_delta()
+                            .map_or_else(|| "n/a".to_string(), |d| format!("{d:+.3}"));
+                        score_delta
+                            .insert("lineage.samples".to_string(), lineage.len().to_string());
+                        score_delta.insert("lineage.total_delta".to_string(), total.clone());
+                        score_delta.insert(
+                            "lineage.regressions".to_string(),
+                            lineage.regression_count().to_string(),
+                        );
+                        let latest_level = lineage
+                            .latest()
+                            .map_or_else(|| "n/a".to_string(), |s| s.validation_level.to_string());
+                        format!(
+                            ", lineage: {} sample(s), total delta {total}, {} regression(s), {} improvement(s), latest level {latest_level}",
+                            lineage.len(),
+                            lineage.regression_count(),
+                            lineage.improvement_count()
+                        )
+                    }
+                    None => format!(", lineage: no history for '{}'", params.metric_name),
+                },
+                Err(e) => {
+                    warnings.push(format!("Malformed lineage payload: {e}"));
+                    String::new()
+                }
+            }
+        }
+        None => String::new(),
+    };
+
     ToolReceipt {
         tool: "get_metric_evidence".to_string(),
         status: ToolStatus::Succeeded,
         summary: format!(
-            "Evidence for '{}': {} sample(s){}",
-            params.metric_name,
-            entries.len(),
-            latest.map_or_else(
-                || String::new(),
-                |e| format!(
-                    ", latest value {:.3} (level {} validation, confidence {:.2})",
-                    e.metric.value, e.validation_level, e.metric.confidence
-                )
-            )
+            "Evidence for '{}': {}{}",
+            params.metric_name, evidence_text, lineage_text
         ),
         score_delta,
         evidence_uris: vec![format!(
@@ -5253,7 +5319,7 @@ pub fn get_metric_evidence(params: &GetMetricEvidenceParams) -> ToolReceipt {
             tool_calls: 1,
             ..Default::default()
         },
-        warnings: vec![],
+        warnings,
         dry_run: false,
         diagnostics: vec![],
     }
@@ -8194,6 +8260,7 @@ mod tests {
             project_id: project.id.to_string(),
             metric_name: "harmony.scale_compliance".to_string(),
             warehouse: Some(serde_json::to_value(&warehouse).unwrap_or_default()),
+            lineage: None,
         };
         let receipt = get_metric_evidence(&params);
         assert!(matches!(receipt.status, ToolStatus::Succeeded));
@@ -8202,11 +8269,113 @@ mod tests {
     }
 
     #[test]
-    fn get_metric_evidence_requires_warehouse() {
+    fn get_metric_evidence_reports_lineage_trajectory() {
+        use scorestrata_core::diagnostic::{MetricSample, MetricScope, Scorecard};
+        use scorestrata_core::error::Severity;
+        use scorestrata_core::ids::MetricId;
+        use scorestrata_storage::lineage::LineageStore;
+
+        let mut store = LineageStore::new();
+        for (value, cmd) in [(0.50, "cmd_1"), (0.80, "cmd_2")] {
+            store.record_scorecard(
+                &Scorecard {
+                    id: scorestrata_core::ids::ScorecardId::new(),
+                    metrics: vec![MetricSample {
+                        id: MetricId::new(),
+                        name: "harmony.scale_compliance".to_string(),
+                        value,
+                        severity: Severity::Warning,
+                        scope: MetricScope::default(),
+                        evidence_uri: "project://metrics/x".to_string(),
+                        explanation: "lineage test".to_string(),
+                        confidence: 0.9,
+                        suggested_patches: vec![],
+                    }],
+                    overall_score: value,
+                    hard_failures: 0,
+                    warnings: 0,
+                },
+                2,
+                Some(cmd),
+            );
+        }
+        let warehouse = scorestrata_storage::evidence::EvidenceWarehouse::new();
+        let params = GetMetricEvidenceParams {
+            project_id: "proj_1".to_string(),
+            metric_name: "harmony.scale_compliance".to_string(),
+            warehouse: Some(serde_json::to_value(&warehouse).unwrap_or_default()),
+            lineage: Some(serde_json::to_value(&store).unwrap_or_default()),
+        };
+        let receipt = get_metric_evidence(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            receipt.summary.contains("total delta +0.300"),
+            "receipt reports trajectory: {}",
+            receipt.summary
+        );
+        assert!(receipt.summary.contains("0 regression(s)"));
+        assert_eq!(
+            receipt.score_delta.get("lineage.samples"),
+            Some(&"2".to_string())
+        );
+    }
+
+    #[test]
+    fn get_metric_evidence_lineage_only_callers_succeed() {
+        use scorestrata_core::diagnostic::{MetricSample, MetricScope, Scorecard};
+        use scorestrata_core::error::Severity;
+        use scorestrata_core::ids::MetricId;
+        use scorestrata_storage::lineage::LineageStore;
+
+        let mut store = LineageStore::new();
+        store.record_scorecard(
+            &Scorecard {
+                id: scorestrata_core::ids::ScorecardId::new(),
+                metrics: vec![MetricSample {
+                    id: MetricId::new(),
+                    name: "mix.masking".to_string(),
+                    value: 0.90,
+                    severity: Severity::Warning,
+                    scope: MetricScope::default(),
+                    evidence_uri: "project://metrics/x".to_string(),
+                    explanation: "lineage-only test".to_string(),
+                    confidence: 0.9,
+                    suggested_patches: vec![],
+                }],
+                overall_score: 0.90,
+                hard_failures: 0,
+                warnings: 0,
+            },
+            4,
+            Some("cmd_1"),
+        );
+        // No warehouse: lineage alone must still report the trajectory.
+        let params = GetMetricEvidenceParams {
+            project_id: "proj_1".to_string(),
+            metric_name: "mix.masking".to_string(),
+            warehouse: None,
+            lineage: Some(serde_json::to_value(&store).unwrap_or_default()),
+        };
+        let receipt = get_metric_evidence(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            receipt.summary.contains("latest level 4"),
+            "receipt surfaces the lineage validation level: {}",
+            receipt.summary
+        );
+        assert_eq!(
+            receipt.score_delta.get("lineage.samples"),
+            Some(&"1".to_string())
+        );
+    }
+
+    #[test]
+    fn get_metric_evidence_requires_warehouse_or_lineage() {
         let params = GetMetricEvidenceParams {
             project_id: "proj_1".to_string(),
             metric_name: "harmony.scale_compliance".to_string(),
             warehouse: None,
+            lineage: None,
         };
         let receipt = get_metric_evidence(&params);
         assert!(matches!(receipt.status, ToolStatus::Failed));

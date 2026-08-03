@@ -957,6 +957,7 @@ fn mvas_step_17_orientation_and_validation_drill_down() {
         project_id: project_id.clone(),
         metric_name: "harmony.scale_compliance".to_string(),
         warehouse: Some(serde_json::to_value(&warehouse).expect("warehouse serializes")),
+        lineage: None,
     });
     assert!(matches!(evidence.status, ToolStatus::Succeeded));
     assert!(evidence.score_delta.contains_key("evidence.entries"));
@@ -2849,6 +2850,101 @@ fn mvas_step_34_knowledge_graph_answers_ontology_queries() {
         );
         assert_eq!(affecting.len(), 0); // outgoing Affects from metric — none
     }
+}
+
+/// Step 35 — metric lineage: the repair trajectory behind every metric (§8.3, §15.1).
+///
+/// §15.1 requires every metric to have lineage. This step proves the
+/// trajectory end-to-end: each validation run records into the lineage store,
+/// the patch that moved the metric is attributable by delta, regressions and
+/// improvements are classified, the worst regression is queryable, and the
+/// MCP `get_metric_evidence` tool surfaces the trajectory over the wire.
+#[test]
+fn mvas_step_35_metric_lineage_shows_repair_trajectory() {
+    use scorestrata_core::diagnostic::{MetricSample, MetricScope, Scorecard};
+    use scorestrata_core::error::Severity;
+    use scorestrata_core::ids::{MetricId, ScorecardId};
+    use scorestrata_mcp::dispatch::dispatch_tool;
+    use scorestrata_storage::lineage::LineageStore;
+
+    fn metric(value: f32) -> MetricSample {
+        MetricSample {
+            id: MetricId::new(),
+            name: "harmony.scale_compliance".to_string(),
+            value,
+            severity: Severity::Warning,
+            scope: MetricScope::default(),
+            evidence_uri: "project://mvas/metrics/scale".to_string(),
+            explanation: "scale compliance".to_string(),
+            confidence: 0.9,
+            suggested_patches: vec![],
+        }
+    }
+
+    fn scorecard(value: f32) -> Scorecard {
+        Scorecard {
+            id: ScorecardId::new(),
+            metrics: vec![metric(value)],
+            overall_score: value,
+            hard_failures: 0,
+            warnings: 0,
+        }
+    }
+
+    // ── 35a. Each validation run records into the lineage store ──
+    let mut store = LineageStore::new();
+    store.record_scorecard(&scorecard(0.50), 2, Some("validate_v0"));
+    store.record_scorecard(&scorecard(0.80), 2, Some("apply_patch:quantize"));
+    store.record_scorecard(&scorecard(0.85), 2, Some("apply_patch:harmonize"));
+    let lineage = store
+        .get("harmony.scale_compliance")
+        .expect("lineage recorded");
+    assert_eq!(lineage.len(), 3);
+
+    // ── 35b. Deltas attribute the patch that moved the metric ──
+    assert!((lineage.samples[1].delta.unwrap() - 0.30).abs() < f32::EPSILON);
+    assert!((lineage.samples[2].delta.unwrap() - 0.05).abs() < f32::EPSILON);
+    assert_eq!(
+        lineage.samples[1].command_id.as_deref(),
+        Some("apply_patch:quantize")
+    );
+    assert!((lineage.total_delta().unwrap() - 0.35).abs() < f32::EPSILON);
+
+    // ── 35c. A regression run is classified and queryable ──
+    store.record_scorecard(&scorecard(0.78), 2, Some("apply_patch:reduce_masking"));
+    let lineage = store.get("harmony.scale_compliance").unwrap();
+    assert_eq!(lineage.regression_count(), 1);
+    assert_eq!(lineage.improvement_count(), 2);
+    assert!(lineage.worst_regression().is_some());
+    let regressions = store.latest_regressions();
+    assert_eq!(regressions.len(), 1);
+    assert_eq!(regressions[0].0.metric_name, "harmony.scale_compliance");
+
+    // ── 35d. The trajectory surfaces over the wire via get_metric_evidence ──
+    let warehouse = scorestrata_storage::evidence::EvidenceWarehouse::new();
+    let receipt = dispatch_tool(
+        "get_metric_evidence",
+        serde_json::json!({
+            "project_id": "p35",
+            "metric_name": "harmony.scale_compliance",
+            "warehouse": &warehouse,
+            "lineage": &store,
+        }),
+    );
+    assert!(
+        receipt.summary.contains("lineage"),
+        "receipt reports lineage: {}",
+        receipt.summary
+    );
+    assert!(
+        receipt.summary.contains("total delta +0.280"),
+        "receipt shows the full repair delta: {}",
+        receipt.summary
+    );
+    assert_eq!(
+        receipt.score_delta.get("lineage.samples"),
+        Some(&"4".to_string())
+    );
 }
 
 /// Build a full validation report for a project (Level 2 symbolic).

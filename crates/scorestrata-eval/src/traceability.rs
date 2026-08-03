@@ -788,6 +788,27 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-METRIC-LINEAGE".to_string(),
+        title: "MetricLineage entity — per-metric repair trajectory with deltas (§8.3, §15.1)"
+            .to_string(),
+        phase: "8".to_string(),
+        tasks: vec!["EVID-005".to_string()],
+        code: vec![
+            "scorestrata_storage::lineage".to_string(),
+            "scorestrata_mcp::tools::get_metric_evidence".to_string(),
+        ],
+        tests: vec![
+            "lineage::tests".to_string(),
+            "tools::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec!["get_metric_evidence".to_string()],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §8.3, §15.1".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),
