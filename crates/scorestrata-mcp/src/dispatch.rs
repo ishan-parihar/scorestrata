@@ -700,13 +700,13 @@ mod tests {
     }
 
     // The telemetry registry is process-wide, so tests that assert on it must
-    // be serialized against each other and use probe names no other test
-    // dispatches, keeping exact counts immune to parallel-test pollution.
-    static TELEMETRY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // be serialized against each other (via the shared TEST_LOCK) and use
+    // probe names no other test dispatches, keeping exact counts immune to
+    // parallel-test pollution.
 
     #[test]
     fn dispatch_records_tool_calls_in_telemetry() {
-        let _guard = TELEMETRY_TEST_LOCK.lock().unwrap();
+        let _guard = crate::telemetry::TEST_LOCK.lock().unwrap();
         // §15.5: every dispatched call is accounted in the telemetry registry.
         crate::telemetry::reset();
         dispatch_tool("telemetry_probe_a", serde_json::json!({}));
@@ -727,7 +727,7 @@ mod tests {
 
     #[test]
     fn get_telemetry_tool_serves_snapshot() {
-        let _guard = TELEMETRY_TEST_LOCK.lock().unwrap();
+        let _guard = crate::telemetry::TEST_LOCK.lock().unwrap();
         crate::telemetry::reset();
         dispatch_tool("telemetry_probe_c", serde_json::json!({}));
         dispatch_tool("telemetry_probe_c", serde_json::json!({}));

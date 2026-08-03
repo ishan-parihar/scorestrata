@@ -57,16 +57,18 @@ pub fn reset() {
 }
 
 #[cfg(test)]
+/// Shared serialization lock for every test that mutates the process-wide
+/// registry (`reset`/record). Both the `telemetry` and `dispatch` test modules
+/// use this single lock so they can never race each other's exact counts.
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    // The registry is process-wide, so registry-mutating tests must be
-    // serialized against each other to keep exact counts deterministic.
-    static REGISTRY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn records_tool_calls_across_threads() {
-        let _guard = REGISTRY_TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.lock().unwrap();
         reset();
         record_tool_call("apply_patch");
         record_tool_call("apply_patch");
@@ -80,7 +82,7 @@ mod tests {
 
     #[test]
     fn records_patch_attempts_and_derives_success_rate() {
-        let _guard = REGISTRY_TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.lock().unwrap();
         reset();
         record_patch_attempt(true);
         record_patch_attempt(true);
@@ -94,7 +96,7 @@ mod tests {
 
     #[test]
     fn reset_starts_fresh() {
-        let _guard = REGISTRY_TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.lock().unwrap();
         reset();
         record_tool_call("get_capabilities");
         assert_eq!(snapshot().total_tool_calls(), 1);
@@ -104,7 +106,7 @@ mod tests {
 
     #[test]
     fn empty_registry_is_harmless() {
-        let _guard = REGISTRY_TEST_LOCK.lock().unwrap();
+        let _guard = TEST_LOCK.lock().unwrap();
         reset();
         let snap = snapshot();
         assert_eq!(snap.total_tool_calls(), 0);
