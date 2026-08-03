@@ -2357,6 +2357,164 @@ fn mvas_step_30_task_completion_triggers_drive_level_advancement() {
     );
 }
 
+/// Step 31: segment fixes close the diagnose → fix loop (§11.2, §12.3).
+///
+/// The segment diagnostics (`SEGMENT_EMPTY`, `SEGMENT_BAR_COUNT_INVALID`)
+/// previously shipped **empty** `suggested_patches`, so `suggest_fixes` could
+/// not offer a fix and the L2 segment loop starved. Now the validator
+/// attaches real suggestions and the patch registry implements them:
+/// `add_segment_layer` and `set_segment_bars` actually mutate the project
+/// and clear the diagnostics — proven end-to-end over the wire.
+#[test]
+fn mvas_step_31_segment_fixes_close_the_repair_loop() {
+    use scorestrata_mcp::dispatch::dispatch_tool;
+    use scorestrata_mcp::tools::{ApplyPatchParams, PatchScope, ToolStatus};
+
+    // ── 31a. An empty segment surfaces SEGMENT_EMPTY with a real fix ──
+    let mut project = project_with_out_of_scale_lead();
+    project.arrangement.segments[0].layers.clear();
+    let segment_id = project.arrangement.segments[0].id.to_string();
+
+    let validation = dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 2,
+        }),
+    );
+    let segment_diag = validation
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "SEGMENT_EMPTY")
+        .expect("empty segment produces SEGMENT_EMPTY");
+    assert!(
+        segment_diag
+            .suggested_patches
+            .iter()
+            .any(|p| p.op == "add_segment_layer"),
+        "SEGMENT_EMPTY suggests add_segment_layer, got {:?}",
+        segment_diag.suggested_patches
+    );
+
+    // suggest_fixes surfaces the validator's suggested patch.
+    let fixes = dispatch_tool(
+        "suggest_fixes",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "diagnostic_code": "SEGMENT_EMPTY",
+            "project": &project,
+        }),
+    );
+    assert!(
+        fixes.summary.contains("add_segment_layer"),
+        "suggest_fixes surfaces the segment fix: {}",
+        fixes.summary
+    );
+
+    // Applying the suggested op actually fixes the empty segment.
+    let receipt = scorestrata_mcp::patch_ops::apply_patch_to_project(
+        &ApplyPatchParams {
+            project_id: project.id.to_string(),
+            op: "add_segment_layer".to_string(),
+            params: serde_json::json!({}),
+            dry_run: false,
+            scope: Some(PatchScope {
+                segment_id: Some(segment_id.clone()),
+                layer_id: None,
+            }),
+            project: None,
+        },
+        &mut project,
+    );
+    assert!(
+        matches!(receipt.status, ToolStatus::Succeeded),
+        "add_segment_layer succeeds: {}",
+        receipt.summary
+    );
+    assert_eq!(project.arrangement.segments[0].layers.len(), 1);
+
+    let revalidated = dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 2,
+        }),
+    );
+    assert!(
+        !revalidated
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "SEGMENT_EMPTY"),
+        "add_segment_layer clears SEGMENT_EMPTY"
+    );
+
+    // ── 31b. An out-of-range bar count suggests + applies a resize ────
+    project.arrangement.segments[1].bars = 128; // over the 4–64 range
+    let validation = dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 2,
+        }),
+    );
+    let bars_diag = validation
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "SEGMENT_BAR_COUNT_INVALID")
+        .expect("out-of-range bars produces the diagnostic");
+    let suggested_bars = bars_diag
+        .suggested_patches
+        .iter()
+        .find(|p| p.op == "set_segment_bars")
+        .expect("bar-count diagnostic suggests set_segment_bars");
+    assert_eq!(
+        suggested_bars.params["bars"],
+        serde_json::json!(64),
+        "suggestion clamps to the nearest valid bound"
+    );
+
+    let bars_segment_id = project.arrangement.segments[1].id.to_string();
+    let receipt = scorestrata_mcp::patch_ops::apply_patch_to_project(
+        &ApplyPatchParams {
+            project_id: project.id.to_string(),
+            op: "set_segment_bars".to_string(),
+            params: serde_json::json!({}),
+            dry_run: false,
+            scope: Some(PatchScope {
+                segment_id: Some(bars_segment_id),
+                layer_id: None,
+            }),
+            project: None,
+        },
+        &mut project,
+    );
+    assert!(
+        matches!(receipt.status, ToolStatus::Succeeded),
+        "set_segment_bars succeeds: {}",
+        receipt.summary
+    );
+    assert_eq!(project.arrangement.segments[1].bars, 64);
+
+    let revalidated = dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 2,
+        }),
+    );
+    assert!(
+        !revalidated
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "SEGMENT_BAR_COUNT_INVALID"),
+        "set_segment_bars clears SEGMENT_BAR_COUNT_INVALID"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

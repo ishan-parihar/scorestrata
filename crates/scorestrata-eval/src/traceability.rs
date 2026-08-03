@@ -711,6 +711,30 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-SEGMENT-FIXES".to_string(),
+        title:
+            "Segment diagnostics carry actionable suggested_patches; L2 loop never starves (§11.2, §12.3, §13.3)"
+                .to_string(),
+        phase: "13".to_string(),
+        tasks: vec!["SEG-001".to_string()],
+        code: vec![
+            "scorestrata_validator::segment_check".to_string(),
+            "scorestrata_mcp::patch_ops".to_string(),
+            "scorestrata_agent::kernel".to_string(),
+        ],
+        tests: vec![
+            "segment_check::tests".to_string(),
+            "patch_ops::tests".to_string(),
+            "kernel::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec!["suggest_fixes".to_string(), "apply_patch".to_string()],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §11.2, §12.3, §13.3".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),

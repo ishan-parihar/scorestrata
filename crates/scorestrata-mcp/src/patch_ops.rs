@@ -21,6 +21,11 @@ use std::collections::BTreeMap;
 /// - `quantize_layer_to_scale`: quantizes a layer's notes to the project key.
 /// - `add_transition_package`: marks a transition with fill/riser/impact
 ///   (recorded on the target segment as a transition hint).
+/// - `normalize_loudness_target`: normalizes master loudness to a target.
+/// - `add_segment_layer`: gives an empty segment a default layer
+///   (fixes `SEGMENT_EMPTY`).
+/// - `set_segment_bars`: resizes a segment into the acceptable bar range
+///   (fixes `SEGMENT_BAR_COUNT_INVALID`).
 ///
 /// # Errors
 ///
@@ -32,6 +37,8 @@ pub fn apply_patch_to_project(params: &ApplyPatchParams, project: &mut Project) 
         "quantize_layer_to_scale" => apply_quantize(params, project),
         "add_transition_package" => apply_transition(params, project),
         "normalize_loudness_target" => apply_normalize_loudness(params, project),
+        "add_segment_layer" => apply_add_segment_layer(params, project),
+        "set_segment_bars" => apply_set_segment_bars(params, project),
         other => ToolReceipt {
             tool: "apply_patch".to_string(),
             status: ToolStatus::Failed,
@@ -428,6 +435,188 @@ fn failed_receipt(params: &ApplyPatchParams, message: &str) -> ToolReceipt {
     }
 }
 
+/// Give an empty segment a default layer (fixes `SEGMENT_EMPTY`).
+///
+/// Finds the target segment by scope and appends a synth layer with a fresh
+/// id, so the segment is no longer empty and the validator's layer gate
+/// passes. Idempotent by nature: a segment that already has layers is left
+/// untouched with a warning.
+fn apply_add_segment_layer(params: &ApplyPatchParams, project: &mut Project) -> ToolReceipt {
+    let Some(scope) = &params.scope else {
+        return failed_receipt(params, "add_segment_layer requires a scope");
+    };
+    let Some(segment_id) = scope.segment_id.as_deref() else {
+        return failed_receipt(params, "scope must include a segment_id");
+    };
+
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == segment_id)
+    else {
+        return failed_receipt(params, &format!("segment {segment_id} not found"));
+    };
+
+    if !segment.layers.is_empty() {
+        return ToolReceipt {
+            tool: "apply_patch".to_string(),
+            status: ToolStatus::Succeeded,
+            summary: format!(
+                "Segment '{segment_id}' already has {} layer(s); no layer added",
+                segment.layers.len()
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![format!(
+                "project://{}/segments/{}/layers",
+                params.project_id, segment_id
+            )],
+            focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+            next_actions: vec!["run_validation".to_string()],
+            cost: ToolCost {
+                cpu_ms: 1,
+                tool_calls: 1,
+                render_seconds: 0.0,
+            },
+            warnings: vec!["Segment already has layers; no change applied".to_string()],
+            dry_run: params.dry_run,
+            diagnostics: vec![],
+        };
+    }
+
+    segment.layers.push(Layer {
+        id: LayerId::new(),
+        name: format!("layer_{}", segment.layers.len()),
+        instrument: "synth".to_string(),
+        pattern_instances: Vec::new(),
+    });
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("structure.segment_layers".to_string(), "+0.25".to_string());
+
+    ToolReceipt {
+        tool: "apply_patch".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Added a default synth layer to empty segment '{segment_id}' in project '{}'",
+            params.project_id
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers",
+            params.project_id, segment_id
+        )],
+        focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            render_seconds: 0.0,
+        },
+        warnings: vec![],
+        dry_run: params.dry_run,
+        diagnostics: vec![],
+    }
+}
+
+/// Resize a segment into the acceptable bar range (fixes
+/// `SEGMENT_BAR_COUNT_INVALID`).
+///
+/// Accepts an optional `bars` param; when absent (or out of range) the
+/// segment is resized to the nearest valid bound (4 or 64), keeping the
+/// operation deterministic and self-healing.
+fn apply_set_segment_bars(params: &ApplyPatchParams, project: &mut Project) -> ToolReceipt {
+    let Some(scope) = &params.scope else {
+        return failed_receipt(params, "set_segment_bars requires a scope");
+    };
+    let Some(segment_id) = scope.segment_id.as_deref() else {
+        return failed_receipt(params, "scope must include a segment_id");
+    };
+
+    const MIN_BARS: u32 = 4;
+    const MAX_BARS: u32 = 64;
+
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == segment_id)
+    else {
+        return failed_receipt(params, &format!("segment {segment_id} not found"));
+    };
+
+    // Explicit target wins; otherwise clamp the current bar count into the
+    // valid range (128 → 64, 2 → 4), which deterministically clears the
+    // SEGMENT_BAR_COUNT_INVALID diagnostic.
+    let requested = params
+        .params
+        .get("bars")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|b| u32::try_from(b).ok());
+    let target = requested
+        .map(|b| b.clamp(MIN_BARS, MAX_BARS))
+        .unwrap_or_else(|| segment.bars.clamp(MIN_BARS, MAX_BARS));
+
+    let before = segment.bars;
+    if before == target {
+        return ToolReceipt {
+            tool: "apply_patch".to_string(),
+            status: ToolStatus::Succeeded,
+            summary: format!("Segment '{segment_id}' is already {target} bars; no change applied"),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![format!(
+                "project://{}/segments/{segment_id}/bars",
+                params.project_id
+            )],
+            focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+            next_actions: vec!["run_validation".to_string()],
+            cost: ToolCost {
+                cpu_ms: 1,
+                tool_calls: 1,
+                render_seconds: 0.0,
+            },
+            warnings: vec!["Segment already at target bar count; no change applied".to_string()],
+            dry_run: params.dry_run,
+            diagnostics: vec![],
+        };
+    }
+
+    segment.bars = target;
+    // Keep the arrangement's total consistent with the sum of its segments,
+    // so the resize never leaves stale bookkeeping behind.
+    project.arrangement.total_bars = project.arrangement.segments.iter().map(|s| s.bars).sum();
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "structure.segment_bars".to_string(),
+        format!("{} → {}", before, target),
+    );
+
+    ToolReceipt {
+        tool: "apply_patch".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Resized segment '{segment_id}' from {before} to {target} bars in project '{}'",
+            params.project_id
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{segment_id}/bars",
+            params.project_id
+        )],
+        focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+        next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            render_seconds: 0.0,
+        },
+        warnings: vec![],
+        dry_run: params.dry_run,
+        diagnostics: vec![],
+    }
+}
+
 /// Count the out-of-scale notes in a layer (for diagnostics and tests).
 #[must_use]
 pub fn layer_out_of_scale_count(layer: &Layer, patterns: &[Pattern], key: &Key) -> usize {
@@ -702,5 +891,109 @@ mod tests {
             receipt.score_delta["arrangement.transition_strength"],
             "+0.15"
         );
+    }
+    /// Build a segment-scoped params struct without touching `layers[0]`
+    /// (unlike `quantize_params`, which requires a layer for its scope).
+    fn segment_params(project: &Project, op: &str, params: serde_json::Value) -> ApplyPatchParams {
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        ApplyPatchParams {
+            project_id: project.id.to_string(),
+            op: op.to_string(),
+            params,
+            dry_run: false,
+            scope: Some(crate::tools::PatchScope {
+                segment_id: Some(segment_id),
+                layer_id: None,
+            }),
+            project: None,
+        }
+    }
+
+    #[test]
+    fn add_segment_layer_fixes_empty_segment() {
+        let mut project = out_of_scale_project();
+        project.arrangement.segments[0].layers.clear();
+
+        let params = segment_params(&project, "add_segment_layer", serde_json::json!({}));
+        let receipt = apply_patch_to_project(&params, &mut project);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "add_segment_layer succeeds: {receipt:#?}"
+        );
+        assert_eq!(receipt.score_delta["structure.segment_layers"], "+0.25");
+        assert_eq!(
+            project.arrangement.segments[0].layers.len(),
+            1,
+            "layer added"
+        );
+    }
+
+    #[test]
+    fn add_segment_layer_missing_scope_fails() {
+        let mut project = out_of_scale_project();
+        let params = ApplyPatchParams {
+            op: "add_segment_layer".to_string(),
+            params: serde_json::json!({}),
+            scope: None,
+            ..quantize_params(&project)
+        };
+        let receipt = apply_patch_to_project(&params, &mut project);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+    }
+
+    #[test]
+    fn set_segment_bars_clamps_out_of_range() {
+        let mut project = out_of_scale_project();
+        project.arrangement.segments[0].bars = 128; // over the 4–64 range
+
+        // No explicit bars → clamp to the nearest valid bound.
+        let params = segment_params(&project, "set_segment_bars", serde_json::json!({}));
+        let receipt = apply_patch_to_project(&params, &mut project);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "set_segment_bars succeeds: {receipt:#?}"
+        );
+        assert_eq!(
+            project.arrangement.segments[0].bars, 64,
+            "clamped to max bound"
+        );
+        assert_eq!(receipt.score_delta["structure.segment_bars"], "128 → 64");
+        assert!(receipt.summary.contains("128 to 64"));
+        // The arrangement total stays consistent with the resized segment.
+        assert_eq!(project.arrangement.total_bars, 64);
+    }
+
+    #[test]
+    fn set_segment_bars_respects_explicit_target() {
+        let mut project = out_of_scale_project();
+        project.arrangement.segments[0].bars = 128;
+
+        let params = segment_params(
+            &project,
+            "set_segment_bars",
+            serde_json::json!({"bars": 16}),
+        );
+        let receipt = apply_patch_to_project(&params, &mut project);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(project.arrangement.segments[0].bars, 16);
+    }
+
+    #[test]
+    fn every_segment_suggestion_op_resolves_in_registry() {
+        // The segment_check diagnostics now suggest segment ops; every one
+        // must resolve to a real implementation (not "Unsupported patch
+        // operation") or the diagnose → fix → learn loop dead-ends.
+        let mut project = out_of_scale_project();
+        project.arrangement.segments[0].layers.clear();
+
+        for op in ["add_segment_layer", "set_segment_bars"] {
+            let mut candidate = project.clone();
+            let params = segment_params(&candidate, op, serde_json::json!({}));
+            let receipt = apply_patch_to_project(&params, &mut candidate);
+            assert!(
+                matches!(receipt.status, ToolStatus::Succeeded),
+                "op {op} must be implemented, got {receipt:#?}"
+            );
+        }
     }
 }

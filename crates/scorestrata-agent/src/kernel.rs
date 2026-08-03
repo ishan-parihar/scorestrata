@@ -639,6 +639,14 @@ impl AgentKernel {
     // ── L2: Segment Development Loop ────────────────────────────────
 
     /// L2: Segment development — build or improve a segment.
+    ///
+    /// Generates segment-building candidates from the diagnoses, not just
+    /// micro-repairs. A soft segment-scope diagnosis (e.g. `SEGMENT_EMPTY`,
+    /// `SEGMENT_BAR_COUNT_INVALID`) previously produced **zero** candidates
+    /// because `l1_micro_repair` was called with empty templates — starving
+    /// the L2 loop. Structural segment metrics now map to real patch ops:
+    /// `add_segment_layer` for empty segments, `set_segment_bars` for
+    /// out-of-range bar counts, then fall back to micro-repair for the rest.
     #[must_use]
     pub fn l2_segment_development(
         &mut self,
@@ -655,7 +663,38 @@ impl AgentKernel {
 
         let mut candidates = Vec::new();
         for diagnosis in diagnoses {
-            candidates.extend(self.l1_micro_repair(diagnosis, &[]));
+            match diagnosis.metric.as_str() {
+                // An empty segment needs a layer — structural build, not a repair.
+                "structure.segment_layers" => candidates.push(Candidate {
+                    id: format!("cand_l2_layer_{}_{}", self.iteration, candidates.len()),
+                    operation: "add_segment_layer".to_string(),
+                    description: format!(
+                        "Add a default layer to segment '{segment_name}' ({})",
+                        diagnosis.metric
+                    ),
+                    scope: diagnosis.scope.clone(),
+                    diagnosis_metric: diagnosis.metric.clone(),
+                    estimated_delta: 0.25,
+                    is_repair: true,
+                    template_id: None,
+                }),
+                // An out-of-range bar count needs a resize.
+                "structure.segment_bars" => candidates.push(Candidate {
+                    id: format!("cand_l2_bars_{}_{}", self.iteration, candidates.len()),
+                    operation: "set_segment_bars".to_string(),
+                    description: format!(
+                        "Resize segment '{segment_name}' into the valid bar range ({})",
+                        diagnosis.metric
+                    ),
+                    scope: diagnosis.scope.clone(),
+                    diagnosis_metric: diagnosis.metric.clone(),
+                    estimated_delta: 0.10,
+                    is_repair: true,
+                    template_id: None,
+                }),
+                // Everything else falls back to the micro-repair generator.
+                _ => candidates.extend(self.l1_micro_repair(diagnosis, &[])),
+            }
         }
         candidates
     }
@@ -1367,6 +1406,63 @@ mod tests {
             kernel.level,
             LoopLevel::SegmentDevelopment,
             "L1 task done → L2"
+        );
+    }
+
+    #[test]
+    fn l2_segment_development_generates_candidates_without_templates() {
+        let mut kernel = AgentKernel::new(ProjectId::new());
+        // Empty segment diagnosis (structure.segment_layers) is a soft
+        // segment-scope issue that previously produced ZERO candidates at L2
+        // because l1_micro_repair received empty templates.
+        let empty_segment = Diagnosis {
+            metric: "structure.segment_layers".to_string(),
+            scope: "segment".to_string(),
+            current_value: 0.0,
+            target_value: 1.0,
+            severity: 0.6,
+            is_hard_failure: false,
+            evidence_uri: None,
+        };
+        let candidates = kernel.l2_segment_development("intro", &[empty_segment]);
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.operation == "add_segment_layer"),
+            "empty segment yields an add_segment_layer candidate"
+        );
+
+        let bad_bars = Diagnosis {
+            metric: "structure.segment_bars".to_string(),
+            scope: "segment".to_string(),
+            current_value: 128.0,
+            target_value: 8.0,
+            severity: 0.4,
+            is_hard_failure: false,
+            evidence_uri: None,
+        };
+        let candidates = kernel.l2_segment_development("intro", &[bad_bars]);
+        assert!(
+            candidates.iter().any(|c| c.operation == "set_segment_bars"),
+            "bar-count violation yields a set_segment_bars candidate"
+        );
+
+        // Non-structural diagnoses still fall back to micro-repair.
+        let mix = Diagnosis {
+            metric: "audio.loudness".to_string(),
+            scope: "mix".to_string(),
+            current_value: -4.0,
+            target_value: -14.0,
+            severity: 0.8,
+            is_hard_failure: true,
+            evidence_uri: None,
+        };
+        let candidates = kernel.l2_segment_development("intro", &[mix]);
+        assert!(
+            candidates
+                .iter()
+                .any(|c| c.operation == "normalize_loudness_target"),
+            "mix diagnosis still falls back to micro-repair at L2"
         );
     }
 
