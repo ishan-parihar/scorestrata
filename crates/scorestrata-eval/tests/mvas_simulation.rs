@@ -2114,6 +2114,112 @@ fn mvas_step_28_genre_calibration_feeds_l6_scoring() {
     );
 }
 
+#[test]
+fn mvas_step_29_suggest_fixes_closes_learning_loop() {
+    // §12.3 + §13.5: the failure report recommends suggest_fixes as the next
+    // action, and suggest_fixes must surface (1) the real validator patches
+    // and (2) proven lessons from the store — closing the diagnose → fix →
+    // learn loop. Previously the tool was a stub that returned a canned
+    // success string and ignored both sources.
+    let project = scorestrata_testkit::melodic_techno_project();
+
+    // The failure report recommends the fix path.
+    let failure = scorestrata_mcp::debug_ops::compute_failure_report(&project);
+    assert!(
+        failure
+            .recommended_actions
+            .contains(&"suggest_fixes".to_string()),
+        "failure report recommends suggest_fixes"
+    );
+
+    // Wire path: dispatcher → suggest_fixes with a project payload returns
+    // the validator's real SuggestedPatch ops.
+    let receipt = scorestrata_mcp::dispatch::dispatch_tool(
+        "suggest_fixes",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "diagnostic_code": "TRANSITION_ENERGY_DELTA_LOW",
+            "project": &project,
+        }),
+    );
+    assert_eq!(receipt.tool, "suggest_fixes");
+    assert!(
+        matches!(
+            receipt.status,
+            scorestrata_mcp::tools::ToolStatus::Succeeded
+        ),
+        "real fixes must succeed: {}",
+        receipt.summary
+    );
+    assert!(
+        receipt.summary.contains("add_transition_package"),
+        "validator patch surfaced: {}",
+        receipt.summary
+    );
+    assert!(receipt.next_actions.contains(&"apply_patch".to_string()));
+
+    // Learning loop: a proven lesson for a trigger the validator does not
+    // currently emit must still surface via the store.
+    let mut store = scorestrata_storage::lesson_store::LessonStore::new();
+    store.record(scorestrata_storage::lesson_store::StoredLesson {
+        id: "les_e2e".to_string(),
+        scope: "layer".to_string(),
+        trigger: "HARMONY_SCALE_VIOLATION".to_string(),
+        successful_patch: Some("quantize_layer_to_scale".to_string()),
+        failed_patches: vec![],
+        evidence_uris: vec![],
+        genre: None,
+        confidence: 0.9,
+        success_count: 4,
+        failure_count: 0,
+        created_at: "t".to_string(),
+        updated_at: "t".to_string(),
+    });
+    let lesson_receipt = scorestrata_mcp::dispatch::dispatch_tool(
+        "suggest_fixes",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "diagnostic_code": "HARMONY_SCALE_VIOLATION",
+            "lesson_store": &store,
+        }),
+    );
+    assert!(
+        matches!(
+            lesson_receipt.status,
+            scorestrata_mcp::tools::ToolStatus::Succeeded
+        ),
+        "lesson-proven fix must succeed: {}",
+        lesson_receipt.summary
+    );
+    assert!(
+        lesson_receipt.summary.contains("quantize_layer_to_scale"),
+        "lesson patch surfaced: {}",
+        lesson_receipt.summary
+    );
+    assert_eq!(
+        lesson_receipt
+            .score_delta
+            .get("fixes.lesson_sources")
+            .map(String::as_str),
+        Some("1")
+    );
+
+    // Stub transparency: without any payload the tool must fail honestly
+    // rather than fabricate fixes.
+    let empty = scorestrata_mcp::dispatch::dispatch_tool(
+        "suggest_fixes",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "diagnostic_code": "TRANSITION_ENERGY_DELTA_LOW",
+        }),
+    );
+    assert!(
+        matches!(empty.status, scorestrata_mcp::tools::ToolStatus::Failed),
+        "no payload must fail transparently"
+    );
+    assert!(empty.summary.contains("no project or lesson-store payload"));
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

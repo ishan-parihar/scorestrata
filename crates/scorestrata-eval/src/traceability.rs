@@ -678,6 +678,24 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-SUGGEST-FIXES".to_string(),
+        title: "suggest_fixes surfaces validator patches and proven lessons (§12.3, §13.5)"
+            .to_string(),
+        phase: "12".to_string(),
+        tasks: vec!["DIAG-002".to_string()],
+        code: vec![
+            "scorestrata_mcp::tools".to_string(),
+            "scorestrata_mcp::debug_ops".to_string(),
+            "scorestrata_storage::lesson_store".to_string(),
+        ],
+        tests: vec!["tools::tests".to_string(), "mvas_simulation".to_string()],
+        mcp_tools: vec!["suggest_fixes".to_string()],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §12.3, §13.5".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),

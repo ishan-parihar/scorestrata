@@ -4760,27 +4760,198 @@ pub struct SuggestFixesParams {
     pub diagnostic_code: String,
     /// Optional segment ID.
     pub segment_id: Option<String>,
+    /// Optional genre to narrow lesson-store lookups.
+    #[serde(default)]
+    pub genre: Option<String>,
+    /// Serialized project (when provided, fixes come from real validation
+    /// diagnostics — the validator's `SuggestedPatch` payloads).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+    /// Serialized lesson store (when provided, proven fixes from past
+    /// iterations are merged in via `get_best_for_trigger`).
+    #[serde(default)]
+    pub lesson_store: Option<serde_json::Value>,
 }
 
 /// Suggest fixes for a specific diagnostic.
+///
+/// Real fixes come from two sources, both previously ignored by the stub:
+/// 1. **Validator diagnostics** — with a `project` payload, runs the real
+///    checks via [`debug_ops::project_report`](crate::debug_ops::project_report)
+///    and surfaces every `SuggestedPatch` the validator attached to matching
+///    diagnostics (e.g. `quantize_layer_to_scale` for
+///    `HARMONY_SCALE_VIOLATION`, `add_transition_package` for
+///    `TRANSITION_ENERGY_DELTA_LOW`).
+/// 2. **Lesson store** — with a `lesson_store` payload, looks up the best
+///    confident lesson for this trigger (`get_best_for_trigger`) and surfaces
+///    its proven `successful_patch` as the top fix (§13.5 learning loop).
+///    Lesson-derived fixes carry only the op name — the agent supplies the
+///    concrete `scope`/params when it follows the `apply_patch` next action.
+///
+/// Returns `Failed` when neither payload is supplied (stub transparency) or
+/// when no fix is known for the diagnostic — never fabricates fixes.
 #[must_use]
 pub fn suggest_fixes(params: &SuggestFixesParams) -> ToolReceipt {
+    if params.project.is_none() && params.lesson_store.is_none() {
+        return ToolReceipt {
+            tool: "suggest_fixes".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Fix suggestions for '{}' in project '{}' but no project or lesson-store payload provided",
+                params.diagnostic_code, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![format!(
+                "project://{}/diagnostics/{}/fixes",
+                params.project_id, params.diagnostic_code
+            )],
+            focus_uris: vec![],
+            next_actions: vec!["get_validation_report".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized project and/or lesson store payload to compute real fixes"
+                    .to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+
+    let mut fixes: Vec<scorestrata_core::diagnostic::SuggestedPatch> = Vec::new();
+    let mut lesson_sources = 0usize;
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Axis 1: real patches attached by the validator to matching diagnostics.
+    if let Some(project_json) = &params.project {
+        let project =
+            match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone())
+            {
+                Ok(p) => p,
+                Err(e) => return deserialize_error_receipt("suggest_fixes", "project", &e),
+            };
+        let report = crate::debug_ops::project_report(&project);
+        let mut diagnostic_hits = 0usize;
+        for diagnostic in report
+            .diagnostics
+            .iter()
+            .filter(|d| d.code == params.diagnostic_code)
+        {
+            diagnostic_hits += 1;
+            fixes.extend(diagnostic.suggested_patches.iter().cloned());
+        }
+        if diagnostic_hits == 0 {
+            warnings.push(format!(
+                "No '{}' diagnostics in the current validation run",
+                params.diagnostic_code
+            ));
+        }
+    }
+
+    // Axis 2: proven fixes from the lesson store.
+    if let Some(store_json) = &params.lesson_store {
+        let store = match serde_json::from_value::<scorestrata_storage::lesson_store::LessonStore>(
+            store_json.clone(),
+        ) {
+            Ok(s) => s,
+            Err(e) => return deserialize_error_receipt("suggest_fixes", "lesson_store", &e),
+        };
+        if let Some(best) =
+            store.get_best_for_trigger(&params.diagnostic_code, params.genre.as_deref())
+        {
+            lesson_sources = 1;
+            if let Some(op) = best.successful_patch.as_deref() {
+                if !fixes.iter().any(|f| f.op == op) {
+                    fixes.push(scorestrata_core::diagnostic::SuggestedPatch {
+                        op: op.to_string(),
+                        params: serde_json::json!({}),
+                        expected_delta: None,
+                        confidence: best.confidence,
+                    });
+                }
+            }
+        } else {
+            warnings.push(format!(
+                "No lesson recorded for trigger '{}'",
+                params.diagnostic_code
+            ));
+        }
+    }
+
+    // Keep the highest-confidence occurrence of each distinct (op, params)
+    // fix. Sorting first then retaining via a seen-set is a *guaranteed*
+    // dedup: dedup_by alone only removes adjacent duplicates, which would
+    // let same-op fixes with interleaved confidences both survive.
+    fixes.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut seen: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
+    fixes.retain(|f| seen.insert((f.op.clone(), f.params.to_string())));
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("fixes.count".to_string(), fixes.len().to_string());
+    score_delta.insert(
+        "fixes.lesson_sources".to_string(),
+        lesson_sources.to_string(),
+    );
+
+    let fix_summary: Vec<String> = fixes
+        .iter()
+        .map(|f| {
+            format!(
+                "{} (conf {:.2}{})",
+                f.op,
+                f.confidence,
+                f.expected_delta
+                    .as_deref()
+                    .map_or_else(String::new, |d| format!(", delta {d}"))
+            )
+        })
+        .collect();
+
+    let status = if fixes.is_empty() {
+        ToolStatus::Failed
+    } else {
+        ToolStatus::Succeeded
+    };
+
     ToolReceipt {
         tool: "suggest_fixes".to_string(),
-        status: ToolStatus::Succeeded,
-        summary: format!(
-            "Suggested fixes for '{}' in project '{}'",
-            params.diagnostic_code, params.project_id
-        ),
-        score_delta: BTreeMap::new(),
+        status,
+        summary: if fixes.is_empty() {
+            format!(
+                "No known fixes for '{}' in project '{}' — {}",
+                params.diagnostic_code,
+                params.project_id,
+                warnings.join("; ")
+            )
+        } else {
+            format!(
+                "Suggested {} fix(es) for '{}' in project '{}': {}",
+                fixes.len(),
+                params.diagnostic_code,
+                params.project_id,
+                fix_summary.join("; ")
+            )
+        },
+        score_delta,
         evidence_uris: vec![format!(
             "project://{}/diagnostics/{}/fixes",
             params.project_id, params.diagnostic_code
         )],
-        focus_uris: vec![],
-        next_actions: vec!["apply_patch".to_string()],
-        cost: ToolCost::default(),
-        warnings: vec![],
+        focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+        next_actions: if fixes.is_empty() {
+            vec!["get_validation_report".to_string()]
+        } else {
+            vec!["apply_patch".to_string()]
+        },
+        cost: ToolCost {
+            cpu_ms: 3,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings,
         dry_run: false,
         diagnostics: vec![],
     }
@@ -7745,15 +7916,198 @@ mod tests {
     }
 
     #[test]
-    fn suggest_fixes_returns_success() {
+    fn suggest_fixes_without_payload_fails_transparently() {
         let params = SuggestFixesParams {
             project_id: "proj_1".to_string(),
             diagnostic_code: "SCALE_VIOLATION".to_string(),
             segment_id: Some("chorus_1".to_string()),
+            genre: None,
+            project: None,
+            lesson_store: None,
+        };
+        let receipt = suggest_fixes(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .summary
+                .contains("no project or lesson-store payload")
+        );
+        assert!(!receipt.next_actions.contains(&"apply_patch".to_string()));
+    }
+
+    #[test]
+    fn suggest_fixes_with_project_returns_validator_patches() {
+        // §12.3: the validator already attaches SuggestedPatch payloads to
+        // diagnostics; the tool must surface them instead of a canned string.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = SuggestFixesParams {
+            project_id: project.id.to_string(),
+            diagnostic_code: "TRANSITION_ENERGY_DELTA_LOW".to_string(),
+            segment_id: None,
+            genre: None,
+            project: Some(serde_json::to_value(&project).unwrap()),
+            lesson_store: None,
         };
         let receipt = suggest_fixes(&params);
         assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("add_transition_package"));
+        // Three diagnostics all suggest the same patch, so dedup collapses
+        // them to one distinct fix.
+        assert_eq!(
+            receipt.score_delta.get("fixes.count").map(String::as_str),
+            Some("1")
+        );
         assert!(receipt.next_actions.contains(&"apply_patch".to_string()));
+    }
+
+    #[test]
+    fn suggest_fixes_unknown_code_with_project_fails_with_warning() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = SuggestFixesParams {
+            project_id: project.id.to_string(),
+            diagnostic_code: "NO_SUCH_CODE".to_string(),
+            segment_id: None,
+            genre: None,
+            project: Some(serde_json::to_value(&project).unwrap()),
+            lesson_store: None,
+        };
+        let receipt = suggest_fixes(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("No 'NO_SUCH_CODE' diagnostics"))
+        );
+    }
+
+    #[test]
+    fn suggest_fixes_uses_proven_lesson_from_store() {
+        // §13.5: a confident lesson for the trigger must surface its proven
+        // successful patch as a fix, even with no project payload.
+        let mut store = scorestrata_storage::lesson_store::LessonStore::new();
+        store.record(scorestrata_storage::lesson_store::StoredLesson {
+            id: "les_1".to_string(),
+            scope: "segment".to_string(),
+            trigger: "HARMONY_SCALE_VIOLATION".to_string(),
+            successful_patch: Some("quantize_layer_to_scale".to_string()),
+            failed_patches: vec![],
+            evidence_uris: vec![],
+            genre: None,
+            confidence: 0.95,
+            success_count: 3,
+            failure_count: 0,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        });
+        let params = SuggestFixesParams {
+            project_id: "proj_1".to_string(),
+            diagnostic_code: "HARMONY_SCALE_VIOLATION".to_string(),
+            segment_id: None,
+            genre: None,
+            project: None,
+            lesson_store: Some(serde_json::to_value(&store).unwrap()),
+        };
+        let receipt = suggest_fixes(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("quantize_layer_to_scale"));
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("fixes.lesson_sources")
+                .map(String::as_str),
+            Some("1")
+        );
+        assert!(receipt.next_actions.contains(&"apply_patch".to_string()));
+    }
+
+    #[test]
+    fn suggest_fixes_dedups_non_adjacent_duplicates() {
+        // Regression: dedup_by alone only collapses *adjacent* duplicates, so
+        // same-op fixes with interleaved confidences could both survive and
+        // inflate fixes.count. The seen-set retain must drop every later
+        // duplicate regardless of position.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let mut store = scorestrata_storage::lesson_store::LessonStore::new();
+        // Lesson surfaces a distinct proven op (no validator patch matches).
+        store.record(scorestrata_storage::lesson_store::StoredLesson {
+            id: "les_dedup".to_string(),
+            scope: "segment".to_string(),
+            trigger: "TRANSITION_ENERGY_DELTA_LOW".to_string(),
+            successful_patch: Some("quantize_layer_to_scale".to_string()),
+            failed_patches: vec![],
+            evidence_uris: vec![],
+            genre: None,
+            confidence: 0.9,
+            success_count: 3,
+            failure_count: 0,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        });
+        let params = SuggestFixesParams {
+            project_id: project.id.to_string(),
+            diagnostic_code: "TRANSITION_ENERGY_DELTA_LOW".to_string(),
+            segment_id: None,
+            genre: None,
+            project: Some(serde_json::to_value(&project).unwrap()),
+            lesson_store: Some(serde_json::to_value(&store).unwrap()),
+        };
+        let receipt = suggest_fixes(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        // add_transition_package (validator, 3 identical) + quantize
+        // (lesson) = exactly 2 distinct fixes, never 4.
+        assert_eq!(
+            receipt.score_delta.get("fixes.count").map(String::as_str),
+            Some("2")
+        );
+        assert!(receipt.summary.contains("add_transition_package"));
+        assert!(receipt.summary.contains("quantize_layer_to_scale"));
+    }
+
+    #[test]
+    fn suggest_fixes_merges_lesson_into_project_patches() {
+        // With both payloads, validator patches stay and the proven lesson is
+        // added when it contributes a distinct op.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let mut store = scorestrata_storage::lesson_store::LessonStore::new();
+        store.record(scorestrata_storage::lesson_store::StoredLesson {
+            id: "les_2".to_string(),
+            scope: "segment".to_string(),
+            trigger: "TRANSITION_ENERGY_DELTA_LOW".to_string(),
+            successful_patch: Some("add_transition_package".to_string()),
+            failed_patches: vec![],
+            evidence_uris: vec![],
+            genre: None,
+            confidence: 0.9,
+            success_count: 2,
+            failure_count: 0,
+            created_at: "t".to_string(),
+            updated_at: "t".to_string(),
+        });
+        let params = SuggestFixesParams {
+            project_id: project.id.to_string(),
+            diagnostic_code: "TRANSITION_ENERGY_DELTA_LOW".to_string(),
+            segment_id: None,
+            genre: None,
+            project: Some(serde_json::to_value(&project).unwrap()),
+            lesson_store: Some(serde_json::to_value(&store).unwrap()),
+        };
+        let receipt = suggest_fixes(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        // Validator patch (1 distinct) + lesson patch is a duplicate op, so
+        // the count stays at 1 — the merge must not inflate it.
+        assert_eq!(
+            receipt.score_delta.get("fixes.count").map(String::as_str),
+            Some("1"),
+            "duplicate lesson op must not inflate the count"
+        );
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("fixes.lesson_sources")
+                .map(String::as_str),
+            Some("1")
+        );
     }
 
     #[test]
@@ -8360,6 +8714,26 @@ mod tests {
                 .any(|d| d.code == "METRIC_REGRESSION_DETECTED"),
             "dispatcher L6 must reach regression detection"
         );
+    }
+
+    #[test]
+    fn dispatcher_suggest_fixes_wire_path() {
+        // The failure report recommends suggest_fixes as the next action, so
+        // the dispatcher must route it and reach the real validator patches.
+        let _guard = crate::telemetry::test_lock_guard();
+        let project = scorestrata_testkit::melodic_techno_project();
+        let receipt = crate::dispatch::dispatch_tool(
+            "suggest_fixes",
+            serde_json::json!({
+                "project_id": project.id.to_string(),
+                "diagnostic_code": "TRANSITION_ENERGY_DELTA_LOW",
+                "project": project,
+            }),
+        );
+        assert_eq!(receipt.tool, "suggest_fixes");
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("add_transition_package"));
+        assert!(receipt.next_actions.contains(&"apply_patch".to_string()));
     }
 
     #[test]
