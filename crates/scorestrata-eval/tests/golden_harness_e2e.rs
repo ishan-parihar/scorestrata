@@ -284,9 +284,6 @@ fn golden_detects_validation_regression() {
 /// actual compile → validate → patch run (§16.8).
 #[test]
 fn eval_harness_reports_real_metrics() {
-    use scorestrata_mcp::patch_ops::{apply_patch_to_project, layer_out_of_scale_count};
-    use scorestrata_mcp::tools::{ApplyPatchParams, PatchScope, ToolStatus};
-
     // System metrics from a real compile + validate.
     let mut system = SystemEvalMetrics::new();
     let config = scorestrata_mcp::config_gen::generate_config(

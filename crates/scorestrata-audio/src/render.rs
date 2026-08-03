@@ -527,7 +527,11 @@ fn instrument_family(instrument: &str) -> &str {
         "drums"
     } else if lower.contains("bass") {
         "bass"
-    } else if lower.contains("lead") || lower.contains("pluck") || lower.contains("arp") {
+    } else if lower.contains("lead")
+        || lower.contains("pluck")
+        || lower.contains("arp")
+        || lower.contains("bell")
+    {
         "lead"
     } else if lower.contains("pad") || lower.contains("string") || lower.contains("key") {
         "pad"

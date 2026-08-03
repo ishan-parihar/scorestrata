@@ -731,10 +731,10 @@ mod tests {
         let _guard = crate::telemetry::test_lock_guard();
         // §15.5: every dispatched call is accounted in the telemetry registry.
         crate::telemetry::reset();
-        dispatch_tool("telemetry_probe_a", serde_json::json!({}));
-        dispatch_tool("telemetry_probe_a", serde_json::json!({}));
-        dispatch_tool("telemetry_probe_b", serde_json::json!({}));
-        dispatch_tool("definitely_not_a_tool", serde_json::json!({}));
+        let _ = dispatch_tool("telemetry_probe_a", serde_json::json!({}));
+        let _ = dispatch_tool("telemetry_probe_a", serde_json::json!({}));
+        let _ = dispatch_tool("telemetry_probe_b", serde_json::json!({}));
+        let _ = dispatch_tool("definitely_not_a_tool", serde_json::json!({}));
 
         let snap = crate::telemetry::snapshot();
         assert_eq!(snap.tool_calls.get("telemetry_probe_a"), Some(&2));
@@ -751,8 +751,8 @@ mod tests {
     fn get_telemetry_tool_serves_snapshot() {
         let _guard = crate::telemetry::test_lock_guard();
         crate::telemetry::reset();
-        dispatch_tool("telemetry_probe_c", serde_json::json!({}));
-        dispatch_tool("telemetry_probe_c", serde_json::json!({}));
+        let _ = dispatch_tool("telemetry_probe_c", serde_json::json!({}));
+        let _ = dispatch_tool("telemetry_probe_c", serde_json::json!({}));
 
         let receipt = dispatch_tool("get_telemetry", serde_json::json!({}));
         assert_eq!(receipt.tool, "get_telemetry");

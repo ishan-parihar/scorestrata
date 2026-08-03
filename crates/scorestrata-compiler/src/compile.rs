@@ -92,10 +92,8 @@ pub fn compile_project(project: &Project) -> Result<TimelineIR, ScorestrataError
                 // Note-based patterns (melody, bass, pads).
                 for note in &pattern.notes {
                     let abs_tick = segment_start_tick + instance_start + note.start.0;
-                    #[expect(
-                        clippy::cast_possible_wrap,
-                        reason = "Note pitch 0-127 plus bounded transpose stays in i64 range"
-                    )]
+                    // Note pitch 0-127 plus bounded transpose stays in i64 range;
+                    // the clamp makes the narrowing cast provably lossless.
                     let pitch = (i64::from(note.pitch.0) + transpose).clamp(0, 127) as u8;
 
                     let track_id = track_id_for_layer(&layer.id);
