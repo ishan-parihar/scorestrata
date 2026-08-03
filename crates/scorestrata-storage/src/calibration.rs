@@ -103,7 +103,14 @@ pub fn default_genre_profiles() -> Vec<GenreProfile> {
             drum_density_min: 0.75,
             spectral_brightness_target: 0.62,
             loudness_target_lufs: -10.0,
-            metric_weights: BTreeMap::new(),
+            // §11.8 metric weighting by genre: driving dance floor, so
+            // rhythm and structure dominate the scorecard.
+            metric_weights: BTreeMap::from([
+                ("rhythm".to_string(), 1.3),
+                ("structure".to_string(), 1.2),
+                ("harmony".to_string(), 0.9),
+                ("arrangement".to_string(), 1.0),
+            ]),
         },
         GenreProfile {
             name: "techno".to_string(),
@@ -114,7 +121,12 @@ pub fn default_genre_profiles() -> Vec<GenreProfile> {
             drum_density_min: 0.7,
             spectral_brightness_target: 0.58,
             loudness_target_lufs: -10.0,
-            metric_weights: BTreeMap::new(),
+            metric_weights: BTreeMap::from([
+                ("rhythm".to_string(), 1.4),
+                ("structure".to_string(), 1.1),
+                ("harmony".to_string(), 0.8),
+                ("arrangement".to_string(), 1.0),
+            ]),
         },
         GenreProfile {
             name: "house".to_string(),
@@ -125,7 +137,12 @@ pub fn default_genre_profiles() -> Vec<GenreProfile> {
             drum_density_min: 0.7,
             spectral_brightness_target: 0.55,
             loudness_target_lufs: -12.0,
-            metric_weights: BTreeMap::new(),
+            metric_weights: BTreeMap::from([
+                ("rhythm".to_string(), 1.3),
+                ("structure".to_string(), 1.1),
+                ("harmony".to_string(), 1.0),
+                ("arrangement".to_string(), 1.0),
+            ]),
         },
         GenreProfile {
             name: "ambient".to_string(),
@@ -136,7 +153,12 @@ pub fn default_genre_profiles() -> Vec<GenreProfile> {
             drum_density_min: 0.10,
             spectral_brightness_target: 0.48,
             loudness_target_lufs: -16.0,
-            metric_weights: BTreeMap::new(),
+            metric_weights: BTreeMap::from([
+                ("harmony".to_string(), 1.4),
+                ("structure".to_string(), 1.2),
+                ("rhythm".to_string(), 0.6),
+                ("arrangement".to_string(), 1.0),
+            ]),
         },
         GenreProfile {
             name: "cinematic".to_string(),
@@ -147,7 +169,12 @@ pub fn default_genre_profiles() -> Vec<GenreProfile> {
             drum_density_min: 0.3,
             spectral_brightness_target: 0.5,
             loudness_target_lufs: -16.0,
-            metric_weights: BTreeMap::new(),
+            metric_weights: BTreeMap::from([
+                ("harmony".to_string(), 1.3),
+                ("arrangement".to_string(), 1.2),
+                ("structure".to_string(), 1.0),
+                ("rhythm".to_string(), 0.7),
+            ]),
         },
         GenreProfile {
             name: "trance".to_string(),
@@ -158,7 +185,12 @@ pub fn default_genre_profiles() -> Vec<GenreProfile> {
             drum_density_min: 0.75,
             spectral_brightness_target: 0.6,
             loudness_target_lufs: -9.0,
-            metric_weights: BTreeMap::new(),
+            metric_weights: BTreeMap::from([
+                ("structure".to_string(), 1.3),
+                ("rhythm".to_string(), 1.2),
+                ("harmony".to_string(), 1.0),
+                ("arrangement".to_string(), 1.0),
+            ]),
         },
         GenreProfile {
             name: "dubstep".to_string(),
@@ -169,7 +201,12 @@ pub fn default_genre_profiles() -> Vec<GenreProfile> {
             drum_density_min: 0.6,
             spectral_brightness_target: 0.5,
             loudness_target_lufs: -8.0,
-            metric_weights: BTreeMap::new(),
+            metric_weights: BTreeMap::from([
+                ("rhythm".to_string(), 1.3),
+                ("harmony".to_string(), 1.1),
+                ("structure".to_string(), 1.0),
+                ("arrangement".to_string(), 0.9),
+            ]),
         },
         GenreProfile {
             name: "lo-fi".to_string(),
@@ -180,7 +217,12 @@ pub fn default_genre_profiles() -> Vec<GenreProfile> {
             drum_density_min: 0.2,
             spectral_brightness_target: 0.35,
             loudness_target_lufs: -16.0,
-            metric_weights: BTreeMap::new(),
+            metric_weights: BTreeMap::from([
+                ("harmony".to_string(), 1.2),
+                ("rhythm".to_string(), 1.1),
+                ("structure".to_string(), 1.0),
+                ("arrangement".to_string(), 0.9),
+            ]),
         },
     ]
 }
@@ -851,5 +893,57 @@ mod tests {
         save_patch_template_store(&path, &store).unwrap();
         let loaded = load_patch_template_store(&path).unwrap();
         assert_eq!(loaded.len(), 1);
+    }
+
+    #[test]
+    fn default_genre_profiles_carry_calibrated_metric_weights() {
+        // §11.8: every curated genre profile must actually weight its metrics
+        // — an empty table would make the genre calibration deadweight that
+        // the scorecard never sees.
+        let profiles = default_genre_profiles();
+        assert!(profiles.len() >= 8, "full genre coverage");
+        for profile in &profiles {
+            assert!(
+                !profile.metric_weights.is_empty(),
+                "profile '{}' must define metric weights",
+                profile.name
+            );
+            for (category, weight) in &profile.metric_weights {
+                assert!(
+                    *weight > 0.0,
+                    "profile '{}' weight for '{category}' must be positive",
+                    profile.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn genre_weight_keys_resolve_against_scorecard_categories() {
+        // §11.8: the scorecard looks weights up by the metric-name prefix
+        // (`metric_category` splits on '.'). A typo here would silently
+        // deaden a weight with no compile error, so every key in every
+        // profile must resolve against the category set the validator emits.
+        let known_categories = [
+            "arrangement",
+            "audio",
+            "brief",
+            "harmony",
+            "regression",
+            "render",
+            "rhythm",
+            "structure",
+            "timeline",
+        ];
+        let profiles = default_genre_profiles();
+        for profile in &profiles {
+            for category in profile.metric_weights.keys() {
+                assert!(
+                    known_categories.contains(&category.as_str()),
+                    "profile '{}' weight key '{category}' is not a scorecard metric category",
+                    profile.name
+                );
+            }
+        }
     }
 }

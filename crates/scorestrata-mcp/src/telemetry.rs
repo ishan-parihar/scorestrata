@@ -62,13 +62,30 @@ pub fn reset() {
 /// use this single lock so they can never race each other's exact counts.
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Acquire the shared test lock, recovering from poisoning.
+///
+/// Why: if one test panics while holding `TEST_LOCK` (e.g. an exact-count
+/// assertion), the mutex becomes poisoned and a plain `.lock().unwrap()` in
+/// every other guarded test would panic too — turning one real failure into a
+/// cascade of phantom lock-panics that obscures the root cause. Recovering the
+/// guard lets the remaining tests run normally and fail only on their own
+/// merits. Serialization is unchanged: this is a test-only lock, so a poisoned
+/// writer adds no safety concern.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn test_lock_guard() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn records_tool_calls_across_threads() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = test_lock_guard();
         reset();
         record_tool_call("apply_patch");
         record_tool_call("apply_patch");
@@ -82,7 +99,7 @@ mod tests {
 
     #[test]
     fn records_patch_attempts_and_derives_success_rate() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = test_lock_guard();
         reset();
         record_patch_attempt(true);
         record_patch_attempt(true);
@@ -96,7 +113,7 @@ mod tests {
 
     #[test]
     fn reset_starts_fresh() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = test_lock_guard();
         reset();
         record_tool_call("get_capabilities");
         assert_eq!(snapshot().total_tool_calls(), 1);
@@ -106,7 +123,7 @@ mod tests {
 
     #[test]
     fn empty_registry_is_harmless() {
-        let _guard = TEST_LOCK.lock().unwrap();
+        let _guard = test_lock_guard();
         reset();
         let snap = snapshot();
         assert_eq!(snap.total_tool_calls(), 0);

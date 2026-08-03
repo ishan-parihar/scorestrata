@@ -656,6 +656,28 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-CALIBRATION-SCORING".to_string(),
+        title: "Genre-calibrated metric weights feed the L6 scorecard (§11.8)".to_string(),
+        phase: "11".to_string(),
+        tasks: vec!["CAL-001".to_string()],
+        code: vec![
+            "scorestrata_storage::calibration".to_string(),
+            "scorestrata_validator::report".to_string(),
+            "scorestrata_mcp::tools".to_string(),
+        ],
+        tests: vec![
+            "calibration::tests".to_string(),
+            "report::tests".to_string(),
+            "tools::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec!["check_regressions".to_string()],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §11.6, §11.8".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),

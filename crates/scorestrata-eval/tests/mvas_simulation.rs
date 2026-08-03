@@ -2010,6 +2010,110 @@ fn mvas_step_27_golden_harness_over_the_wire() {
     );
 }
 
+#[test]
+fn mvas_step_28_genre_calibration_feeds_l6_scoring() {
+    // §11.8: the genre profile's metric weights must reach the L6 scorecard.
+    // Previously the weights were deadweight — every profile shipped an empty
+    // table and the validator never consulted the genre.
+    use scorestrata_eval::golden::{
+        ExpectedOutputs, GoldenConfig, ValidationGates, run_validation_golden_assertions,
+    };
+
+    // The canonical melodic-techno profile now carries genre weights and the
+    // §11.6 loudness target.
+    let profile = scorestrata_storage::calibration::default_genre_profiles()
+        .into_iter()
+        .find(|p| p.name == "melodic_techno")
+        .expect("melodic_techno profile exists");
+    assert!(
+        !profile.metric_weights.is_empty(),
+        "genre weights populated"
+    );
+    assert_eq!(profile.metric_weights.get("rhythm"), Some(&1.3));
+    assert_eq!(profile.loudness_target_lufs, -10.0);
+
+    // The MCP wiring point resolves the calibrated scoring profile.
+    let calibrated = scorestrata_mcp::tools::scoring_profile_for_genre("melodic_techno");
+    assert_eq!(calibrated.weights.get("rhythm"), Some(&1.3));
+    assert_eq!(calibrated.weights.get("structure"), Some(&1.2));
+
+    // The full pipeline (config → plan → L6 over the wire → golden) runs
+    // with the genre-calibrated scoring.
+    let brief = "Dark melodic techno at 124 BPM in C minor, 64 bars";
+    let config = scorestrata_mcp::config_gen::generate_config("golden_techno", brief);
+    let plan = scorestrata_compiler::plan::plan_project(&config);
+    let mut project = scorestrata_testkit::minimal_project();
+    project.config = config.clone();
+    project.arrangement = plan.arrangement;
+    project.patterns = plan.patterns;
+    project.status = scorestrata_core::domain::ProjectStatus::ConfigApproved;
+    project.brief.raw_text = brief.to_string();
+    project.brief.genre = Some(config.genre.clone());
+
+    let receipt = scorestrata_mcp::dispatch::dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 6,
+        }),
+    );
+    let scorecard = scorestrata_validator::report::build_validation_report_with_profile(
+        project.id,
+        6,
+        receipt.diagnostics.clone(),
+        &calibrated,
+    )
+    .scorecard;
+    let render = scorestrata_mcp::tools::render_project_to_analysis(&project).expect("renders");
+
+    let golden = GoldenConfig {
+        name: "melodic_techno_64_bar".to_string(),
+        description: "calibrated golden".to_string(),
+        expected_outputs: ExpectedOutputs {
+            segment_count: 4,
+            total_bars: 64,
+            has_chorus: true,
+            has_breakdown: false,
+            genre_matches_brief: true,
+            mood_matches_brief: true,
+            duration_matches_config: true,
+        },
+        tolerance: 0.01,
+        validation_gates: ValidationGates {
+            max_errors: 2,
+            max_warnings: 3,
+            max_true_peak_dbtp: 2.0,
+            min_lufs: -16.0,
+            max_lufs: -10.0,
+        },
+        expected_metrics: std::collections::BTreeMap::from([(
+            "arrangement.transition_strength".to_string(),
+            scorestrata_eval::golden::MetricRange {
+                min: 0.85,
+                max: 1.0,
+            },
+        )]),
+    };
+    let validation = run_validation_golden_assertions(
+        &golden,
+        &receipt.diagnostics,
+        &scorecard,
+        Some(render.analysis.true_peak_dbtp),
+        Some(render.analysis.integrated_lufs),
+    );
+    assert!(
+        validation.passed,
+        "calibrated golden failed: {:?}",
+        validation
+            .assertions
+            .iter()
+            .filter(|a| !a.passed)
+            .map(|a| (a.name.as_str(), a.error.clone().unwrap_or_default()))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

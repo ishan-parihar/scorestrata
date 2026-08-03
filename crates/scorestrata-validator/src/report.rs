@@ -41,6 +41,23 @@ impl Default for ScoringProfile {
     }
 }
 
+impl ScoringProfile {
+    /// Merge genre-calibrated metric weights (§11.8) over the generic defaults.
+    ///
+    /// Categories the genre profile does not weight keep the default weight;
+    /// the hard gates (`min_overall_score`, `max_hard_failures`) stay at
+    /// their defaults. This is how the canonical genre profiles from
+    /// `scorestrata_storage::calibration` reach the scorecard.
+    #[must_use]
+    pub fn with_genre_weights(weights: BTreeMap<String, f32>) -> Self {
+        let mut merged = Self::default();
+        for (category, weight) in weights {
+            merged.weights.insert(category, weight);
+        }
+        merged
+    }
+}
+
 /// Build a validation report from a set of diagnostics.
 #[must_use]
 pub fn build_validation_report(
@@ -292,5 +309,23 @@ mod tests {
 
         // Higher weight on the affected metric should produce lower overall score
         assert!(report2.scorecard.overall_score <= report1.scorecard.overall_score);
+    }
+
+    #[test]
+    fn with_genre_weights_merges_over_defaults() {
+        // §11.8: genre weights override matching categories and leave the
+        // rest (and the hard gates) at their defaults.
+        let profile = ScoringProfile::with_genre_weights(BTreeMap::from([
+            ("rhythm".to_string(), 1.4),
+            ("arrangement".to_string(), 1.0),
+        ]));
+        assert_eq!(profile.weights.get("rhythm"), Some(&1.4));
+        assert_eq!(profile.weights.get("arrangement"), Some(&1.0));
+        // Untouched categories keep the generic defaults.
+        assert_eq!(profile.weights.get("harmony"), Some(&1.0));
+        assert_eq!(profile.weights.get("structure"), Some(&1.2));
+        // Hard gates unchanged.
+        assert_eq!(profile.min_overall_score, 0.7);
+        assert_eq!(profile.max_hard_failures, 0);
     }
 }

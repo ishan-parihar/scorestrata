@@ -220,6 +220,23 @@ pub fn run_validation_with_project(
     finish_validation_receipt(params, level, diagnostics)
 }
 
+/// Resolve the §11.8 genre-calibrated scoring profile for a project.
+///
+/// Looks up the canonical genre profile in storage and merges its metric
+/// weights over the validator's generic defaults; unknown genres fall back
+/// to the uncalibrated profile. This is the single wiring point that lets
+/// taste calibration reach the scorecard.
+#[must_use]
+pub fn scoring_profile_for_genre(genre: &str) -> scorestrata_validator::report::ScoringProfile {
+    scorestrata_storage::calibration::default_genre_profiles()
+        .into_iter()
+        .find(|p| p.name == genre)
+        .map(|p| {
+            scorestrata_validator::report::ScoringProfile::with_genre_weights(p.metric_weights)
+        })
+        .unwrap_or_default()
+}
+
 /// Run Level 6 regression detection (§11.2 L6, §11.7).
 ///
 /// Compares the current project against a pre-patch baseline along two axes:
@@ -312,10 +329,14 @@ pub fn check_regressions(params: &CheckRegressionsParams) -> ToolReceipt {
             min_energy_delta: default_min_energy_delta(),
         };
         let receipt = run_validation_with_project(&run_params, &project, 4);
-        let current = scorestrata_validator::report::build_validation_report(
+        // §11.8: the current scorecard is built with the genre-calibrated
+        // weights so regression deltas reflect what matters for the genre.
+        let profile = scoring_profile_for_genre(&project.config.genre);
+        let current = scorestrata_validator::report::build_validation_report_with_profile(
             project.id,
             4,
             receipt.diagnostics,
+            &profile,
         )
         .scorecard;
         let report = scorestrata_validator::regression_check::detect_regressions(
@@ -6161,6 +6182,9 @@ mod tests {
 
     #[test]
     fn dispatcher_run_validation_l5_with_project_payload() {
+        // Serialize with the shared registry lock: this test records telemetry
+        // and must not race the telemetry module's exact-count assertions.
+        let _guard = crate::telemetry::test_lock_guard();
         // The wire path: level 5 + project payload must reach the brief plane.
         let mut project = scorestrata_testkit::melodic_techno_project();
         project.config.genre = "house".to_string();
@@ -6308,6 +6332,9 @@ mod tests {
 
     #[test]
     fn dispatcher_run_validation_l3_with_project_payload() {
+        // Serialize with the shared registry lock: this test records telemetry
+        // and must not race the telemetry module's exact-count assertions.
+        let _guard = crate::telemetry::test_lock_guard();
         // The wire path: level 3 + project payload must reach the timeline
         // plane.
         let mut project = scorestrata_testkit::melodic_techno_project();
@@ -8121,6 +8148,9 @@ mod tests {
 
     #[test]
     fn dispatcher_l4_emits_audio_diagnostics() {
+        // Serialize with the shared registry lock: this test records telemetry
+        // and must not race the telemetry module's exact-count assertions.
+        let _guard = crate::telemetry::test_lock_guard();
         let project = scorestrata_testkit::melodic_techno_project();
         let receipt = crate::dispatch::dispatch_tool(
             "run_validation",
@@ -8308,6 +8338,9 @@ mod tests {
 
     #[test]
     fn dispatcher_check_regressions_wire_path() {
+        // Serialize with the shared registry lock: this test records telemetry
+        // and must not race the telemetry module's exact-count assertions.
+        let _guard = crate::telemetry::test_lock_guard();
         let project = scorestrata_testkit::melodic_techno_project();
         let baseline =
             serde_json::to_value(clean_scorecard_baseline()).expect("scorecard serializes");
@@ -8326,6 +8359,60 @@ mod tests {
                 .iter()
                 .any(|d| d.code == "METRIC_REGRESSION_DETECTED"),
             "dispatcher L6 must reach regression detection"
+        );
+    }
+
+    #[test]
+    fn scoring_profile_for_genre_resolves_genre_weights() {
+        // §11.8: melodic techno is rhythm/structure-led, so the calibrated
+        // profile must override the generic defaults.
+        let profile = scoring_profile_for_genre("melodic_techno");
+        assert_eq!(profile.weights.get("rhythm"), Some(&1.3));
+        assert_eq!(profile.weights.get("structure"), Some(&1.2));
+        assert_eq!(profile.weights.get("arrangement"), Some(&1.0));
+        // Ambient inverts the priorities.
+        let ambient = scoring_profile_for_genre("ambient");
+        assert_eq!(ambient.weights.get("rhythm"), Some(&0.6));
+        assert_eq!(ambient.weights.get("harmony"), Some(&1.4));
+    }
+
+    #[test]
+    fn scoring_profile_for_genre_falls_back_for_unknown() {
+        let profile = scoring_profile_for_genre("no_such_genre");
+        let defaults = scorestrata_validator::report::ScoringProfile::default();
+        assert_eq!(profile.weights, defaults.weights);
+        assert_eq!(profile.min_overall_score, defaults.min_overall_score);
+        assert_eq!(profile.max_hard_failures, defaults.max_hard_failures);
+    }
+
+    #[test]
+    fn check_regressions_uses_genre_calibrated_scorecard() {
+        // The melodic-techno fixture produces arrangement + audio metrics, so
+        // the genre weight for arrangement (1.0 vs default 0.8) must change
+        // the overall score the L6 scorecard sees.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let run_params = RunValidationParams {
+            project_id: project.id.to_string(),
+            scope: default_scope(),
+            segment_ids: vec![],
+            layer_ids: vec![],
+            min_energy_delta: default_min_energy_delta(),
+        };
+        let receipt = run_validation_with_project(&run_params, &project, 4);
+        let default_report = scorestrata_validator::report::build_validation_report(
+            project.id,
+            4,
+            receipt.diagnostics.clone(),
+        );
+        let calibrated_report = scorestrata_validator::report::build_validation_report_with_profile(
+            project.id,
+            4,
+            receipt.diagnostics,
+            &scoring_profile_for_genre(&project.config.genre),
+        );
+        assert_ne!(
+            calibrated_report.scorecard.overall_score, default_report.scorecard.overall_score,
+            "genre calibration must affect the L6 scorecard"
         );
     }
 }

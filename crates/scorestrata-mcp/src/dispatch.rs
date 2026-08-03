@@ -556,6 +556,7 @@ mod tests {
 
     #[test]
     fn every_registered_tool_dispatches_without_unknown_marker() {
+        let _guard = crate::telemetry::test_lock_guard();
         // Fuzz gate: each registered name must route to an implementation, not
         // the unknown-tool fallback. Dispatching with `{}` also forces every
         // tool to tolerate an empty payload (transparent failure, never panic),
@@ -582,6 +583,7 @@ mod tests {
 
     #[test]
     fn dispatches_standard_tool_with_typed_params() {
+        let _guard = crate::telemetry::test_lock_guard();
         let receipt = dispatch_tool(
             "get_policy_profile",
             serde_json::json!({ "project_id": "proj_1" }),
@@ -592,6 +594,7 @@ mod tests {
 
     #[test]
     fn unknown_tool_returns_failed_receipt() {
+        let _guard = crate::telemetry::test_lock_guard();
         let receipt = dispatch_tool("no_such_tool", serde_json::json!({}));
         assert!(matches!(receipt.status, ToolStatus::Failed));
         assert!(receipt.summary.contains("Unknown tool"));
@@ -600,6 +603,7 @@ mod tests {
 
     #[test]
     fn bad_params_return_transparent_deserialize_receipt() {
+        let _guard = crate::telemetry::test_lock_guard();
         let receipt = dispatch_tool(
             "get_policy_profile",
             serde_json::json!({ "project_id": 42 }),
@@ -611,6 +615,7 @@ mod tests {
 
     #[test]
     fn no_param_tools_dispatch_to_success() {
+        let _guard = crate::telemetry::test_lock_guard();
         for name in ["get_capabilities", "get_contracts", "get_onboarding_packet"] {
             let receipt = dispatch_tool(name, serde_json::json!({}));
             assert_eq!(receipt.tool, name);
@@ -623,6 +628,7 @@ mod tests {
     }
     #[test]
     fn capabilities_receipt_contains_manifest() {
+        let _guard = crate::telemetry::test_lock_guard();
         let receipt = dispatch_tool("get_capabilities", serde_json::json!({}));
         assert!(receipt.summary.contains("Capabilities manifest"));
         assert!(receipt.summary.contains("run_validation"));
@@ -643,6 +649,7 @@ mod tests {
 
     #[test]
     fn run_validation_dispatches_with_project_payload() {
+        let _guard = crate::telemetry::test_lock_guard();
         let project = scorestrata_testkit::melodic_techno_project();
         let receipt = dispatch_tool(
             "run_validation",
@@ -662,6 +669,7 @@ mod tests {
 
     #[test]
     fn run_validation_without_project_payload_still_receipts() {
+        let _guard = crate::telemetry::test_lock_guard();
         let receipt = dispatch_tool(
             "run_validation",
             serde_json::json!({ "project_id": "proj_1" }),
@@ -675,6 +683,7 @@ mod tests {
 
     #[test]
     fn mutation_tool_dispatches_real_project_payload() {
+        let _guard = crate::telemetry::test_lock_guard();
         let project = scorestrata_testkit::melodic_techno_project();
         let pattern_id = project.patterns[0].id.to_string();
         let receipt = dispatch_tool(
@@ -697,6 +706,7 @@ mod tests {
 
     #[test]
     fn project_id_roundtrips_through_dispatcher_typing() {
+        let _guard = crate::telemetry::test_lock_guard();
         let id = ProjectId::new();
         let receipt = dispatch_tool(
             "get_project_summary",
@@ -712,7 +722,7 @@ mod tests {
 
     #[test]
     fn dispatch_records_tool_calls_in_telemetry() {
-        let _guard = crate::telemetry::TEST_LOCK.lock().unwrap();
+        let _guard = crate::telemetry::test_lock_guard();
         // §15.5: every dispatched call is accounted in the telemetry registry.
         crate::telemetry::reset();
         dispatch_tool("telemetry_probe_a", serde_json::json!({}));
@@ -733,7 +743,7 @@ mod tests {
 
     #[test]
     fn get_telemetry_tool_serves_snapshot() {
-        let _guard = crate::telemetry::TEST_LOCK.lock().unwrap();
+        let _guard = crate::telemetry::test_lock_guard();
         crate::telemetry::reset();
         dispatch_tool("telemetry_probe_c", serde_json::json!({}));
         dispatch_tool("telemetry_probe_c", serde_json::json!({}));
