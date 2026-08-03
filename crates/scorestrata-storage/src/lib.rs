@@ -24,6 +24,7 @@ pub mod lineage;
 pub mod memory;
 pub mod provenance;
 pub mod render_job;
+pub mod render_manifest;
 pub mod replay;
 pub mod snapshot_graph;
 pub mod trace;

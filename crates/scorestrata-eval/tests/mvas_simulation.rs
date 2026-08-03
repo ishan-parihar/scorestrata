@@ -2947,6 +2947,121 @@ fn mvas_step_35_metric_lineage_shows_repair_trajectory() {
     );
 }
 
+/// Step 36 — §17.2 Render Manifest: every render produces a reproducibility
+/// receipt tying the artifact's SHA-256 to its inputs, and the receipt is
+/// verifiable over the wire.
+#[test]
+fn mvas_step_36_render_manifest_proves_reproducibility() {
+    use scorestrata_mcp::dispatch::dispatch_tool;
+    use scorestrata_storage::cache::content_hash;
+    use scorestrata_storage::render_manifest::{RenderManifest, RenderManifestStore};
+
+    // A deterministic render: same project, same inputs → same bytes.
+    let project = scorestrata_testkit::melodic_techno_project();
+    let result = scorestrata_mcp::tools::render_project_to_analysis(&project)
+        .expect("project renders deterministically");
+    let master_checksum = content_hash(&result.wav_bytes);
+
+    // Produce the manifest for the master render (§17.2 schema fields).
+    let manifest = RenderManifest::from_render(
+        "art_p36_master",
+        "master_wav",
+        "renders/master.wav",
+        &master_checksum,
+        result.sample_rate,
+        result.channels,
+        result.duration_seconds,
+        "snap_p36_0042",
+        "cmd_0042",
+        "0.3.0",
+        "0.3.0",
+        Some(1337),
+        std::collections::BTreeMap::new(),
+    );
+    assert!(manifest.is_complete(), "manifest is a usable receipt"); // Re-rendering with identical inputs reproduces the same manifest hash
+    // (§17.1: artifacts reproducible from the same inputs).
+    let re_render = scorestrata_mcp::tools::render_project_to_analysis(&project)
+        .expect("deterministic re-render");
+    let manifest_2 = RenderManifest::from_render(
+        "art_p36_master",
+        "master_wav",
+        "renders/master.wav",
+        &content_hash(&re_render.wav_bytes),
+        re_render.sample_rate,
+        re_render.channels,
+        re_render.duration_seconds,
+        "snap_p36_0042",
+        "cmd_0042",
+        "0.3.0",
+        "0.3.0",
+        Some(1337),
+        std::collections::BTreeMap::new(),
+    );
+    assert!(
+        manifest.reproduces(&manifest_2),
+        "identical inputs reproduce the same manifest"
+    );
+    assert_eq!(manifest.manifest_hash(), manifest_2.manifest_hash());
+
+    // Different seed breaks reproducibility (§17.1).
+    let mut different = manifest.clone();
+    different.seed = Some(9999);
+    assert!(!manifest.reproduces(&different));
+
+    // The manifest's cache key is the deterministic reproducibility
+    // fingerprint (§9.3).
+    assert!(manifest.cache_key().starts_with("render/"));
+    assert!(
+        manifest
+            .cache_key()
+            .contains(&manifest.manifest_hash()[..8])
+    );
+
+    // Record it and query it over the wire: the tool verifies the artifact's
+    // actual bytes against the declared checksum (§17.3).
+    let mut store = RenderManifestStore::new();
+    store.record(manifest);
+    let receipt = dispatch_tool(
+        "get_render_manifest",
+        serde_json::json!({
+            "project_id": "p36",
+            "artifact_id": "art_p36_master",
+            "manifests": serde_json::to_value(&store).unwrap_or_default(),
+            "artifact_bytes": result.wav_bytes,
+        }),
+    );
+    assert!(
+        receipt.summary.contains("CHECKSUM MATCH"),
+        "wire receipt verifies the artifact: {}",
+        receipt.summary
+    );
+    assert!(
+        receipt.summary.contains("48000 Hz")
+            && receipt.summary.contains("from snapshot")
+            && receipt.summary.contains("reproducible inputs"),
+        "receipt reports format + provenance: {}",
+        receipt.summary
+    );
+
+    // Tampered bytes must fail verification over the wire.
+    let mut tampered = result.wav_bytes;
+    tampered[0] ^= 0xFF;
+    let receipt = dispatch_tool(
+        "get_render_manifest",
+        serde_json::json!({
+            "project_id": "p36",
+            "artifact_id": "art_p36_master",
+            "manifests": serde_json::to_value(&store).unwrap_or_default(),
+            "artifact_bytes": tampered,
+        }),
+    );
+    assert!(
+        receipt.summary.contains("CHECKSUM MISMATCH"),
+        "tampering detected over the wire: {}",
+        receipt.summary
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

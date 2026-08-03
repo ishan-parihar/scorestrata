@@ -788,6 +788,28 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-RENDER-MANIFEST".to_string(),
+        title: "RenderManifest — reproducibility receipt for every render (§17.2)".to_string(),
+        phase: "17".to_string(),
+        tasks: vec!["EVID-006".to_string()],
+        code: vec![
+            "scorestrata_storage::render_manifest".to_string(),
+            "scorestrata_mcp::tools::get_render_manifest".to_string(),
+            "scorestrata_mcp::resources::RenderManifestView".to_string(),
+        ],
+        tests: vec![
+            "render_manifest::tests".to_string(),
+            "tools::tests".to_string(),
+            "resources::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec!["get_render_manifest".to_string()],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §17.1, §17.2, §17.3".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-METRIC-LINEAGE".to_string(),
         title: "MetricLineage entity — per-metric repair trajectory with deltas (§8.3, §15.1)"
             .to_string(),

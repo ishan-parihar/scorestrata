@@ -221,6 +221,72 @@ impl ProvenanceView {
     }
 }
 
+/// Render manifest view — reproducibility receipt for a rendered artifact.
+///
+/// Derived from [`scorestrata_storage::render_manifest::RenderManifest`]
+/// (architecture §17.2): every render produces a manifest tying the artifact's
+/// SHA-256 to its reproducibility inputs (source snapshot, command, engine
+/// versions, seed, asset hashes). The [`RenderManifestView::manifest_hash`]
+/// is the deterministic reproducibility fingerprint used as the content-
+/// addressed cache key (§9.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderManifestView {
+    /// Artifact ID.
+    pub artifact_id: String,
+    /// Artifact type (`master_wav`, `stem`, `preview`).
+    pub artifact_type: String,
+    /// Output path.
+    pub path: String,
+    /// SHA-256 of the artifact bytes.
+    pub sha256: String,
+    /// Sample rate.
+    pub sample_rate: u32,
+    /// Channel count.
+    pub channels: u16,
+    /// Duration in seconds.
+    pub duration_seconds: f64,
+    /// Snapshot the render was produced from.
+    pub source_snapshot_id: String,
+    /// Command that triggered the render.
+    pub command_id: String,
+    /// Compiler crate version.
+    pub compiler_version: String,
+    /// Audio engine crate version.
+    pub audio_engine_version: String,
+    /// Seed.
+    pub seed: Option<u64>,
+    /// Asset hashes.
+    pub asset_hashes: BTreeMap<String, String>,
+    /// Deterministic reproducibility fingerprint (cache key, §9.3/§17.2).
+    pub manifest_hash: String,
+    /// Whether all required manifest fields are present.
+    pub complete: bool,
+}
+
+impl RenderManifestView {
+    /// Build the view from a real [`RenderManifest`].
+    #[must_use]
+    pub fn from_manifest(manifest: &scorestrata_storage::render_manifest::RenderManifest) -> Self {
+        Self {
+            artifact_id: manifest.artifact_id.clone(),
+            artifact_type: manifest.artifact_type.clone(),
+            path: manifest.path.clone(),
+            sha256: manifest.sha256.clone(),
+            sample_rate: manifest.sample_rate,
+            channels: manifest.channels,
+            duration_seconds: manifest.duration_seconds,
+            source_snapshot_id: manifest.source_snapshot_id.clone(),
+            command_id: manifest.command_id.clone(),
+            compiler_version: manifest.compiler_version.clone(),
+            audio_engine_version: manifest.audio_engine_version.clone(),
+            seed: manifest.seed,
+            asset_hashes: manifest.asset_hashes.clone(),
+            complete: manifest.is_complete(),
+            manifest_hash: manifest.manifest_hash(),
+        }
+    }
+}
+
 /// Ledger summary — event counts and recent activity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LedgerSummary {
@@ -757,6 +823,26 @@ mod tests {
         assert_eq!(view.project_id, "p1");
         assert_eq!(view.provenance_hash, manifest.provenance_hash());
         assert!(!view.complete);
+
+        // RenderManifestView derives from a real render manifest (§17.2).
+        let mut render = scorestrata_storage::render_manifest::RenderManifest::new("art_p1");
+        render.artifact_type = "master_wav".to_string();
+        render.path = "renders/master.wav".to_string();
+        render.sha256 = "abc".to_string();
+        render.sample_rate = 48_000;
+        render.channels = 2;
+        render.duration_seconds = 60.0;
+        render.source_snapshot_id = "snap_1".to_string();
+        render.command_id = "cmd_1".to_string();
+        render.compiler_version = "0.1.0".to_string();
+        render.audio_engine_version = "0.1.0".to_string();
+        let rview = RenderManifestView::from_manifest(&render);
+        assert_eq!(rview.artifact_id, "art_p1");
+        assert_eq!(rview.manifest_hash, render.manifest_hash());
+        assert!(rview.complete);
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&rview).unwrap();
+        assert!(json.contains("source_snapshot_id"));
 
         let ledger = LedgerSummary {
             project_id: "p1".to_string(),

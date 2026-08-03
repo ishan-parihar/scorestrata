@@ -5325,6 +5325,165 @@ pub fn get_metric_evidence(params: &GetMetricEvidenceParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `get_render_manifest` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetRenderManifestParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Artifact ID to fetch the manifest for.
+    pub artifact_id: String,
+    /// Serialized [`RenderManifestStore`](scorestrata_storage::render_manifest::RenderManifestStore)
+    /// — when provided, the manifest lookup is real.
+    #[serde(default)]
+    pub manifests: Option<serde_json::Value>,
+    /// Optional artifact bytes (e.g. WAV) to verify against the manifest's
+    /// declared SHA-256 (§17.2/§17.3). When absent, verification is reported
+    /// as unavailable rather than assumed.
+    #[serde(default)]
+    pub artifact_bytes: Option<Vec<u8>>,
+}
+
+/// Fetch a render manifest — the reproducibility receipt for an artifact (§17.2).
+///
+/// Every render must produce a manifest tying the artifact's SHA-256 to its
+/// reproducibility inputs (source snapshot, command, engine versions, seed,
+/// asset hashes). This tool reads one manifest from a supplied store and
+/// reports its reproducibility fingerprint, cache key, completeness, and —
+/// when artifact bytes are supplied — whether the file actually matches its
+/// declared checksum.
+#[must_use]
+pub fn get_render_manifest(params: &GetRenderManifestParams) -> ToolReceipt {
+    let Some(store_json) = &params.manifests else {
+        return ToolReceipt {
+            tool: "get_render_manifest".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Render manifest for '{}' requested for project '{}' but no serialized manifest store provided",
+                params.artifact_id, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![format!("project://{}/renders", params.project_id)],
+            next_actions: vec!["render_project".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Supply a serialized RenderManifestStore payload".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let store = match serde_json::from_value::<
+        scorestrata_storage::render_manifest::RenderManifestStore,
+    >(store_json.clone())
+    {
+        Ok(store) => store,
+        Err(e) => {
+            return ToolReceipt {
+                tool: "get_render_manifest".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Malformed render manifest store payload: {e}"),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![format!("project://{}/renders", params.project_id)],
+                next_actions: vec!["render_project".to_string()],
+                cost: ToolCost::default(),
+                warnings: vec!["Invalid manifest store payload".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    };
+
+    let Some(manifest) = store.get(&params.artifact_id) else {
+        return ToolReceipt {
+            tool: "get_render_manifest".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "No render manifest found for artifact '{}' in project '{}' ({} manifest(s) on record)",
+                params.artifact_id,
+                params.project_id,
+                store.len()
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![format!("project://{}/renders", params.project_id)],
+            next_actions: vec!["render_project".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown artifact ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let manifest_hash = manifest.manifest_hash();
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("render.sha256".to_string(), manifest.sha256.clone());
+    score_delta.insert("render.manifest_hash".to_string(), manifest_hash.clone());
+    score_delta.insert("render.cache_key".to_string(), manifest.cache_key());
+    score_delta.insert(
+        "render.complete".to_string(),
+        manifest.is_complete().to_string(),
+    ); // Checksum verification when artifact bytes are supplied (§17.3).
+    // Compute the verification once — hashing potentially large WAV payloads
+    // twice would be wasteful — and reuse it for the summary and warnings.
+    let verified = params
+        .artifact_bytes
+        .as_ref()
+        .map(|bytes| manifest.verify_artifact(bytes));
+    let verification = match verified {
+        Some(true) => "verification: CHECKSUM MATCH".to_string(),
+        Some(false) => "verification: CHECKSUM MISMATCH".to_string(),
+        None => "verification: unavailable (no artifact bytes supplied)".to_string(),
+    };
+
+    let mut warnings = Vec::new();
+    if !manifest.is_complete() {
+        warnings.push("Manifest is incomplete — reproducibility inputs missing".to_string());
+    }
+    if verified == Some(false) {
+        warnings.push("Artifact bytes do not match the manifest's declared SHA-256".to_string());
+    }
+
+    ToolReceipt {
+        tool: "get_render_manifest".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Render manifest for '{}' ({}): {} Hz, {} ch, {:.1}s from snapshot '{}' via command '{}'; {verification}; reproducible inputs {} -> {}",
+            manifest.artifact_id,
+            manifest.artifact_type,
+            manifest.sample_rate,
+            manifest.channels,
+            manifest.duration_seconds,
+            manifest.source_snapshot_id,
+            manifest.command_id,
+            if manifest.is_complete() {
+                "complete"
+            } else {
+                "incomplete"
+            },
+            &manifest_hash[..8]
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/renders/{}",
+            params.project_id, params.artifact_id
+        )],
+        focus_uris: vec![format!("project://{}/renders", params.project_id)],
+        next_actions: vec![
+            "render_project".to_string(),
+            "check_regressions".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings,
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 /// Parameters for `compare_candidates` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompareCandidatesParams {
@@ -8367,6 +8526,127 @@ mod tests {
             receipt.score_delta.get("lineage.samples"),
             Some(&"1".to_string())
         );
+    }
+
+    #[test]
+    fn get_render_manifest_reports_reproducibility_and_verifies_checksum() {
+        use scorestrata_storage::cache::content_hash;
+        use scorestrata_storage::render_manifest::{RenderManifest, RenderManifestStore};
+
+        let bytes = b"RIFF....WAV data".to_vec();
+        let checksum = content_hash(&bytes);
+        let mut store = RenderManifestStore::new();
+        store.record(RenderManifest::from_render(
+            "art_p34_master",
+            "master_wav",
+            "renders/master.wav",
+            &checksum,
+            48_000,
+            2,
+            158.4,
+            "snap_p34_0042",
+            "cmd_0042",
+            "0.3.0",
+            "0.3.0",
+            Some(1337),
+            BTreeMap::new(),
+        ));
+        let params = GetRenderManifestParams {
+            project_id: "p34".to_string(),
+            artifact_id: "art_p34_master".to_string(),
+            manifests: Some(serde_json::to_value(&store).unwrap_or_default()),
+            artifact_bytes: Some(bytes.clone()),
+        };
+        let receipt = get_render_manifest(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            receipt.summary.contains("CHECKSUM MATCH"),
+            "receipt verifies matching artifact: {}",
+            receipt.summary
+        );
+        assert_eq!(
+            receipt.score_delta.get("render.sha256"),
+            Some(&checksum.clone())
+        );
+        assert!(receipt.score_delta.get("render.manifest_hash").is_some());
+        assert!(receipt.score_delta.get("render.cache_key").is_some());
+        assert_eq!(
+            receipt.score_delta.get("render.complete"),
+            Some(&"true".to_string())
+        );
+        assert!(receipt.warnings.is_empty());
+
+        // Tampered bytes must be reported as a checksum mismatch.
+        let mut tampered = bytes;
+        tampered[0] ^= 0xFF;
+        let params = GetRenderManifestParams {
+            project_id: "p34".to_string(),
+            artifact_id: "art_p34_master".to_string(),
+            manifests: Some(serde_json::to_value(&store).unwrap_or_default()),
+            artifact_bytes: Some(tampered),
+        };
+        let receipt = get_render_manifest(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("CHECKSUM MISMATCH"));
+        assert!(
+            receipt.warnings.iter().any(|w| w.contains("do not match")),
+            "tampering surfaces a warning"
+        );
+    }
+
+    #[test]
+    fn get_render_manifest_requires_manifest_store() {
+        let params = GetRenderManifestParams {
+            project_id: "p34".to_string(),
+            artifact_id: "art_p34_master".to_string(),
+            manifests: None,
+            artifact_bytes: None,
+        };
+        let receipt = get_render_manifest(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("no serialized manifest store"));
+    }
+
+    #[test]
+    fn get_render_manifest_rejects_malformed_store() {
+        let params = GetRenderManifestParams {
+            project_id: "p34".to_string(),
+            artifact_id: "art_p34_master".to_string(),
+            manifests: Some(serde_json::json!({"manifests": 42})),
+            artifact_bytes: None,
+        };
+        let receipt = get_render_manifest(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .summary
+                .contains("Malformed render manifest store payload"),
+            "malformed store surfaces: {}",
+            receipt.summary
+        );
+    }
+
+    #[test]
+    fn get_render_manifest_reports_unknown_artifact() {
+        use scorestrata_storage::render_manifest::{RenderManifest, RenderManifestStore};
+        let mut store = RenderManifestStore::new();
+        store.record(RenderManifest::new("art_other"));
+        let params = GetRenderManifestParams {
+            project_id: "p34".to_string(),
+            artifact_id: "art_p34_master".to_string(),
+            manifests: Some(serde_json::to_value(&store).unwrap_or_default()),
+            artifact_bytes: None,
+        };
+        let receipt = get_render_manifest(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .summary
+                .contains("No render manifest found for artifact 'art_p34_master'"),
+            "unknown artifact surfaces: {}",
+            receipt.summary
+        );
+        assert!(receipt.summary.contains("1 manifest(s) on record"));
     }
 
     #[test]

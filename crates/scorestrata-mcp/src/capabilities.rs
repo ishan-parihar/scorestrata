@@ -342,6 +342,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "validation",
         ),
         (
+            "get_render_manifest",
+            "read-only",
+            false,
+            "read",
+            "low",
+            "render",
+        ),
+        (
             "suggest_fixes",
             "read-only",
             false,
