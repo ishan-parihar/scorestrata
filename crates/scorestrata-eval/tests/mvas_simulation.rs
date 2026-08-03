@@ -2220,6 +2220,143 @@ fn mvas_step_29_suggest_fixes_closes_learning_loop() {
     assert!(empty.summary.contains("no project or lesson-store payload"));
 }
 
+/// Step 30: task-completion level triggers (§13.1–§13.4, §13.7).
+///
+/// The kernel advances L0 → L1 → L2 → L3 only when each level's actual task
+/// is done — orientation pass completed, hard failures cleared, high-severity
+/// issues gone, target reached with gates passing — never on an iteration
+/// count. A persistent hard failure must pin the kernel at L1 even at even
+/// iteration counts, where the old count-based heuristic would have advanced.
+#[test]
+fn mvas_step_30_task_completion_triggers_drive_level_advancement() {
+    use scorestrata_agent::kernel::{AgentConfig, AgentKernel, Diagnosis, LoopLevel};
+
+    let project_id = ProjectId::new();
+    let config = AgentConfig {
+        max_iterations: 12,
+        max_no_improvement: 4,
+        target_score: 5.0, // unreachable: budget, not target, bounds the run
+        improvement_threshold: 0.01,
+        max_candidates_per_iteration: 3,
+        ..AgentConfig::default()
+    };
+    let mut kernel = AgentKernel::with_config(project_id, config);
+
+    // ── 30a. L0 → L1: orientation completes after the first pass ──────
+    // A persistent mix hard failure gives the repair loop real work.
+    let hard = Diagnosis {
+        metric: "audio.loudness".to_string(),
+        scope: "mix".to_string(),
+        current_value: -4.0,
+        target_value: -14.0,
+        severity: 0.8,
+        is_hard_failure: true,
+        evidence_uri: None,
+    };
+    let templates = vec!["normalize_loudness_target".to_string()];
+    let metrics = vec![
+        ("loudness_lufs".to_string(), -14.0),
+        ("true_peak_dbtp".to_string(), -1.0),
+    ];
+
+    let result = kernel
+        .run_iteration(&[hard.clone()], &templates, &metrics)
+        .expect("iteration runs");
+    assert!(result.improved, "L0 repair iteration improves");
+    assert_eq!(
+        kernel.level,
+        LoopLevel::MicroRepair,
+        "L0 orientation done after one pass → L1"
+    );
+
+    // ── 30b. L1 pins on a persistent hard failure ─────────────────────
+    // Iterations 2 and 3 are even/odd counts — the old rule advanced on
+    // every other *successful* iteration; task-completion must keep L1
+    // active because the hard failure has not been cleared.
+    for _ in 0..2 {
+        let result = kernel
+            .run_iteration(&[hard.clone()], &templates, &metrics)
+            .expect("iteration runs");
+        assert!(result.improved);
+    }
+    assert_eq!(kernel.iteration, 3, "three repair iterations executed");
+    assert_eq!(
+        kernel.level,
+        LoopLevel::MicroRepair,
+        "a hard failure pins the kernel at L1 regardless of iteration count"
+    );
+
+    // ── 30c. L1 → L2: hard failure cleared, task completes ────────────
+    let soft = Diagnosis {
+        metric: "arrangement.transition_strength".to_string(),
+        scope: "transition".to_string(),
+        current_value: 0.4,
+        target_value: 0.8,
+        severity: 0.3,
+        is_hard_failure: false,
+        evidence_uri: None,
+    };
+    let result = kernel
+        .run_iteration(&[soft.clone()], &templates, &metrics)
+        .expect("iteration runs");
+    assert!(result.improved);
+    assert_eq!(
+        kernel.level,
+        LoopLevel::SegmentDevelopment,
+        "L1 task done → L2"
+    );
+
+    // ── 30d. L2 exit trigger checks ───────────────────────────────────
+    let high = Diagnosis {
+        metric: "harmony.chord_tone_ratio".to_string(),
+        scope: "harmony".to_string(),
+        current_value: 0.3,
+        target_value: 0.8,
+        severity: 0.8,
+        is_hard_failure: false,
+        evidence_uri: None,
+    };
+    let mut at_l2 = AgentKernel::new(project_id);
+    at_l2.level = LoopLevel::SegmentDevelopment;
+    assert!(
+        !at_l2.level_task_complete(&[high]),
+        "high-severity issue keeps L2 active"
+    );
+    assert!(
+        at_l2.level_task_complete(&[soft.clone()]),
+        "low-severity issues complete L2"
+    );
+
+    // ── 30e. L3 exit trigger: target + gates (§13.7 break) ────────────
+    let mut at_l3 = AgentKernel::with_config(
+        project_id,
+        AgentConfig {
+            target_score: 0.85,
+            ..AgentConfig::default()
+        },
+    );
+    at_l3.level = LoopLevel::ProjectRefinement;
+    at_l3.current_score = 0.9;
+    at_l3.hard_gates_passing = true;
+    assert!(
+        at_l3.level_task_complete(&[soft]),
+        "target reached with gates passing completes L3"
+    );
+    at_l3.hard_gates_passing = false;
+    assert!(
+        !at_l3.level_task_complete(&[Diagnosis {
+            metric: "m".to_string(),
+            scope: "s".to_string(),
+            current_value: 0.0,
+            target_value: 1.0,
+            severity: 0.2,
+            is_hard_failure: false,
+            evidence_uri: None,
+        }]),
+        "failing gates keep L3 active even above target"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

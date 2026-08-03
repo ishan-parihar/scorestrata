@@ -696,6 +696,21 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-LEVEL-TRIGGERS".to_string(),
+        title:
+            "Task-completion level triggers replace iteration-count advancement (§13.1–13.4, §13.7)"
+                .to_string(),
+        phase: "13".to_string(),
+        tasks: vec!["KERNEL-003".to_string()],
+        code: vec!["scorestrata_agent::kernel".to_string()],
+        tests: vec!["kernel::tests".to_string(), "mvas_simulation".to_string()],
+        mcp_tools: vec![],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §13.1–13.4, §13.7".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),

@@ -37,6 +37,10 @@ impl std::fmt::Display for LoopLevel {
     }
 }
 
+/// Severity at or above which a diagnosis still warrants segment-level
+/// development work (§13.3). Below this, the issue is a localized micro-issue.
+const SEGMENT_DEV_SEVERITY_THRESHOLD: f32 = 0.5;
+
 // ── Kernel State ────────────────────────────────────────────────────
 
 /// The current state of the agent kernel.
@@ -469,6 +473,61 @@ impl AgentKernel {
         };
     }
 
+    /// Whether the current loop level's task is complete per the exit
+    /// criteria in §13.1–§13.4.
+    ///
+    /// Level advancement is trigger-based (task completion), not
+    /// iteration-count based: a level is left only when its actual work is
+    /// done, so the kernel cannot drift past unfinished work on a lucky
+    /// iteration count, nor stall at a level whose task is already finished.
+    ///
+    /// - **L0 Orientation**: complete after the first pass (the agent has
+    ///   seen the project state).
+    /// - **L1 Micro-repair**: complete when no hard failures remain.
+    /// - **L2 Segment development**: complete when no high-severity issue
+    ///   remains.
+    /// - **L3 Project refinement**: complete when the target score is reached
+    ///   with hard gates passing, or there is nothing left to refine
+    ///   (mirrors the §13.7 `overall_score >= target && hard_failures == 0`
+    ///   break).
+    /// - **L4 Learning**: terminal — the loop caps there.
+    #[must_use]
+    pub fn level_task_complete(&self, diagnoses: &[Diagnosis]) -> bool {
+        match self.level {
+            LoopLevel::Orientation => self.iteration >= 1,
+            LoopLevel::MicroRepair => diagnoses.iter().all(|d| !d.is_hard_failure),
+            LoopLevel::SegmentDevelopment => diagnoses
+                .iter()
+                .all(|d| d.severity < SEGMENT_DEV_SEVERITY_THRESHOLD),
+            LoopLevel::ProjectRefinement => {
+                (self.current_score >= self.config.target_score && self.hard_gates_passing)
+                    || diagnoses.is_empty()
+            }
+            LoopLevel::Learning => true,
+        }
+    }
+
+    /// Whether all configured hard gates pass against the given metrics.
+    ///
+    /// Extracted from [`Self::dry_run`] so the whole kernel shares one gate
+    /// evaluation — the loop uses it to keep `hard_gates_passing` truthful
+    /// for L3 completion.
+    fn gates_pass(&self, current_metrics: &[(String, f32)]) -> bool {
+        self.config.hard_gate_metrics.iter().all(|metric| {
+            let value = current_metrics
+                .iter()
+                .find(|(m, _)| m == metric)
+                .map_or(f32::MIN, |(_, v)| *v);
+            let threshold = self
+                .config
+                .hard_gate_thresholds
+                .iter()
+                .find(|(m, _)| m == metric)
+                .map_or(f32::MIN, |(_, t)| *t);
+            value >= threshold
+        })
+    }
+
     /// Build a human review packet for escalation.
     #[must_use]
     pub fn build_escalation_packet(
@@ -698,19 +757,7 @@ impl AgentKernel {
         let policy_score = if candidate.is_repair { 1.0 } else { 0.9 };
 
         // Check hard gates against current metrics
-        let hard_gates_pass = self.config.hard_gate_metrics.iter().all(|metric| {
-            let value = current_metrics
-                .iter()
-                .find(|(m, _)| m == metric)
-                .map_or(f32::MIN, |(_, v)| *v);
-            let threshold = self
-                .config
-                .hard_gate_thresholds
-                .iter()
-                .find(|(m, _)| m == metric)
-                .map_or(f32::MIN, |(_, t)| *t);
-            value >= threshold
-        });
+        let hard_gates_pass = self.gates_pass(current_metrics);
 
         ScoredCandidate {
             candidate: candidate.clone(),
@@ -740,6 +787,11 @@ impl AgentKernel {
             self.transition(KernelState::Completed);
             return None;
         }
+
+        // Refresh the gate flag from the *current* metrics so every path
+        // (main loop, early-return escalation, no-diagnoses) sees a truthful
+        // value rather than a stale one from a previous iteration.
+        self.hard_gates_passing = self.gates_pass(current_metrics);
 
         // L0: First iteration — orientation
         if self.iteration == 0 {
@@ -828,9 +880,10 @@ impl AgentKernel {
         };
         self.record_iteration(iter_result);
 
-        // Advance level on every other successful iteration
-        // TODO(#1): Use task-completion triggers instead of iteration count
-        if self.no_improvement_streak == 0 && self.iteration.is_multiple_of(2) {
+        // Level advancement is task-completion triggered (§13.1–§13.4 exit
+        // criteria), not iteration-count based: leave a level only when its
+        // actual work is done.
+        if self.level_task_complete(diagnoses) {
             self.advance_level();
         }
 
@@ -1141,6 +1194,237 @@ mod tests {
         assert_eq!(kernel.level, LoopLevel::Learning);
         kernel.advance_level();
         assert_eq!(kernel.level, LoopLevel::Learning);
+    }
+
+    #[test]
+    fn level_task_complete_orientation_requires_first_pass() {
+        let kernel = AgentKernel::new(ProjectId::new());
+        assert_eq!(kernel.level, LoopLevel::Orientation);
+        assert!(
+            !kernel.level_task_complete(&[]),
+            "orientation is not complete before any iteration"
+        );
+        let mut kernel = kernel;
+        kernel.iteration = 1;
+        assert!(
+            kernel.level_task_complete(&[]),
+            "orientation completes after the first pass"
+        );
+    }
+
+    #[test]
+    fn level_task_complete_micro_repair_requires_no_hard_failures() {
+        let mut kernel = AgentKernel::new(ProjectId::new());
+        kernel.level = LoopLevel::MicroRepair;
+        let diag = |is_hard: bool| Diagnosis {
+            metric: "m".to_string(),
+            scope: "s".to_string(),
+            current_value: 0.0,
+            target_value: 1.0,
+            severity: 0.8,
+            is_hard_failure: is_hard,
+            evidence_uri: None,
+        };
+        assert!(
+            !kernel.level_task_complete(&[diag(true)]),
+            "a hard failure keeps L1 active"
+        );
+        assert!(
+            kernel.level_task_complete(&[diag(false)]),
+            "no hard failures completes L1"
+        );
+    }
+
+    #[test]
+    fn level_task_complete_segment_dev_requires_low_severity() {
+        let mut kernel = AgentKernel::new(ProjectId::new());
+        kernel.level = LoopLevel::SegmentDevelopment;
+        let diag = |sev: f32| Diagnosis {
+            metric: "m".to_string(),
+            scope: "s".to_string(),
+            current_value: 0.0,
+            target_value: 1.0,
+            severity: sev,
+            is_hard_failure: false,
+            evidence_uri: None,
+        };
+        assert!(
+            !kernel.level_task_complete(&[diag(0.8)]),
+            "a high-severity issue keeps L2 active"
+        );
+        assert!(
+            kernel.level_task_complete(&[diag(0.3)]),
+            "only low-severity issues complete L2"
+        );
+    }
+
+    #[test]
+    fn level_task_complete_project_refinement_requires_target_and_gates() {
+        let config = AgentConfig {
+            target_score: 0.8,
+            ..AgentConfig::default()
+        };
+        let mut kernel = AgentKernel::with_config(ProjectId::new(), config);
+        kernel.level = LoopLevel::ProjectRefinement;
+        kernel.current_score = 0.85;
+        kernel.hard_gates_passing = true;
+        let diag = Diagnosis {
+            metric: "m".to_string(),
+            scope: "s".to_string(),
+            current_value: 0.0,
+            target_value: 1.0,
+            severity: 0.3,
+            is_hard_failure: false,
+            evidence_uri: None,
+        };
+        assert!(
+            kernel.level_task_complete(&[diag.clone()]),
+            "target + gates completes L3"
+        );
+        kernel.hard_gates_passing = false;
+        assert!(
+            !kernel.level_task_complete(&[diag]),
+            "failing gates keep L3 active"
+        );
+        assert!(
+            kernel.level_task_complete(&[]),
+            "nothing left to refine completes L3"
+        );
+    }
+
+    #[test]
+    fn run_iteration_advances_by_task_completion_not_iteration_count() {
+        let config = AgentConfig {
+            max_iterations: 10,
+            max_no_improvement: 4,
+            target_score: 5.0, // unreachable so budget, not target, bounds the run
+            improvement_threshold: 0.01,
+            max_candidates_per_iteration: 3,
+            ..AgentConfig::default()
+        };
+        let mut kernel = AgentKernel::with_config(ProjectId::new(), config);
+
+        // A persistent hard failure in the mix: the kernel must stay at L1
+        // micro-repair no matter how many successful iterations pass.
+        let hard = Diagnosis {
+            metric: "audio.loudness".to_string(),
+            scope: "mix".to_string(),
+            current_value: -4.0,
+            target_value: -14.0,
+            severity: 0.8,
+            is_hard_failure: true,
+            evidence_uri: None,
+        };
+        let templates = vec!["normalize_loudness_target".to_string()];
+        let metrics = vec![
+            ("loudness_lufs".to_string(), -14.0),
+            ("true_peak_dbtp".to_string(), -1.0),
+        ];
+
+        // Iteration 1: L0 orientation completes after the first pass.
+        let result = kernel
+            .run_iteration(&[hard.clone()], &templates, &metrics)
+            .expect("iteration runs");
+        assert!(result.improved);
+        assert_eq!(
+            kernel.level,
+            LoopLevel::MicroRepair,
+            "L0 completes after the first pass → L1"
+        );
+
+        // Iterations 2 and 3: the hard failure persists, so the kernel stays
+        // at L1 — even at iteration 2, where the old count-based rule
+        // (`iteration.is_multiple_of(2)`) would have advanced to L2.
+        for _ in 0..2 {
+            let result = kernel
+                .run_iteration(&[hard.clone()], &templates, &metrics)
+                .expect("iteration runs");
+            assert!(result.improved);
+        }
+        assert_eq!(kernel.iteration, 3);
+        assert_eq!(
+            kernel.level,
+            LoopLevel::MicroRepair,
+            "a hard failure pins the kernel at L1 regardless of iteration count"
+        );
+
+        // Hard failure resolved: the next iteration completes L1 and advances
+        // to L2 segment development.
+        let soft = Diagnosis {
+            metric: "arrangement.transition_strength".to_string(),
+            scope: "transition".to_string(),
+            current_value: 0.4,
+            target_value: 0.8,
+            severity: 0.3,
+            is_hard_failure: false,
+            evidence_uri: None,
+        };
+        let result = kernel
+            .run_iteration(&[soft], &templates, &metrics)
+            .expect("iteration runs");
+        assert!(result.improved);
+        assert_eq!(
+            kernel.level,
+            LoopLevel::SegmentDevelopment,
+            "L1 task done → L2"
+        );
+    }
+
+    #[test]
+    fn run_iteration_refreshes_hard_gates_passing_from_metrics() {
+        let config = AgentConfig {
+            max_iterations: 4,
+            max_no_improvement: 2,
+            target_score: 0.95,
+            improvement_threshold: 0.01,
+            hard_gate_metrics: vec!["loudness_lufs".to_string(), "true_peak_dbtp".to_string()],
+            hard_gate_thresholds: vec![
+                ("loudness_lufs".to_string(), -14.0),
+                ("true_peak_dbtp".to_string(), -1.0),
+            ],
+            ..AgentConfig::default()
+        };
+        let mut kernel = AgentKernel::with_config(ProjectId::new(), config);
+        let diag = Diagnosis {
+            metric: "arrangement.transition_strength".to_string(),
+            scope: "transition".to_string(),
+            current_value: 0.4,
+            target_value: 0.8,
+            severity: 0.3,
+            is_hard_failure: false,
+            evidence_uri: None,
+        };
+        let templates = vec!["add_transition_package".to_string()];
+
+        // True peak below the -1 dBTP gate → gates not passing.
+        let failing = vec![
+            ("loudness_lufs".to_string(), -13.0),
+            ("true_peak_dbtp".to_string(), -3.0),
+        ];
+        let result = kernel
+            .run_iteration(&[diag.clone()], &templates, &failing)
+            .expect("iteration runs");
+        assert!(result.improved);
+        assert!(
+            !kernel.hard_gates_passing,
+            "over-gate metrics keep gates failing"
+        );
+
+        // Healthy metrics → gates pass and the flag is refreshed.
+        // True peak must be ABOVE -1 dBTP to pass (a more negative value
+        // would still violate the gate).
+        let passing = vec![
+            ("loudness_lufs".to_string(), -13.0),
+            ("true_peak_dbtp".to_string(), -0.5),
+        ];
+        let result = kernel
+            .run_iteration(&[diag], &templates, &passing)
+            .expect("iteration runs");
+        assert!(result.improved);
+        assert!(
+            kernel.hard_gates_passing,
+            "healthy metrics refresh hard_gates_passing to true"
+        );
     }
 
     #[test]
