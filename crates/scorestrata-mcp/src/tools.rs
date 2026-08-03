@@ -3053,7 +3053,11 @@ pub struct GetLessonsParams {
 }
 
 /// Build a `ToolReceipt` for a failed payload deserialization.
-fn deserialize_error_receipt(tool: &str, field: &str, err: &serde_json::Error) -> ToolReceipt {
+pub(crate) fn deserialize_error_receipt(
+    tool: &str,
+    field: &str,
+    err: &serde_json::Error,
+) -> ToolReceipt {
     ToolReceipt {
         tool: tool.to_string(),
         status: ToolStatus::Failed,

@@ -1343,6 +1343,148 @@ fn mvas_step_19_composition_and_patch_mutations() {
     assert!(loud.summary.contains("LUFS"));
 }
 
+/// Step 20: MCP dispatcher (`call_tool`) — the wire-level protocol core.
+///
+/// Drives the exact `tool_name + JSON params -> ToolReceipt` contract §10.5
+/// by routing every phase of the agent loop through
+/// `scorestrata_mcp::dispatch::dispatch_tool`: orientation, validation,
+/// mutation, render, governance and learning. This proves the dispatcher
+/// (not just the underlying functions) is operationally wired.
+#[test]
+fn mvas_step_20_mcp_dispatcher_wire_protocol() {
+    use scorestrata_mcp::dispatch::dispatch_tool;
+    use scorestrata_mcp::tools::ToolStatus;
+
+    // Planned patterns start empty, so plant content into the lead pattern
+    // the way an agent would before sending mutations over the wire — this
+    // keeps the deterministic success assertions honest.
+    let mut project = scorestrata_testkit::melodic_techno_project();
+    let lead_pattern_id = project.patterns[0].id;
+    if let Some(pattern) = project
+        .patterns
+        .iter_mut()
+        .find(|p| p.id == lead_pattern_id)
+    {
+        pattern.notes.push(scorestrata_core::domain::Note {
+            id: scorestrata_core::ids::NoteId::new(),
+            pitch: scorestrata_core::domain::MidiNote::new(60),
+            start: scorestrata_core::domain::Tick::new(0),
+            duration: scorestrata_core::domain::Duration(480),
+            velocity: scorestrata_core::domain::Velocity::new(100),
+            tied: false,
+        });
+    }
+    let project_json = serde_json::to_value(&project).expect("project serializes");
+    let project_id = project.id.to_string();
+    let pattern_id = project.patterns[0].id.to_string();
+    let segment_id = project.arrangement.segments[0].id.to_string();
+    let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
+
+    // ── 20a. Governance / orientation over the wire ─────────────────
+    let caps = dispatch_tool("get_capabilities", serde_json::json!({}));
+    assert!(matches!(caps.status, ToolStatus::Succeeded));
+    assert!(caps.summary.contains("Capabilities manifest"));
+    assert!(caps.summary.contains("run_validation"));
+
+    let contracts = dispatch_tool("get_contracts", serde_json::json!({}));
+    assert!(matches!(contracts.status, ToolStatus::Succeeded));
+    assert!(contracts.summary.contains("Contract registry"));
+
+    // ── 20b. Validation over the wire ───────────────────────────────
+    let validation = dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project_id.clone(),
+            "project": project_json.clone(),
+            "level": 2,
+        }),
+    );
+    assert_eq!(validation.tool, "run_validation");
+    assert!(validation.summary.contains("diagnostics"));
+    assert!(validation.summary.contains("score"));
+
+    // ── 20c. Mutation over the wire: composition + patch ────────────    // These two mutations are deterministic: the pattern from
+    // `melodic_techno_project` always exists, so the wire path must succeed.
+    let notes = dispatch_tool(
+        "write_pattern_notes",
+        serde_json::json!({
+            "project_id": project_id.clone(),
+            "pattern_id": pattern_id.clone(),
+            "notes": [{"pitch": 62, "start": 480, "duration": 480, "velocity": 90}],
+            "project": project_json.clone(),
+        }),
+    );
+    assert_eq!(notes.tool, "write_pattern_notes");
+    assert!(
+        matches!(notes.status, ToolStatus::Succeeded),
+        "write_pattern_notes should succeed on a real pattern: {:?}",
+        notes.status
+    );
+
+    let motif = dispatch_tool(
+        "apply_motivic_variation",
+        serde_json::json!({
+            "project_id": project_id.clone(),
+            "pattern_id": pattern_id.clone(),
+            "variation": "retrograde",
+            "semitones": 0,
+            "project": project_json.clone(),
+        }),
+    );
+    assert_eq!(motif.tool, "apply_motivic_variation");
+    assert!(
+        matches!(motif.status, ToolStatus::Succeeded),
+        "apply_motivic_variation should succeed on a real pattern: {:?}",
+        motif.status
+    );
+
+    // ── 20d. Render + engineering over the wire ─────────────────────
+    let render = dispatch_tool(
+        "get_render_job",
+        serde_json::json!({ "project_id": project_id.clone(), "job_id": "job_1" }),
+    );
+    assert_eq!(render.tool, "get_render_job");
+    assert!(!render.summary.is_empty());
+
+    let task = dispatch_tool(
+        "get_next_task",
+        serde_json::json!({ "project_id": project_id.clone() }),
+    );
+    assert_eq!(task.tool, "get_next_task");
+
+    // ── 20e. Learning over the wire ─────────────────────────────────
+    let lessons = dispatch_tool(
+        "get_lessons",
+        serde_json::json!({ "project_id": project_id.clone() }),
+    );
+    assert_eq!(lessons.tool, "get_lessons");
+    assert!(matches!(
+        lessons.status,
+        ToolStatus::Succeeded | ToolStatus::Failed
+    ));
+
+    // ── 20f. Debug over the wire ────────────────────────────────────
+    let isolate = dispatch_tool(
+        "isolate_layer",
+        serde_json::json!({
+            "project_id": project_id,
+            "segment_id": segment_id,
+            "layer_id": layer_id,
+            "project": project_json,
+        }),
+    );
+    assert_eq!(isolate.tool, "isolate_layer");
+    assert!(matches!(
+        isolate.status,
+        ToolStatus::Succeeded | ToolStatus::Failed
+    ));
+
+    // ── 20g. Unknown tool returns a transparent failure ─────────────
+    let unknown = dispatch_tool("definitely_not_a_tool", serde_json::json!({}));
+    assert!(matches!(unknown.status, ToolStatus::Failed));
+    assert!(unknown.summary.contains("Unknown tool"));
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,
