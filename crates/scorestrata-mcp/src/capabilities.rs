@@ -294,6 +294,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "validation",
         ),
         (
+            "check_regressions",
+            "read-only",
+            false,
+            "read",
+            "low",
+            "validation",
+        ),
+        (
             "get_validation_report",
             "read-only",
             false,

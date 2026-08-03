@@ -620,6 +620,22 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-VALIDATION-L6".to_string(),
+        title: "Level 6 regression detection reachable via check_regressions".to_string(),
+        phase: "6".to_string(),
+        tasks: vec!["VAL-009".to_string()],
+        code: vec![
+            "scorestrata_mcp::tools".to_string(),
+            "scorestrata_validator::regression_check".to_string(),
+        ],
+        tests: vec!["tools::tests".to_string(), "mvas_simulation".to_string()],
+        mcp_tools: vec!["check_regressions".to_string()],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §11.2 L6, §11.7".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),

@@ -19,20 +19,20 @@ use std::collections::BTreeMap;
 use crate::tools::{
     AddDrumFillParams, AddTransitionParams, ApplyMotivicVariationParams, ApplyPatchParams,
     ApproveConfigParams, CancelRenderJobParams, CandidateDiffParams, CheckBudgetParams,
-    ClaimTaskParams, CompareCandidatesParams, CreateAdrParams, CreateHumanReviewPacketParams,
-    CreatePatternParams, CreateProjectParams, DryRunPatchParams, ExplainMetricParams,
-    GenerateConfigParams, GetAuditSummaryParams, GetCommandTraceParams, GetEvalReportParams,
-    GetFailureReportParams, GetLessonsParams, GetMetricEvidenceParams, GetNextTaskParams,
-    GetPolicyProfileParams, GetProjectSummaryParams, GetRenderJobParams, GetRepairTemplatesParams,
-    GetRootCausesParams, GetValidationReportParams, HarmonizeMelodyParams,
-    IncreaseSegmentDensityParams, IsolateLayerParams, NormalizeLoudnessTargetParams,
-    PlacePatternInSegmentParams, PlanArrangementParams, QuantizeLayerParams, RecordLessonParams,
-    ReduceMaskingParams, RenderCandidatePreviewParams, RenderProjectParams, RenderSegmentParams,
-    RenderStemsParams, RunAcceptanceTestsParams, RunValidationParams, SetEnergyCurveParams,
-    SetLayerInstrumentParams, SetSegmentGoalsParams, SnapshotDiffParams, SoloSegmentParams,
-    SubmitTaskResultParams, SuggestFixesParams, ToolCost, ToolReceipt, ToolStatus,
-    UpdateCalibrationProfileParams, UpdateDocsParams, ValidateConfigParams,
-    WritePatternNotesParams, WritePatternStepsParams,
+    CheckRegressionsParams, ClaimTaskParams, CompareCandidatesParams, CreateAdrParams,
+    CreateHumanReviewPacketParams, CreatePatternParams, CreateProjectParams, DryRunPatchParams,
+    ExplainMetricParams, GenerateConfigParams, GetAuditSummaryParams, GetCommandTraceParams,
+    GetEvalReportParams, GetFailureReportParams, GetLessonsParams, GetMetricEvidenceParams,
+    GetNextTaskParams, GetPolicyProfileParams, GetProjectSummaryParams, GetRenderJobParams,
+    GetRepairTemplatesParams, GetRootCausesParams, GetValidationReportParams,
+    HarmonizeMelodyParams, IncreaseSegmentDensityParams, IsolateLayerParams,
+    NormalizeLoudnessTargetParams, PlacePatternInSegmentParams, PlanArrangementParams,
+    QuantizeLayerParams, RecordLessonParams, ReduceMaskingParams, RenderCandidatePreviewParams,
+    RenderProjectParams, RenderSegmentParams, RenderStemsParams, RunAcceptanceTestsParams,
+    RunValidationParams, SetEnergyCurveParams, SetLayerInstrumentParams, SetSegmentGoalsParams,
+    SnapshotDiffParams, SoloSegmentParams, SubmitTaskResultParams, SuggestFixesParams, ToolCost,
+    ToolReceipt, ToolStatus, UpdateCalibrationProfileParams, UpdateDocsParams,
+    ValidateConfigParams, WritePatternNotesParams, WritePatternStepsParams,
 };
 
 /// Deserialize `params` into `$ty` and forward to `$func`, mapping any
@@ -64,6 +64,12 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
         "get_onboarding_packet" => crate::tools::get_onboarding_packet(),
         "get_telemetry" => crate::tools::get_telemetry(),
         "run_validation" => run_validation_from_params(params),
+        "check_regressions" => route!(
+            tool_name,
+            params,
+            CheckRegressionsParams,
+            crate::tools::check_regressions
+        ),
         // ── Governance tools ────────────────────────────────────────
         "get_policy_profile" => route!(
             tool_name,

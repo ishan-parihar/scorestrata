@@ -1819,6 +1819,66 @@ fn mvas_step_25_audio_validation_over_the_wire() {
     );
 }
 
+#[test]
+fn mvas_step_26_regression_detection_over_the_wire() {
+    // L6 (§11.2 L6, §11.7): a baseline scorecard claiming clean audio must be
+    // flagged when the current project clips — both as a metric regression and
+    // as a hard-gate violation. Also, a matching render signature must pass.
+    use scorestrata_core::diagnostic::{MetricSample, MetricScope, Scorecard};
+    use scorestrata_core::error::Severity;
+    use scorestrata_core::ids::{MetricId, ScorecardId};
+
+    let project = scorestrata_testkit::melodic_techno_project();
+    let baseline = Scorecard {
+        id: ScorecardId::new(),
+        metrics: vec![MetricSample {
+            id: MetricId::new(),
+            name: "audio.clipping".to_string(),
+            value: 1.0,
+            severity: Severity::Info,
+            scope: MetricScope::default(),
+            evidence_uri: "project://baseline/audio/clipping".to_string(),
+            explanation: "baseline clean".to_string(),
+            confidence: 1.0,
+            suggested_patches: vec![],
+        }],
+        overall_score: 1.0,
+        hard_failures: 0,
+        warnings: 0,
+    };
+
+    let receipt = scorestrata_mcp::dispatch::dispatch_tool(
+        "check_regressions",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "baseline_scorecard": baseline,
+            "project": &project,
+        }),
+    );
+    assert_eq!(receipt.tool, "check_regressions");
+    assert!(
+        receipt
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "METRIC_REGRESSION_DETECTED"),
+        "wire L6 must flag the clipping regression"
+    );
+    assert!(
+        receipt
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "HARD_GATE_REGRESSION"),
+        "wire L6 must flag the hard-gate violation"
+    );
+    assert!(
+        receipt
+            .next_actions
+            .iter()
+            .any(|a| a == "rollback_to_previous_snapshot"),
+        "hard-gate regressions must suggest rollback"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

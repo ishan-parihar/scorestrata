@@ -110,6 +110,33 @@ pub struct RunValidationParams {
     pub min_energy_delta: f32,
 }
 
+/// Parameters for the `check_regressions` tool (Level 6 regression plane).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckRegressionsParams {
+    /// Project ID being checked for regressions.
+    pub project_id: String,
+    /// Pre-patch validation scorecard to compare against. Any metric that
+    /// dropped past the significance threshold becomes a regression
+    /// (`METRIC_REGRESSION_DETECTED`, plus `HARD_GATE_REGRESSION` for the
+    /// audio hard gates).
+    #[serde(default)]
+    pub baseline_scorecard: Option<scorestrata_core::diagnostic::Scorecard>,
+    /// Pre-patch render checksum (SHA-256 of the WAV bytes). When combined
+    /// with the loudness/peak fields, the current render is compared for
+    /// §11.7 drift (`RENDER_LOUDNESS_DRIFT`, `RENDER_PEAK_DRIFT`,
+    /// `RENDER_CHECKSUM_CHANGED`).
+    #[serde(default)]
+    pub baseline_checksum: Option<String>,
+    /// Pre-patch integrated loudness in LUFS.
+    #[serde(default)]
+    pub baseline_integrated_lufs: Option<f32>,
+    /// Pre-patch true peak in dBTP.
+    #[serde(default)]
+    pub baseline_true_peak_dbtp: Option<f32>,
+    /// Current (post-patch) project payload — required.
+    pub project: Option<serde_json::Value>,
+}
+
 fn default_scope() -> String {
     "full".to_string()
 }
@@ -191,6 +218,220 @@ pub fn run_validation_with_project(
     }
 
     finish_validation_receipt(params, level, diagnostics)
+}
+
+/// Run Level 6 regression detection (§11.2 L6, §11.7).
+///
+/// Compares the current project against a pre-patch baseline along two axes:
+/// - **Scorecard**: the current L2+L3+L4 validation scorecard vs the supplied
+///   `baseline_scorecard` (`METRIC_REGRESSION_DETECTED`,
+///   `HARD_GATE_REGRESSION`).
+/// - **Render signature**: the current render's checksum / LUFS / true peak
+///   vs the supplied baseline (`RENDER_LOUDNESS_DRIFT`, `RENDER_PEAK_DRIFT`,
+///   `RENDER_CHECKSUM_CHANGED`).
+///
+/// Returns `Succeeded` when no error-level regressions are found; `Failed`
+/// when regressions (or no baseline at all) block the check.
+#[must_use]
+pub fn check_regressions(params: &CheckRegressionsParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "check_regressions".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Regression check requested for project '{}' but no current project payload was provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["render_project".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply the serialized current project to compare against the baseline".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let project: scorestrata_core::domain::Project =
+        match serde_json::from_value(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolReceipt {
+                    tool: "check_regressions".to_string(),
+                    status: ToolStatus::Failed,
+                    summary: format!("Could not deserialize current project: {e}"),
+                    score_delta: BTreeMap::new(),
+                    evidence_uris: vec![],
+                    focus_uris: vec![],
+                    next_actions: vec!["get_project_summary".to_string()],
+                    cost: ToolCost::default(),
+                    warnings: vec!["Invalid project payload".to_string()],
+                    dry_run: false,
+                    diagnostics: vec![],
+                };
+            }
+        };
+
+    let has_baseline = params.baseline_scorecard.is_some()
+        || params.baseline_checksum.is_some()
+        || params.baseline_integrated_lufs.is_some()
+        || params.baseline_true_peak_dbtp.is_some();
+    if !has_baseline {
+        return ToolReceipt {
+            tool: "check_regressions".to_string(),
+            status: ToolStatus::Failed,
+            summary: "No baseline supplied — regression detection needs a pre-patch scorecard and/or render signature"
+                .to_string(),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
+            next_actions: vec!["run_validation".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![concat!(
+                "Supply baseline_scorecard and/or baseline_checksum + ",
+                "baseline_integrated_lufs + baseline_true_peak_dbtp"
+            )
+            .to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+
+    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+
+    // Scorecard regression: current L2+L3+L4 validation vs the baseline.
+    if let Some(baseline) = &params.baseline_scorecard {
+        let run_params = RunValidationParams {
+            project_id: params.project_id.clone(),
+            scope: default_scope(),
+            segment_ids: vec![],
+            layer_ids: vec![],
+            min_energy_delta: default_min_energy_delta(),
+        };
+        let receipt = run_validation_with_project(&run_params, &project, 4);
+        let current = scorestrata_validator::report::build_validation_report(
+            project.id,
+            4,
+            receipt.diagnostics,
+        )
+        .scorecard;
+        let report = scorestrata_validator::regression_check::detect_regressions(
+            baseline,
+            &current,
+            &scorestrata_validator::regression_check::RegressionConfig::default(),
+        );
+        diagnostics
+            .extend(scorestrata_validator::regression_check::regression_diagnostics(&report));
+    }
+
+    // Render-signature regression: checksum / loudness / peak drift.
+    if params.baseline_checksum.is_some()
+        || params.baseline_integrated_lufs.is_some()
+        || params.baseline_true_peak_dbtp.is_some()
+    {
+        match render_project_to_analysis(&project) {
+            Ok(result) => {
+                // Missing baseline fields default to the current values so a
+                // partial baseline only compares the axes it supplies (a
+                // checksumless baseline must not trip RENDER_CHECKSUM_CHANGED).
+                let baseline = scorestrata_validator::regression_check::RenderSignature {
+                    checksum: params
+                        .baseline_checksum
+                        .clone()
+                        .unwrap_or_else(|| result.checksum.clone()),
+                    integrated_lufs: params
+                        .baseline_integrated_lufs
+                        .unwrap_or(result.analysis.integrated_lufs),
+                    true_peak_dbtp: params
+                        .baseline_true_peak_dbtp
+                        .unwrap_or(result.analysis.true_peak_dbtp),
+                };
+                let current = scorestrata_validator::regression_check::RenderSignature {
+                    checksum: result.checksum,
+                    integrated_lufs: result.analysis.integrated_lufs,
+                    true_peak_dbtp: result.analysis.true_peak_dbtp,
+                };
+                let regression = scorestrata_validator::regression_check::detect_render_regression(
+                    &baseline,
+                    &current,
+                    &scorestrata_validator::regression_check::RenderRegressionConfig::default(),
+                );
+                diagnostics.extend(
+                    scorestrata_validator::regression_check::render_regression_diagnostics(
+                        &regression,
+                    ),
+                );
+            }
+            Err(e) => diagnostics.push(audio_render_failed_diagnostic(e)),
+        }
+    }
+
+    let has_error = diagnostics
+        .iter()
+        .any(|d| matches!(d.severity, Severity::Error | Severity::Critical));
+    let status = if has_error {
+        ToolStatus::Failed
+    } else {
+        ToolStatus::Succeeded
+    };
+    let warnings: Vec<String> = diagnostics.iter().map(|d| d.message.clone()).collect();
+    let regression_count = diagnostics
+        .iter()
+        .filter(|d| d.code == "METRIC_REGRESSION_DETECTED")
+        .count();
+    let hard_gate_count = diagnostics
+        .iter()
+        .filter(|d| d.code == "HARD_GATE_REGRESSION")
+        .count();
+    let render_drift_count = diagnostics
+        .iter()
+        .filter(|d| d.code.starts_with("RENDER_"))
+        .count();
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "regression.metrics".to_string(),
+        regression_count.to_string(),
+    );
+    score_delta.insert(
+        "regression.hard_gates".to_string(),
+        hard_gate_count.to_string(),
+    );
+    score_delta.insert(
+        "regression.render_drift".to_string(),
+        render_drift_count.to_string(),
+    );
+    let evidence_uris: Vec<String> = diagnostics
+        .iter()
+        .flat_map(|d| d.evidence_uris.clone())
+        .collect();
+
+    let mut next_actions = vec!["apply_patch".to_string()];
+    if hard_gate_count > 0 {
+        next_actions.push("rollback_to_previous_snapshot".to_string());
+    }
+
+    ToolReceipt {
+        tool: "check_regressions".to_string(),
+        status,
+        summary: format!(
+            "Regression check for project '{}': {} regression(s), {} hard-gate violation(s), {} render drift(s)",
+            params.project_id, regression_count, hard_gate_count, render_drift_count
+        ),
+        score_delta,
+        evidence_uris,
+        focus_uris: vec![format!(
+            "project://{}/validation/regression",
+            params.project_id
+        )],
+        next_actions,
+        cost: ToolCost::default(),
+        warnings,
+        dry_run: false,
+        diagnostics,
+    }
 }
 
 /// Collect the Level 2 symbolic diagnostics (segment + transition checks).
@@ -7895,6 +8136,195 @@ mod tests {
                 .iter()
                 .any(|d| d.code == "AUDIO_CLIPPING_DETECTED"),
             "dispatcher L4 must emit audio diagnostics"
+        );
+    }
+
+    fn clean_scorecard_baseline() -> scorestrata_core::diagnostic::Scorecard {
+        use scorestrata_core::diagnostic::{MetricSample, MetricScope, Scorecard};
+        use scorestrata_core::error::Severity;
+        use scorestrata_core::ids::{MetricId, ScorecardId};
+        Scorecard {
+            id: ScorecardId::new(),
+            metrics: vec![MetricSample {
+                id: MetricId::new(),
+                name: "audio.clipping".to_string(),
+                value: 1.0,
+                severity: Severity::Info,
+                scope: MetricScope::default(),
+                evidence_uri: "project://baseline/audio/clipping".to_string(),
+                explanation: "baseline clean".to_string(),
+                confidence: 1.0,
+                suggested_patches: vec![],
+            }],
+            overall_score: 1.0,
+            hard_failures: 0,
+            warnings: 0,
+        }
+    }
+
+    #[test]
+    fn check_regressions_flags_scorecard_regression() {
+        // Baseline says audio.clipping is perfect (1.0). The melodic-techno
+        // fixture deterministically clips, so the current L4 scorecard drops
+        // below — a hard-gate regression.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = CheckRegressionsParams {
+            project_id: project.id.to_string(),
+            baseline_scorecard: Some(clean_scorecard_baseline()),
+            baseline_checksum: None,
+            baseline_integrated_lufs: None,
+            baseline_true_peak_dbtp: None,
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+        };
+        let receipt = check_regressions(&params);
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "METRIC_REGRESSION_DETECTED"),
+            "clipping regression must be flagged"
+        );
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "HARD_GATE_REGRESSION"),
+            "audio.clipping is a hard gate"
+        );
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("regression.hard_gates")
+                .map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn check_regressions_flags_render_drift() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        // A deliberately different checksum plus a louder/peaky baseline drifts
+        // past both the loudness (1.0 LUFS) and peak (0.5 dB) tolerances.
+        let params = CheckRegressionsParams {
+            project_id: project.id.to_string(),
+            baseline_scorecard: None,
+            baseline_checksum: Some("deadbeef".to_string()),
+            baseline_integrated_lufs: Some(-14.0),
+            baseline_true_peak_dbtp: Some(0.0),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+        };
+        let receipt = check_regressions(&params);
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "RENDER_LOUDNESS_DRIFT"),
+            "loudness drift past 1.0 LUFS must be flagged"
+        );
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "RENDER_PEAK_DRIFT"),
+            "peak drift past 0.5 dB must be flagged"
+        );
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "RENDER_CHECKSUM_CHANGED"),
+            "checksum change must be flagged"
+        );
+    }
+
+    #[test]
+    fn check_regressions_loudness_only_baseline_skips_checksum() {
+        // A baseline that only supplies loudness must not trip a spurious
+        // RENDER_CHECKSUM_CHANGED — missing axes default to "skip".
+        let project = scorestrata_testkit::melodic_techno_project();
+        let result = render_project_to_analysis(&project).expect("fixture renders");
+        let params = CheckRegressionsParams {
+            project_id: project.id.to_string(),
+            baseline_scorecard: None,
+            baseline_checksum: None,
+            baseline_integrated_lufs: Some(result.analysis.integrated_lufs),
+            baseline_true_peak_dbtp: None,
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+        };
+        let receipt = check_regressions(&params);
+        assert!(
+            !receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "RENDER_CHECKSUM_CHANGED"),
+            "no checksum baseline means no checksum comparison"
+        );
+    }
+
+    #[test]
+    fn check_regressions_passes_when_baseline_matches() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        // Render once to capture the exact current signature, then use it as
+        // the baseline — rendering is deterministic, so nothing drifts.
+        let result = render_project_to_analysis(&project).expect("fixture renders");
+        let params = CheckRegressionsParams {
+            project_id: project.id.to_string(),
+            baseline_scorecard: None,
+            baseline_checksum: Some(result.checksum.clone()),
+            baseline_integrated_lufs: Some(result.analysis.integrated_lufs),
+            baseline_true_peak_dbtp: Some(result.analysis.true_peak_dbtp),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+        };
+        let receipt = check_regressions(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            !receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code.starts_with("RENDER_")),
+            "matching signature must not drift"
+        );
+    }
+
+    #[test]
+    fn check_regressions_requires_baseline() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = CheckRegressionsParams {
+            project_id: project.id.to_string(),
+            baseline_scorecard: None,
+            baseline_checksum: None,
+            baseline_integrated_lufs: None,
+            baseline_true_peak_dbtp: None,
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+        };
+        let receipt = check_regressions(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt.summary.contains("No baseline"),
+            "must explain that a baseline is required"
+        );
+    }
+
+    #[test]
+    fn dispatcher_check_regressions_wire_path() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let baseline =
+            serde_json::to_value(clean_scorecard_baseline()).expect("scorecard serializes");
+        let receipt = crate::dispatch::dispatch_tool(
+            "check_regressions",
+            serde_json::json!({
+                "project_id": project.id.to_string(),
+                "baseline_scorecard": baseline,
+                "project": project,
+            }),
+        );
+        assert_eq!(receipt.tool, "check_regressions");
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "METRIC_REGRESSION_DETECTED"),
+            "dispatcher L6 must reach regression detection"
         );
     }
 }
