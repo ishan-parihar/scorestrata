@@ -1563,6 +1563,44 @@ fn mvas_step_21_l5_brief_compliance_over_the_wire() {
     );
 }
 
+/// Step 22: Telemetry (§15.5) — the dispatcher measures what it runs.
+///
+/// Every tool dispatched over the wire is accounted in the telemetry registry;
+/// `get_telemetry` serves the snapshot back. This proves the "you cannot
+/// improve what you cannot measure" requirement end-to-end.
+#[test]
+fn mvas_step_22_telemetry_measures_dispatched_calls() {
+    use scorestrata_mcp::dispatch::dispatch_tool;
+    use scorestrata_mcp::tools::ToolStatus;
+
+    // MVAS steps run in parallel, so other steps' dispatches can pollute the
+    // shared registry. Use unique probe names so this step's exact counts are
+    // immune to parallel pollution — including a failing probe to prove failed
+    // dispatches are still measured.
+    scorestrata_mcp::telemetry::reset();
+    dispatch_tool("mvas22_probe_a", serde_json::json!({}));
+    dispatch_tool("mvas22_probe_b", serde_json::json!({}));
+    dispatch_tool("mvas22_probe_a", serde_json::json!({}));
+    dispatch_tool("mvas22_failing_probe", serde_json::json!({}));
+
+    let receipt = dispatch_tool("get_telemetry", serde_json::json!({}));
+    assert_eq!(receipt.tool, "get_telemetry");
+    assert!(matches!(receipt.status, ToolStatus::Succeeded));
+    assert!(receipt.summary.contains("tool call(s)"));
+    assert!(receipt.summary.contains("mvas22_probe_ax2"));
+    assert!(
+        receipt.summary.contains("mvas22_failing_probex1"),
+        "failed dispatches are still measured: {}",
+        receipt.summary
+    );
+
+    // The registry itself reflects the same counts.
+    let snap = scorestrata_mcp::telemetry::snapshot();
+    assert!(snap.total_tool_calls() >= 4);
+    assert_eq!(snap.tool_calls.get("mvas22_probe_a"), Some(&2));
+    assert_eq!(snap.tool_calls.get("mvas22_failing_probe"), Some(&1));
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

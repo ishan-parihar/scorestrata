@@ -295,7 +295,9 @@ pub struct PatchScope {
 /// mutation.
 #[must_use]
 pub fn apply_patch(params: &ApplyPatchParams) -> ToolReceipt {
-    match &params.project {
+    // §15.5: every apply_patch invocation is a patch attempt, accounted before
+    // branching so failed/blocked attempts also count toward the metrics.
+    let receipt = match &params.project {
         Some(project_json) => {
             let deserialized =
                 serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone());
@@ -349,7 +351,12 @@ pub fn apply_patch(params: &ApplyPatchParams) -> ToolReceipt {
             dry_run: params.dry_run,
             diagnostics: vec![],
         },
-    }
+    };
+    crate::telemetry::record_patch_attempt(matches!(
+        receipt.status,
+        ToolStatus::Succeeded | ToolStatus::DryRunCompleted
+    ));
+    receipt
 }
 
 /// Parameters for `dry_run_patch` tool.
@@ -4055,6 +4062,65 @@ pub fn get_contracts() -> ToolReceipt {
             tool_calls: 1,
             ..Default::default()
         },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Get the process-wide telemetry snapshot (§15.5).
+///
+/// Returns tool-call counts, patch attempts, and the derived operational
+/// rates (patch success, escalation, rollback, regression) so operators can
+/// measure what the system is actually doing.
+///
+/// Note: the snapshot is taken after this tool's own dispatch is recorded, so
+/// the summary always includes `get_telemetry` in its own counts — consistent
+/// with "measure what the system has run".
+#[must_use]
+pub fn get_telemetry() -> ToolReceipt {
+    let snap = crate::telemetry::snapshot();
+    let top: Vec<String> = snap
+        .top_tools(5)
+        .into_iter()
+        .map(|(name, count)| format!("{name}x{count}"))
+        .collect();
+    let top_str = if top.is_empty() {
+        "none".to_string()
+    } else {
+        top.join(", ")
+    };
+    ToolReceipt {
+        tool: "get_telemetry".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Telemetry: {} tool call(s) across {} tool(s); top: {top_str}; patches {}/{} ({:.0}% success); rates: escalation {:.3}, rollback {:.3}, regression {:.3}",
+            snap.total_tool_calls(),
+            snap.tool_calls.len(),
+            snap.successful_patches,
+            snap.total_patches,
+            snap.patch_success_rate() * 100.0,
+            snap.escalation_rate(),
+            snap.rollback_rate(),
+            snap.regression_rate(),
+        ),
+        score_delta: BTreeMap::from([
+            (
+                "telemetry.tool_calls".to_string(),
+                snap.total_tool_calls().to_string(),
+            ),
+            (
+                "telemetry.patch_success_rate".to_string(),
+                format!("{:.3}", snap.patch_success_rate()),
+            ),
+        ]),
+        // Deliberate divergence from the architecture's per-project
+        // `project://<id>/telemetry/latest`: this snapshot is process-wide,
+        // so `system://` is the honest scope.
+        evidence_uris: vec!["system://telemetry/latest".to_string()],
+        focus_uris: vec![],
+        next_actions: vec![],
+        cost: ToolCost::default(),
         warnings: vec![],
         dry_run: false,
         diagnostics: vec![],

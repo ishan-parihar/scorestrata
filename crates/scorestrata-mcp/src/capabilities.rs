@@ -80,6 +80,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "governance",
         ),
         (
+            "get_telemetry",
+            "read-only",
+            false,
+            "read",
+            "low",
+            "governance",
+        ),
+        (
             "get_policy_profile",
             "read-only",
             false,

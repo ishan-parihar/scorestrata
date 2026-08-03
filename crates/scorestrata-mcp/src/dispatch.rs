@@ -51,13 +51,18 @@ macro_rules! route {
 /// Returns a `ToolReceipt` whose `tool` field always echoes the requested
 /// name. Unknown tools produce a `Failed` receipt pointing at
 /// `get_capabilities` for the registered catalog.
+///
+/// Every invocation is recorded in the telemetry registry (§15.5), so the
+/// snapshot reflects what the system has actually run.
 #[must_use]
 pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt {
+    crate::telemetry::record_tool_call(tool_name);
     match tool_name {
         // ── Special-shape tools ─────────────────────────────────────
         "get_capabilities" => capabilities_receipt(),
         "get_contracts" => crate::tools::get_contracts(),
         "get_onboarding_packet" => crate::tools::get_onboarding_packet(),
+        "get_telemetry" => crate::tools::get_telemetry(),
         "run_validation" => run_validation_from_params(params),
         // ── Governance tools ────────────────────────────────────────
         "get_policy_profile" => route!(
@@ -692,5 +697,51 @@ mod tests {
             serde_json::json!({ "project_id": id.to_string() }),
         );
         assert_eq!(receipt.tool, "get_project_summary");
+    }
+
+    // The telemetry registry is process-wide, so tests that assert on it must
+    // be serialized against each other and use probe names no other test
+    // dispatches, keeping exact counts immune to parallel-test pollution.
+    static TELEMETRY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn dispatch_records_tool_calls_in_telemetry() {
+        let _guard = TELEMETRY_TEST_LOCK.lock().unwrap();
+        // §15.5: every dispatched call is accounted in the telemetry registry.
+        crate::telemetry::reset();
+        dispatch_tool("telemetry_probe_a", serde_json::json!({}));
+        dispatch_tool("telemetry_probe_a", serde_json::json!({}));
+        dispatch_tool("telemetry_probe_b", serde_json::json!({}));
+        dispatch_tool("definitely_not_a_tool", serde_json::json!({}));
+
+        let snap = crate::telemetry::snapshot();
+        assert_eq!(snap.tool_calls.get("telemetry_probe_a"), Some(&2));
+        assert_eq!(snap.tool_calls.get("telemetry_probe_b"), Some(&1));
+        assert_eq!(
+            snap.tool_calls.get("definitely_not_a_tool"),
+            Some(&1),
+            "unknown tools are still measured"
+        );
+        assert!(snap.total_tool_calls() >= 4);
+    }
+
+    #[test]
+    fn get_telemetry_tool_serves_snapshot() {
+        let _guard = TELEMETRY_TEST_LOCK.lock().unwrap();
+        crate::telemetry::reset();
+        dispatch_tool("telemetry_probe_c", serde_json::json!({}));
+        dispatch_tool("telemetry_probe_c", serde_json::json!({}));
+
+        let receipt = dispatch_tool("get_telemetry", serde_json::json!({}));
+        assert_eq!(receipt.tool, "get_telemetry");
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(receipt.summary.contains("tool call(s)"));
+        assert!(receipt.summary.contains("telemetry_probe_cx2"));
+        let tool_calls = receipt
+            .score_delta
+            .get("telemetry.tool_calls")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        assert!(tool_calls >= 2, "telemetry serves the recorded count");
     }
 }

@@ -581,6 +581,26 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-TELEMETRY".to_string(),
+        title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
+        phase: "9".to_string(),
+        tasks: vec!["TELE-001".to_string()],
+        code: vec![
+            "scorestrata_mcp::telemetry".to_string(),
+            "scorestrata_mcp::dispatch".to_string(),
+        ],
+        tests: vec![
+            "telemetry::tests".to_string(),
+            "dispatch::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec!["get_telemetry".to_string()],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §15.5".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-CLI-BUNDLE".to_string(),
         title: "CLI wired to real storage and pipeline".to_string(),
         phase: "0".to_string(),

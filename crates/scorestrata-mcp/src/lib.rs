@@ -15,6 +15,7 @@ pub mod debug_ops;
 pub mod dispatch;
 pub mod patch_ops;
 pub mod resources;
+pub mod telemetry;
 pub mod tools;
 
 use scorestrata_core::error::ScorestrataError;
