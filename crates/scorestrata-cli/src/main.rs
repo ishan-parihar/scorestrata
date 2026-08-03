@@ -132,6 +132,14 @@ enum Commands {
         #[command(subcommand)]
         action: PolicyAction,
     },
+    /// Invoke any registered MCP tool via the dispatcher (§10.5)
+    Tool {
+        /// Registered tool name (see `ss capabilities`)
+        name: String,
+        /// JSON params object (defaults to `{}`)
+        #[arg(short, long)]
+        params: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -230,6 +238,7 @@ fn main() -> Result<()> {
         Commands::Calibrate { project_path } => handle_calibrate(&project_path.project)?,
         Commands::Budget { action } => handle_budget(action)?,
         Commands::Policy { action } => handle_policy(action)?,
+        Commands::Tool { name, params } => handle_tool(&name, params.as_deref())?,
     }
     Ok(())
 }
@@ -1175,6 +1184,65 @@ fn handle_policy(action: PolicyAction) -> Result<()> {
     Ok(())
 }
 
+/// Invoke any registered MCP tool through the dispatcher (§10.5).
+///
+/// Params default to `{}`; JSON strings are parsed and forwarded verbatim to
+/// `dispatch_tool`, so mutating tools receive the full payload-driven flow.
+fn handle_tool(name: &str, params_json: Option<&str>) -> Result<()> {
+    let params: serde_json::Value = match params_json {
+        Some(raw) => serde_json::from_str(raw).context("Invalid JSON params")?,
+        None => serde_json::json!({}),
+    };
+
+    let receipt = scorestrata_mcp::dispatch::dispatch_tool(name, params);
+    let failed = matches!(
+        &receipt.status,
+        scorestrata_mcp::tools::ToolStatus::Failed | scorestrata_mcp::tools::ToolStatus::Blocked
+    );
+
+    let status = match receipt.status {
+        scorestrata_mcp::tools::ToolStatus::Succeeded => "succeeded".green(),
+        scorestrata_mcp::tools::ToolStatus::Failed => "failed".red(),
+        scorestrata_mcp::tools::ToolStatus::Blocked => "blocked".yellow(),
+        scorestrata_mcp::tools::ToolStatus::DryRunCompleted => "dry-run".cyan(),
+    };
+    println!("{}", format!("Tool: {}", receipt.tool).green().bold());
+    println!("  Status:   {status}");
+    println!("  Summary:  {}", receipt.summary);
+    for (k, v) in &receipt.score_delta {
+        println!("  Score:    {k} -> {v}");
+    }
+    for uri in &receipt.evidence_uris {
+        println!("  Evidence: {uri}");
+    }
+    for uri in &receipt.focus_uris {
+        println!("  Focus:    {uri}");
+    }
+    for action in &receipt.next_actions {
+        println!("  Next:     {action}");
+    }
+    for warning in &receipt.warnings {
+        println!("  Warning:  {}", warning.yellow());
+    }
+    if !receipt.diagnostics.is_empty() {
+        println!("  Diagnostics:");
+        for d in &receipt.diagnostics {
+            println!("    - [{}] {}", d.severity, d.message);
+        }
+    }
+    // A failed or blocked tool is an operational failure: propagate it as a
+    // CLI error so scripts/CI can distinguish tool failure from success by
+    // exit code (the pretty receipt above is still printed first).
+    if failed {
+        anyhow::bail!(
+            "Tool '{}' finished with status {:?}",
+            receipt.tool,
+            receipt.status
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -1535,5 +1603,65 @@ mod tests {
     fn parse_diff_candidates_missing_args_fails() {
         let result = Cli::try_parse_from(["ss", "diff", "candidates"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_tool_command_with_name_only() {
+        let cli = Cli::try_parse_from(["ss", "tool", "get_capabilities"]).unwrap();
+        match cli.command {
+            Commands::Tool { name, params } => {
+                assert_eq!(name, "get_capabilities");
+                assert!(params.is_none());
+            }
+            _ => panic!("expected Commands::Tool"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_command_with_json_params() {
+        let cli = Cli::try_parse_from([
+            "ss",
+            "tool",
+            "get_policy_profile",
+            "--params",
+            r#"{"project_id":"proj_1"}"#,
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Tool { name, params } => {
+                assert_eq!(name, "get_policy_profile");
+                assert_eq!(params.as_deref(), Some(r#"{"project_id":"proj_1"}"#));
+            }
+            _ => panic!("expected Commands::Tool"),
+        }
+    }
+
+    #[test]
+    fn handle_tool_accepts_successful_no_param_tool() {
+        // Exercises the real handler: param defaulting, dispatch, and the
+        // Ok(()) path for a successful receipt. (Prints the receipt to stdout
+        // during the test — acceptable.)
+        let result = handle_tool("get_capabilities", None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn handle_tool_returns_cli_error_for_invalid_json() {
+        // Invalid JSON must surface as a CLI error (non-zero exit), not a
+        // silent receipt.
+        let result = handle_tool("get_capabilities", Some("not json"));
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("Invalid JSON"), "got: {err}");
+    }
+
+    #[test]
+    fn handle_tool_propagates_tool_failure_as_error() {
+        // An unknown tool yields a Failed receipt, and the handler must
+        // propagate it as a CLI error so scripts can key off the exit code.
+        let result = handle_tool("definitely_not_a_tool", None);
+        assert!(result.is_err());
+        let err = format!("{:?}", result.unwrap_err());
+        assert!(err.contains("definitely_not_a_tool"), "got: {err}");
     }
 }

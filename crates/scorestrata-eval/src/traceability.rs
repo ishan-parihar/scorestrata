@@ -552,6 +552,19 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-CLI-DISPATCH".to_string(),
+        title: "CLI tool command invokes MCP dispatcher".to_string(),
+        phase: "5".to_string(),
+        tasks: vec!["CLI-002".to_string()],
+        code: vec!["scorestrata-cli::main".to_string()],
+        tests: vec!["scorestrata-cli tests".to_string()],
+        mcp_tools: vec![],
+        cli_commands: vec!["ss tool <name> [--params <json>]".to_string()],
+        docs: vec!["architecture.md §10.5, §19.4".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-CLI-BUNDLE".to_string(),
         title: "CLI wired to real storage and pipeline".to_string(),
         phase: "0".to_string(),
