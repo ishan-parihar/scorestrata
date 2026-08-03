@@ -757,6 +757,21 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-REPLAY".to_string(),
+        title:
+            "ReplayEngine: replay until failure, snapshot bisect, substituted replay (§9.4, §15.3)"
+                .to_string(),
+        phase: "9".to_string(),
+        tasks: vec!["EVID-003".to_string()],
+        code: vec!["scorestrata_storage::replay".to_string()],
+        tests: vec!["replay::tests".to_string(), "mvas_simulation".to_string()],
+        mcp_tools: vec![],
+        cli_commands: vec!["replay".to_string()],
+        docs: vec!["architecture.md §9.4, §15.3".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),

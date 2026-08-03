@@ -2600,6 +2600,104 @@ fn mvas_step_32_provenance_manifests_drive_reproducibility() {
     );
 }
 
+/// Step 33 — deterministic replay & time travel capabilities (§9.4, §15.3).
+///
+/// "If an agent cannot replay a failure exactly, it cannot reliably learn
+/// from it." This step proves the ReplayEngine capabilities over a real
+/// journal: replay until failure pinpoints the exact failing command,
+/// snapshot bisect finds it in O(log n), event reconstruction recovers the
+/// observable outcome stream, and substituted-policy replay shows whether a
+/// stricter policy would have prevented the failure — and at which command.
+#[test]
+fn mvas_step_33_deterministic_replay_and_time_travel() {
+    use scorestrata_storage::replay::{JournalEntry, ReplayEngine, ReplayJournal};
+    use std::collections::BTreeMap;
+
+    fn ok(seq: u64) -> JournalEntry {
+        JournalEntry {
+            seq,
+            command: "apply_patch".to_string(),
+            actor: "agent:composer".to_string(),
+            scope: BTreeMap::from([("segment".to_string(), "0".to_string())]),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            pre_snapshot_id: Some(format!("snap_{seq}")),
+            post_snapshot_id: Some(format!("snap_{}", seq + 1)),
+            events: vec!["ok".to_string()],
+        }
+    }
+
+    fn hard_fail(seq: u64) -> JournalEntry {
+        let mut e = ok(seq);
+        e.events = vec!["hard_failure:true_peak".to_string()];
+        e
+    }
+
+    // ── 33a. A journal records the full command history with outcomes ──
+    let mut journal = ReplayJournal::new();
+    journal.record(
+        "plan_arrangement",
+        "agent:planner",
+        BTreeMap::new(),
+        None,
+        Some("snap_0".to_string()),
+        vec!["ok".to_string()],
+    );
+    journal.record(
+        "apply_patch",
+        "agent:composer",
+        BTreeMap::from([("segment".to_string(), "0".to_string())]),
+        Some("snap_1".to_string()),
+        Some("snap_2".to_string()),
+        vec!["ok".to_string()],
+    );
+    journal.record(
+        "apply_patch",
+        "agent:composer",
+        BTreeMap::new(),
+        Some("snap_2".to_string()),
+        Some("snap_3".to_string()),
+        vec!["hard_failure:true_peak".to_string()],
+    );
+    assert_eq!(journal.len(), 3);
+    assert_eq!(journal.next_seq, 3);
+
+    // ── 33b. Replay until failure finds the exact failing command ──
+    let is_failure = |e: &JournalEntry| e.events.iter().any(|ev| ev.starts_with("hard_failure"));
+    let failed_seq = ReplayEngine::replay_until_failure(&journal.entries, is_failure);
+    assert_eq!(failed_seq, Some(2));
+
+    // ── 33c. Snapshot bisect finds it in O(log n) on the monotone tail ──
+    let entries: Vec<JournalEntry> = (0..8).map(ok).chain((8..16).map(hard_fail)).collect();
+    let first_fail = ReplayEngine::snapshot_bisect(&entries, is_failure);
+    assert_eq!(first_fail, Some(8));
+
+    // ── 33d. Event reconstruction recovers the observable outcome stream ──
+    let events: Vec<(&str, &str)> = ReplayEngine::reconstruct_events(&journal.entries).collect();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0], ("plan_arrangement", "ok"));
+    assert_eq!(events[2], ("apply_patch", "hard_failure:true_peak"));
+
+    // ── 33e. Substituted policy replay (§9.4) — would a stricter policy
+    //         have caught the failure earlier? ──
+    let original = vec![ok(0), ok(1), ok(2)];
+    let stricter = ReplayEngine::replay_with_substituted_inputs(&original, |e| {
+        if e.seq >= 2 {
+            vec!["hard_failure:true_peak".to_string()]
+        } else {
+            vec!["ok".to_string()]
+        }
+    });
+    let divergence = ReplayEngine::divergence_point(&original, &stricter.entries);
+    assert_eq!(divergence, Some(2));
+
+    // ── 33f. Repro: identical inputs → identical replay (no divergence) ──
+    let identical = ReplayEngine::replay_with_substituted_inputs(&original, |e| e.events.clone());
+    assert_eq!(
+        ReplayEngine::divergence_point(&original, &identical.entries),
+        None
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,
