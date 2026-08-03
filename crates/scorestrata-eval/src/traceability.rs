@@ -789,11 +789,13 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
 
     matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-RENDER-MANIFEST".to_string(),
-        title: "RenderManifest — reproducibility receipt for every render (§17.2)".to_string(),
+        title: "RenderManifest — every render emits its reproducibility receipt (§17.2)"
+            .to_string(),
         phase: "17".to_string(),
         tasks: vec!["EVID-006".to_string()],
         code: vec![
             "scorestrata_storage::render_manifest".to_string(),
+            "scorestrata_mcp::tools::render_project".to_string(),
             "scorestrata_mcp::tools::get_render_manifest".to_string(),
             "scorestrata_mcp::resources::RenderManifestView".to_string(),
         ],
@@ -803,7 +805,10 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
             "resources::tests".to_string(),
             "mvas_simulation".to_string(),
         ],
-        mcp_tools: vec!["get_render_manifest".to_string()],
+        mcp_tools: vec![
+            "get_render_manifest".to_string(),
+            "render_project".to_string(),
+        ],
         cli_commands: vec![],
         docs: vec!["architecture.md §17.1, §17.2, §17.3".to_string()],
         eval_result: Some("pass".to_string()),

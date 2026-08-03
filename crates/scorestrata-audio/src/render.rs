@@ -23,6 +23,13 @@ use crate::wav::write_wav;
 /// Sample rate used for offline rendering (48 kHz per render policy).
 pub const DEFAULT_SAMPLE_RATE: u32 = 48_000;
 
+/// The audio engine crate version, surfaced in render manifests.
+///
+/// §17.2 requires the manifest to record the engine version so that
+/// reproducibility checks can detect a version drift that silently changes
+/// output bytes.
+pub const AUDIO_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Synth voice configuration for a layer name.
 #[derive(Debug, Clone)]
 pub struct RenderVoice {

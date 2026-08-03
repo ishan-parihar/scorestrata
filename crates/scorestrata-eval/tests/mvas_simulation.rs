@@ -3062,6 +3062,93 @@ fn mvas_step_36_render_manifest_proves_reproducibility() {
     );
 }
 
+#[test]
+fn mvas_step_37_render_project_emits_manifest_over_wire() {
+    use scorestrata_mcp::dispatch::dispatch_tool;
+    use scorestrata_mcp::tools::ToolStatus;
+
+    // §17.2 "every render should produce a manifest": the render_project
+    // TOOL itself emits the reproducibility receipt — no manual manifest
+    // construction — records it into a caller-supplied store, and the
+    // fingerprint is stable for identical inputs yet drifts when a
+    // reproducibility input changes (§17.1).
+    let project = scorestrata_testkit::melodic_techno_project();
+    let store = scorestrata_storage::render_manifest::RenderManifestStore::new();
+    let project_json = serde_json::to_value(&project).expect("project serializes");
+    let store_json = serde_json::to_value(&store).expect("store serializes");
+
+    let render = |seed: u64| {
+        dispatch_tool(
+            "render_project",
+            serde_json::json!({
+                "project_id": "p37",
+                "mode": "master",
+                "project": project_json.clone(),
+                "manifest_store": store_json.clone(),
+                "source_snapshot_id": "snap_p37_0042",
+                "command_id": "cmd_0042",
+                "seed": seed,
+            }),
+        )
+    };
+
+    let first = render(1337);
+    assert!(
+        matches!(first.status, ToolStatus::Succeeded),
+        "render succeeded: {}",
+        first.summary
+    );
+    let hash = first
+        .score_delta
+        .get("manifest.manifest_hash")
+        .cloned()
+        .expect("manifest hash on receipt");
+    assert_eq!(
+        first
+            .score_delta
+            .get("manifest.artifact_id")
+            .map(String::as_str),
+        Some("art_p37_master"),
+        "artifact id derived from project + mode"
+    );
+    assert_eq!(
+        first
+            .score_delta
+            .get("manifest.recorded")
+            .map(String::as_str),
+        Some("true"),
+        "manifest recorded into the supplied store"
+    );
+    assert!(
+        first
+            .next_actions
+            .iter()
+            .any(|a| a == "get_render_manifest"),
+        "recorded manifests are retrievable"
+    );
+    assert!(
+        first.summary.contains(&hash[..8.min(hash.len())]),
+        "summary carries the fingerprint: {}",
+        first.summary
+    );
+
+    // Identical reproducibility inputs → identical fingerprint.
+    let second = render(1337);
+    assert_eq!(
+        first.score_delta.get("manifest.manifest_hash"),
+        second.score_delta.get("manifest.manifest_hash"),
+        "identical inputs reproduce the same manifest"
+    );
+
+    // Seed drift changes the fingerprint (§17.1).
+    let drifted = render(9999);
+    assert_ne!(
+        first.score_delta.get("manifest.manifest_hash"),
+        drifted.score_delta.get("manifest.manifest_hash"),
+        "seed drift breaks reproducibility"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

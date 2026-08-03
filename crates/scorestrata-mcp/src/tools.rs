@@ -5607,6 +5607,31 @@ pub struct RenderProjectParams {
     /// Target segment ID for segment-scoped rendering.
     #[serde(default)]
     pub segment_id: Option<String>,
+    /// Serialized
+    /// [`RenderManifestStore`](scorestrata_storage::render_manifest::RenderManifestStore)
+    /// — when provided, the render's §17.2 reproducibility receipt is recorded
+    /// into it, and `manifest.artifact_id` / `manifest.manifest_hash` surface
+    /// on the receipt for the agent loop to retrieve and verify later.
+    ///
+    /// The payload is input-only (stateless), mirroring `get_metric_evidence`'s
+    /// warehouse: the receipt reports what was recorded, and the caller feeds
+    /// the store back into `get_render_manifest` to retrieve the receipt.
+    #[serde(default)]
+    pub manifest_store: Option<serde_json::Value>,
+    /// Snapshot the render was produced from (§17.1 reproducibility input).
+    /// Defaults to `snap_{project_id}_live` when omitted.
+    #[serde(default)]
+    pub source_snapshot_id: Option<String>,
+    /// Command that triggered the render (§17.2 manifest schema).
+    /// Defaults to `cmd_render_{project_id}` when omitted.
+    #[serde(default)]
+    pub command_id: Option<String>,
+    /// Seed used for deterministic generation (§17.2 manifest schema).
+    #[serde(default)]
+    pub seed: Option<u64>,
+    /// Hashes of source assets, keyed by asset path/name (§17.2).
+    #[serde(default)]
+    pub asset_hashes: Option<BTreeMap<String, String>>,
 }
 
 /// Render a compiled timeline to audio and produce its Level-4 analysis.
@@ -5807,14 +5832,102 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
                 format!("{:.1}", result.analysis.integrated_lufs),
             );
 
+            // §17.2 — every render produces a manifest. The receipt always
+            // carries the reproducibility fingerprint; when a manifest store
+            // payload is supplied, the full receipt is recorded into it so the
+            // agent loop can retrieve and verify the artifact later.
+            let artifact_id = format!("art_{}_{}", params.project_id, params.mode);
+            let artifact_type = match params.mode.as_str() {
+                "master" => "master_wav",
+                "stems" => "stems",
+                "preview" => "preview",
+                other => other,
+            };
+            // Provenance inputs default to ids derived from the project when
+            // not supplied. The defaults are placeholders, so the receipt
+            // reports which provenance the fingerprint was built from.
+            let source_snapshot_id = params
+                .source_snapshot_id
+                .clone()
+                .unwrap_or_else(|| format!("snap_{}_live", params.project_id));
+            let command_id = params
+                .command_id
+                .clone()
+                .unwrap_or_else(|| format!("cmd_render_{}", params.project_id));
+            let provenance_defaulted =
+                params.source_snapshot_id.is_none() || params.command_id.is_none();
+            let manifest = scorestrata_storage::render_manifest::RenderManifest::from_render(
+                &artifact_id,
+                artifact_type,
+                &format!("renders/{}.wav", params.mode),
+                &result.checksum,
+                result.sample_rate,
+                result.channels,
+                result.duration_seconds,
+                &source_snapshot_id,
+                &command_id,
+                &timeline.compiler_version,
+                scorestrata_audio::render::AUDIO_ENGINE_VERSION,
+                params.seed,
+                params.asset_hashes.clone().unwrap_or_default(),
+            );
+            let manifest_hash = manifest.manifest_hash();
+            score_delta.insert("manifest.artifact_id".to_string(), artifact_id.clone());
+            score_delta.insert("manifest.manifest_hash".to_string(), manifest_hash.clone());
+            score_delta.insert(
+                "manifest.provenance".to_string(),
+                if provenance_defaulted {
+                    "defaults".to_string()
+                } else {
+                    "explicit".to_string()
+                },
+            );
+            let recorded = match &params.manifest_store {
+                Some(json) => {
+                    match serde_json::from_value::<
+                        scorestrata_storage::render_manifest::RenderManifestStore,
+                    >(json.clone())
+                    {
+                        Ok(mut store) => {
+                            store.record(manifest);
+                            score_delta.insert("manifest.recorded".to_string(), "true".to_string());
+                            true
+                        }
+                        Err(_) => {
+                            warnings.push(
+                                "Manifest produced but could not be recorded — invalid manifest_store payload"
+                                    .to_string(),
+                            );
+                            false
+                        }
+                    }
+                }
+                None => {
+                    warnings.push(
+                        "Manifest produced but not persisted — supply a manifest_store payload to record it (see get_render_manifest)"
+                            .to_string(),
+                    );
+                    false
+                }
+            };
+            let mut next_actions = vec![
+                "get_render_job".to_string(),
+                "run_validation".to_string(),
+                "apply_patch".to_string(),
+            ];
+            if recorded {
+                next_actions.push("get_render_manifest".to_string());
+            }
+
             ToolReceipt {
                 tool: "render_project".to_string(),
                 status: ToolStatus::Succeeded,
                 summary: format!(
-                    "Rendered {} events ({:.2}s, sha256 {}, {:.1} LUFS, {:.1} dBTP) in '{}' mode",
+                    "Rendered {} events ({:.2}s, sha256 {}, manifest {}..., {:.1} LUFS, {:.1} dBTP) in '{}' mode",
                     timeline.event_count(),
                     result.duration_seconds,
                     &result.checksum[..8.min(result.checksum.len())],
+                    &manifest_hash[..8.min(manifest_hash.len())],
                     result.analysis.integrated_lufs,
                     result.analysis.true_peak_dbtp,
                     params.mode
@@ -5825,11 +5938,7 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
                     params.project_id, params.mode
                 )],
                 focus_uris: vec![],
-                next_actions: vec![
-                    "get_render_job".to_string(),
-                    "run_validation".to_string(),
-                    "apply_patch".to_string(),
-                ],
+                next_actions,
                 cost: ToolCost {
                     cpu_ms: 10,
                     tool_calls: 1,
@@ -5869,6 +5978,23 @@ pub struct RenderSegmentParams {
     /// Serialized project to render.
     #[serde(default)]
     pub project: Option<serde_json::Value>,
+    /// Serialized [`RenderManifestStore`](scorestrata_storage::render_manifest::RenderManifestStore)
+    /// — passed through to [`render_project`] so segment renders also record
+    /// their §17.2 reproducibility receipt.
+    #[serde(default)]
+    pub manifest_store: Option<serde_json::Value>,
+    /// Snapshot the render was produced from (§17.1).
+    #[serde(default)]
+    pub source_snapshot_id: Option<String>,
+    /// Command that triggered the render (§17.2).
+    #[serde(default)]
+    pub command_id: Option<String>,
+    /// Seed used for deterministic generation (§17.2).
+    #[serde(default)]
+    pub seed: Option<u64>,
+    /// Hashes of source assets (§17.2).
+    #[serde(default)]
+    pub asset_hashes: Option<BTreeMap<String, String>>,
 }
 
 /// Render a single segment to a WAV artifact.
@@ -5881,6 +6007,11 @@ pub fn render_segment(params: &RenderSegmentParams) -> ToolReceipt {
         mode: params.mode.clone(),
         project: params.project.clone(),
         segment_id: Some(params.segment_id.clone()),
+        manifest_store: params.manifest_store.clone(),
+        source_snapshot_id: params.source_snapshot_id.clone(),
+        command_id: params.command_id.clone(),
+        seed: params.seed,
+        asset_hashes: params.asset_hashes.clone(),
     })
 }
 
@@ -8715,6 +8846,11 @@ mod tests {
             mode: "master".to_string(),
             project: None,
             segment_id: None,
+            manifest_store: None,
+            source_snapshot_id: None,
+            command_id: None,
+            seed: None,
+            asset_hashes: None,
         };
         let receipt = render_project(&params);
         // Without a project payload, the render cannot run — it fails cleanly.
@@ -8736,11 +8872,182 @@ mod tests {
             segment_id: "chorus_1".to_string(),
             mode: "stems".to_string(),
             project: None,
+            manifest_store: None,
+            source_snapshot_id: None,
+            command_id: None,
+            seed: None,
+            asset_hashes: None,
         };
         let receipt = render_segment(&params);
         // Without a project payload, the render cannot run — it fails cleanly.
         assert!(matches!(receipt.status, ToolStatus::Failed));
         assert!(receipt.summary.contains("no project payload"));
+    }
+
+    #[test]
+    fn render_project_emits_manifest_and_records_in_store() {
+        // §16.6 contract: "render_project returns artifact manifest" — a
+        // successful render must produce the §17.2 reproducibility receipt and
+        // record it into a supplied manifest store.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let store = scorestrata_storage::render_manifest::RenderManifestStore::new();
+        let params = RenderProjectParams {
+            project_id: "proj_manifest".to_string(),
+            mode: "master".to_string(),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+            segment_id: None,
+            manifest_store: Some(serde_json::to_value(&store).expect("store serializes")),
+            source_snapshot_id: Some("snap_proj_0042".to_string()),
+            command_id: Some("cmd_0042".to_string()),
+            seed: Some(1337),
+            asset_hashes: None,
+        };
+        let receipt = render_project(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "render succeeded: {}",
+            receipt.summary
+        );
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("manifest.artifact_id")
+                .map(String::as_str),
+            Some("art_proj_manifest_master"),
+            "manifest artifact id on the receipt"
+        );
+        assert_eq!(
+            receipt
+                .score_delta
+                .get("manifest.recorded")
+                .map(String::as_str),
+            Some("true"),
+            "manifest recorded into the supplied store"
+        );
+        let hash = receipt
+            .score_delta
+            .get("manifest.manifest_hash")
+            .expect("manifest hash on receipt");
+        assert!(!hash.is_empty());
+        assert!(
+            receipt
+                .next_actions
+                .iter()
+                .any(|a| a == "get_render_manifest"),
+            "recorded manifests are retrievable"
+        );
+        assert!(
+            receipt.summary.contains(&hash[..8.min(hash.len())]),
+            "summary carries the fingerprint: {}",
+            receipt.summary
+        );
+    }
+
+    #[test]
+    fn render_project_emits_manifest_without_store_with_warning() {
+        // §17.2 "every render produces a manifest" holds even without a store;
+        // the fingerprint surfaces and a warning explains how to persist it.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = RenderProjectParams {
+            project_id: "proj_manifest".to_string(),
+            mode: "master".to_string(),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+            segment_id: None,
+            manifest_store: None,
+            source_snapshot_id: None,
+            command_id: None,
+            seed: None,
+            asset_hashes: None,
+        };
+        let receipt = render_project(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            receipt.score_delta.contains_key("manifest.manifest_hash"),
+            "fingerprint always emitted"
+        );
+        assert!(
+            receipt.warnings.iter().any(|w| w.contains("not persisted")),
+            "warning explains the missing store: {:#?}",
+            receipt.warnings
+        );
+    }
+
+    #[test]
+    fn render_project_handles_malformed_manifest_store_with_warning() {
+        // A malformed store payload must not fail the render: the receipt
+        // still carries the fingerprint, warns, and does not advertise a
+        // get_render_manifest round trip that cannot happen.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = RenderProjectParams {
+            project_id: "proj_manifest".to_string(),
+            mode: "master".to_string(),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+            segment_id: None,
+            manifest_store: Some(serde_json::json!([1, 2, 3])),
+            source_snapshot_id: None,
+            command_id: None,
+            seed: None,
+            asset_hashes: None,
+        };
+        let receipt = render_project(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "render still succeeds: {}",
+            receipt.summary
+        );
+        assert!(receipt.score_delta.contains_key("manifest.manifest_hash"));
+        assert!(
+            !receipt.score_delta.contains_key("manifest.recorded"),
+            "no recorded claim on malformed store"
+        );
+        assert!(
+            !receipt
+                .next_actions
+                .iter()
+                .any(|a| a == "get_render_manifest"),
+            "no retrieval round trip advertised"
+        );
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("could not be recorded")),
+            "warning explains the malformed store: {:#?}",
+            receipt.warnings
+        );
+    }
+
+    #[test]
+    fn render_project_manifest_fingerprint_is_reproducible() {
+        // §17.1: identical reproducibility inputs → identical manifest hash;
+        // seed drift changes the fingerprint.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = RenderProjectParams {
+            project_id: "proj_manifest".to_string(),
+            mode: "master".to_string(),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+            segment_id: None,
+            manifest_store: None,
+            source_snapshot_id: Some("snap_proj_0042".to_string()),
+            command_id: Some("cmd_0042".to_string()),
+            seed: Some(1337),
+            asset_hashes: None,
+        };
+        let a = render_project(&params);
+        let b = render_project(&params);
+        assert_eq!(
+            a.score_delta.get("manifest.manifest_hash"),
+            b.score_delta.get("manifest.manifest_hash"),
+            "identical inputs reproduce the same manifest hash"
+        );
+        let mut drifted = params;
+        drifted.seed = Some(9999);
+        let c = render_project(&drifted);
+        assert_ne!(
+            a.score_delta.get("manifest.manifest_hash"),
+            c.score_delta.get("manifest.manifest_hash"),
+            "seed drift breaks the fingerprint"
+        );
     }
 
     #[test]

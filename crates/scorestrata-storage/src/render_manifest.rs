@@ -399,4 +399,36 @@ mod tests {
         assert_eq!(m, back);
         assert_eq!(m.manifest_hash(), back.manifest_hash());
     }
+
+    #[test]
+    fn manifest_serializes_with_all_17_2_schema_fields() {
+        // §17.2 schema contract: the manifest carries exactly the 13 declared
+        // fields — no drift between the entity and its wire representation.
+        let m = complete_manifest();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_value(&m).unwrap();
+        let obj = json.as_object().expect("manifest serializes to an object");
+        for field in [
+            "artifact_id",
+            "artifact_type",
+            "path",
+            "sha256",
+            "sample_rate",
+            "channels",
+            "duration_seconds",
+            "source_snapshot_id",
+            "command_id",
+            "compiler_version",
+            "audio_engine_version",
+            "seed",
+            "asset_hashes",
+        ] {
+            assert!(obj.contains_key(field), "§17.2 field '{field}' present");
+        }
+        assert_eq!(
+            obj.len(),
+            13,
+            "exactly the §17.2 schema fields — no accidental additions"
+        );
+    }
 }
