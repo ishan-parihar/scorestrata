@@ -1485,6 +1485,84 @@ fn mvas_step_20_mcp_dispatcher_wire_protocol() {
     assert!(unknown.summary.contains("Unknown tool"));
 }
 
+/// Step 21: Level 5 brief compliance over the wire (§11.2 L5).
+///
+/// A project whose config genre disagrees with its brief must surface a
+/// `BRIEF_GENRE_MISMATCH` diagnostic when `run_validation` is dispatched at
+/// level 5 with a project payload — proving the full validation plane is
+/// wired end-to-end, not just the L2 symbolic slice.
+#[test]
+fn mvas_step_21_l5_brief_compliance_over_the_wire() {
+    use scorestrata_mcp::dispatch::dispatch_tool;
+    use scorestrata_mcp::tools::ToolStatus;
+
+    // ── 21a. Compliant project at L5: no brief diagnostics ──────────
+    let compliant = scorestrata_testkit::melodic_techno_project();
+    let ok = dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": compliant.id.to_string(),
+            "project": compliant,
+            "level": 5,
+        }),
+    );
+    assert_eq!(ok.tool, "run_validation");
+    assert!(
+        matches!(ok.status, ToolStatus::Succeeded | ToolStatus::Failed),
+        "L5 validation must run: {:?}",
+        ok.status
+    );
+    assert!(
+        !ok.diagnostics.iter().any(|d| d.code.starts_with("BRIEF_")),
+        "compliant project must have no brief diagnostics: {:?}",
+        ok.diagnostics
+            .iter()
+            .map(|d| d.code.clone())
+            .collect::<Vec<_>>()
+    );
+
+    // ── 21b. Mismatched brief at L5: BRIEF_* diagnostic appears ─────
+    let mut mismatched = scorestrata_testkit::melodic_techno_project();
+    mismatched.config.genre = "house".to_string();
+    let bad = dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": mismatched.id.to_string(),
+            "project": mismatched,
+            "level": 5,
+        }),
+    );
+    assert!(
+        bad.diagnostics
+            .iter()
+            .any(|d| d.code == "BRIEF_GENRE_MISMATCH"),
+        "L5 must emit BRIEF_GENRE_MISMATCH: {:?}",
+        bad.diagnostics
+            .iter()
+            .map(|d| d.code.clone())
+            .collect::<Vec<_>>()
+    );
+
+    // ── 21c. Same mismatch at L2: brief plane is not exercised ──────
+    let mut l2 = scorestrata_testkit::melodic_techno_project();
+    l2.config.genre = "house".to_string();
+    let l2_bad = dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": l2.id.to_string(),
+            "project": l2,
+            "level": 2,
+        }),
+    );
+    assert!(
+        !l2_bad
+            .diagnostics
+            .iter()
+            .any(|d| d.code.starts_with("BRIEF_")),
+        "L2 must not emit brief diagnostics"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

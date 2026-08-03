@@ -565,6 +565,22 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-VALIDATION-L5".to_string(),
+        title: "Level 5 brief compliance wired into run_validation".to_string(),
+        phase: "6".to_string(),
+        tasks: vec!["VAL-006".to_string()],
+        code: vec![
+            "scorestrata_mcp::tools".to_string(),
+            "scorestrata_validator::brief_check".to_string(),
+        ],
+        tests: vec!["tools::tests".to_string(), "mvas_simulation".to_string()],
+        mcp_tools: vec!["run_validation".to_string()],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §11.2 L5, §10.5".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-CLI-BUNDLE".to_string(),
         title: "CLI wired to real storage and pipeline".to_string(),
         phase: "0".to_string(),

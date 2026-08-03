@@ -124,11 +124,57 @@ const fn default_min_energy_delta() -> f32 {
 /// (energy delta between adjacent segments). Returns actionable diagnostics
 /// with evidence URIs and suggested patches.
 #[must_use]
+/// Run validation on segments only.
+///
+/// This entry point always runs the Level 2 symbolic checks regardless of the
+/// `level` argument — `level` only stamps the report. To exercise the brief
+/// compliance plane (L5), use [`run_validation_with_project`] instead.
 pub fn run_validation(
     params: &RunValidationParams,
     segments: &[scorestrata_core::domain::Segment],
     level: u8,
 ) -> ToolReceipt {
+    let diagnostics = collect_symbolic_diagnostics(params, segments);
+    finish_validation_receipt(params, level, diagnostics)
+}
+
+/// Run validation at a full level (L2 symbolic + L5 brief compliance).
+///
+/// Unlike [`run_validation`], this takes the whole project, so when `level >= 5`
+/// the brief-compliance plane (§11.2 L5) is exercised against the real brief,
+/// config, and arrangement — producing `BRIEF_*` diagnostics the segments-only
+/// path cannot see. Levels below 5 degrade to the symbolic checks.
+#[must_use]
+pub fn run_validation_with_project(
+    params: &RunValidationParams,
+    project: &scorestrata_core::domain::Project,
+    level: u8,
+) -> ToolReceipt {
+    let mut diagnostics = collect_symbolic_diagnostics(params, &project.arrangement.segments);
+
+    if level >= 5 {
+        let brief_report = scorestrata_validator::brief_check::check_brief_compliance(
+            &project.brief,
+            &project.config,
+            &project.arrangement,
+            &scorestrata_validator::brief_check::BriefWeights::default(),
+        );
+        diagnostics.extend(
+            brief_report
+                .dimensions
+                .iter()
+                .flat_map(|d| d.diagnostics.clone()),
+        );
+    }
+
+    finish_validation_receipt(params, level, diagnostics)
+}
+
+/// Collect the Level 2 symbolic diagnostics (segment + transition checks).
+fn collect_symbolic_diagnostics(
+    params: &RunValidationParams,
+    segments: &[scorestrata_core::domain::Segment],
+) -> Vec<Diagnostic> {
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
 
     // Run segment-level checks
@@ -149,6 +195,15 @@ pub fn run_validation(
         diagnostics.extend(transition_diags);
     }
 
+    diagnostics
+}
+
+/// Build the `run_validation` receipt from a diagnostic set.
+fn finish_validation_receipt(
+    params: &RunValidationParams,
+    level: u8,
+    diagnostics: Vec<Diagnostic>,
+) -> ToolReceipt {
     // Build validation report with per-metric scoring
     let project_id = params.project_id.parse().unwrap_or_default();
     let report = build_validation_report(project_id, level, diagnostics.clone());
@@ -5664,6 +5719,115 @@ mod tests {
         ];
         let receipt = run_validation(&default_params(), &segments, 2);
         assert!(receipt.summary.contains("overall score"));
+    }
+
+    #[test]
+    fn run_validation_with_project_at_l5_emits_brief_diagnostics() {
+        // A config genre that disagrees with the brief must surface as a
+        // BRIEF_GENRE_MISMATCH diagnostic at L5 (which the segments-only L2
+        // path cannot see).
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        project.config.genre = "house".to_string();
+        let receipt = run_validation_with_project(&default_params(), &project, 5);
+        assert_eq!(receipt.tool, "run_validation");
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "BRIEF_GENRE_MISMATCH"),
+            "expected BRIEF_GENRE_MISMATCH, got: {:?}",
+            receipt
+                .diagnostics
+                .iter()
+                .map(|d| d.code.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn run_validation_with_project_below_l5_skips_brief_plane() {
+        // At L2 the brief plane is not exercised, so the same mismatched
+        // project produces no BRIEF_* diagnostics.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        project.config.genre = "house".to_string();
+        let receipt = run_validation_with_project(&default_params(), &project, 2);
+        assert!(
+            !receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code.starts_with("BRIEF_")),
+            "L2 must not emit brief diagnostics: {:?}",
+            receipt
+                .diagnostics
+                .iter()
+                .map(|d| d.code.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn run_validation_with_project_l5_compliant_project_succeeds_brief_plane() {
+        // A project whose brief matches its config produces no BRIEF_*
+        // diagnostics at L5.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let receipt = run_validation_with_project(&default_params(), &project, 5);
+        assert!(
+            !receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code.starts_with("BRIEF_")),
+            "compliant project must have no brief diagnostics: {:?}",
+            receipt
+                .diagnostics
+                .iter()
+                .map(|d| d.code.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn dispatcher_run_validation_l5_with_project_payload() {
+        // The wire path: level 5 + project payload must reach the brief plane.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        project.config.genre = "house".to_string();
+        let receipt = crate::dispatch::dispatch_tool(
+            "run_validation",
+            serde_json::json!({
+                "project_id": project.id.to_string(),
+                "project": project,
+                "level": 5,
+            }),
+        );
+        assert_eq!(receipt.tool, "run_validation");
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "BRIEF_GENRE_MISMATCH"),
+            "dispatcher L5 must emit brief diagnostics"
+        );
+    }
+
+    #[test]
+    fn l5_planes_compose_brief_and_symbolic_diagnostics() {
+        // A project with both a genre mismatch (L5) and an empty segment (L2)
+        // must yield diagnostics from BOTH planes — proving composition, not
+        // replacement.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        project.config.genre = "house".to_string();
+        if let Some(segment) = project.arrangement.segments.first_mut() {
+            segment.layers.clear();
+        }
+        let receipt = run_validation_with_project(&default_params(), &project, 5);
+        let codes: Vec<String> = receipt.diagnostics.iter().map(|d| d.code.clone()).collect();
+        assert!(
+            codes.iter().any(|c| c == "BRIEF_GENRE_MISMATCH"),
+            "L5 brief plane present: {codes:?}"
+        );
+        assert!(
+            codes.iter().any(|c| c == "SEGMENT_EMPTY"),
+            "L2 symbolic plane present: {codes:?}"
+        );
     }
 
     #[test]

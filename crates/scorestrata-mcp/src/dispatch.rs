@@ -489,8 +489,11 @@ fn capabilities_receipt() -> ToolReceipt {
 /// `run_validation` needs `(params, segments, level)`.
 ///
 /// Wire contract (beyond the typed [`RunValidationParams`] fields):
-/// - `project`: optional serialized [`Project`] whose `arrangement.segments`
-///   become the segments under validation (absent → no segments).
+/// - `project`: optional serialized [`Project`]. At L2 its
+///   `arrangement.segments` are the segments under validation; at `level >= 5`
+///   the whole project (brief, config, arrangement) also feeds the brief
+///   compliance plane, producing `BRIEF_*` diagnostics (absent → no segments
+///   and no brief plane).
 /// - `level`: optional validation level, defaults to `2` (L2 hard gates).
 fn run_validation_from_params(params: serde_json::Value) -> ToolReceipt {
     let rp = match serde_json::from_value::<RunValidationParams>(params.clone()) {
@@ -499,16 +502,19 @@ fn run_validation_from_params(params: serde_json::Value) -> ToolReceipt {
             return crate::tools::deserialize_error_receipt("run_validation", "params", &e);
         }
     };
-    let segments: Vec<scorestrata_core::domain::Segment> = params
-        .get("project")
-        .and_then(|p| serde_json::from_value::<scorestrata_core::domain::Project>(p.clone()).ok())
-        .map(|project| project.arrangement.segments)
-        .unwrap_or_default();
     let level = params
         .get("level")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(2) as u8;
-    crate::tools::run_validation(&rp, &segments, level)
+    // With a project payload, run the full plane (L2 symbolic + L5 brief
+    // compliance when level >= 5). Without one, fall back to segments-only.
+    match params
+        .get("project")
+        .and_then(|p| serde_json::from_value::<scorestrata_core::domain::Project>(p.clone()).ok())
+    {
+        Some(project) => crate::tools::run_validation_with_project(&rp, &project, level),
+        None => crate::tools::run_validation(&rp, &[], level),
+    }
 }
 
 /// Receipt for an unregistered tool name.
