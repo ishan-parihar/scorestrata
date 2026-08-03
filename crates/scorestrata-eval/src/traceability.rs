@@ -735,6 +735,28 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-PROVENANCE".to_string(),
+        title:
+            "ProvenanceManifest entity with deterministic hash + cache-key composition (§8.3, §9.3, §15.2)"
+                .to_string(),
+        phase: "15".to_string(),
+        tasks: vec!["EVID-002".to_string()],
+        code: vec![
+            "scorestrata_storage::provenance".to_string(),
+            "scorestrata_mcp::resources".to_string(),
+        ],
+        tests: vec![
+            "provenance::tests".to_string(),
+            "resources::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec![],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §8.3, §9.3, §15.2".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),

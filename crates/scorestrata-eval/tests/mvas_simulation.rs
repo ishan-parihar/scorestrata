@@ -2515,6 +2515,91 @@ fn mvas_step_31_segment_fixes_close_the_repair_loop() {
     );
 }
 
+/// Step 32 — provenance manifest drives reproducibility + cache keys (§15.2, §9.3).
+///
+/// Every artifact must be reproducible from (brief, config, policy, seed,
+/// asset hashes, engine versions, render settings, DSP graph version). This
+/// step proves the manifest records those inputs, its deterministic hash
+/// detects any drift (seed, asset, version, settings), and the same inputs
+/// always produce the same content-addressed cache key.
+#[test]
+fn mvas_step_32_provenance_manifests_drive_reproducibility() {
+    use scorestrata_mcp::resources::ProvenanceView;
+    use scorestrata_storage::provenance::ProvenanceManifest;
+
+    // ── 32a. A complete manifest records every §15.2 input ──
+    let mut manifest = ProvenanceManifest::new("p32");
+    manifest.brief_hash = "brief_abc".to_string();
+    manifest.config_hash = "config_abc".to_string();
+    manifest.policy_hash = "policy_abc".to_string();
+    manifest.seed = Some(1337);
+    manifest
+        .asset_hashes
+        .insert("kick.wav".to_string(), "h_kick".to_string());
+    manifest.snapshot_hash = "snap_abc".to_string();
+    manifest.compiler_version = "0.1.0".to_string();
+    manifest.validator_version = "0.1.0".to_string();
+    manifest.audio_engine_version = "0.1.0".to_string();
+    manifest
+        .render_settings
+        .insert("sample_rate".to_string(), "44100".to_string());
+    manifest.dsp_graph_version = "v3".to_string();
+    assert!(manifest.is_complete(), "complete manifest has all inputs");
+
+    // ── 32b. Deterministic hash: identical inputs → identical hash ──
+    let mut twin = manifest.clone();
+    assert_eq!(manifest.provenance_hash(), twin.provenance_hash());
+    assert!(manifest.reproduces(&twin));
+
+    // ── 32c. Drift detection: any single drift breaks reproducibility ──
+    twin.seed = Some(9999);
+    assert!(
+        !manifest.reproduces(&twin),
+        "seed drift must break reproducibility"
+    );
+
+    let mut asset_drift = manifest.clone();
+    asset_drift
+        .asset_hashes
+        .insert("kick.wav".to_string(), "h_kick_V2".to_string());
+    assert!(!manifest.reproduces(&asset_drift));
+
+    let mut version_drift = manifest.clone();
+    version_drift.validator_version = "0.2.0".to_string();
+    assert!(!manifest.reproduces(&version_drift));
+
+    let mut settings_drift = manifest.clone();
+    settings_drift
+        .render_settings
+        .insert("sample_rate".to_string(), "48000".to_string());
+    assert!(!manifest.reproduces(&settings_drift));
+
+    // ── 32d. §9.3 cache keys: same inputs → same content-addressed key ──
+    let key_a = manifest.cache_key("render");
+    let key_b = manifest.clone().cache_key("render");
+    assert_eq!(key_a, key_b);
+    assert!(key_a.starts_with("render/"));
+    assert_ne!(key_a, asset_drift.cache_key("render"));
+
+    // ── 32e. The MCP resource view derives from the real manifest ──
+    let view = ProvenanceView::from_manifest(&manifest);
+    assert_eq!(view.project_id, "p32");
+    assert_eq!(view.provenance_hash, manifest.provenance_hash());
+    assert!(view.complete);
+    assert_eq!(view.policy_hash, "policy_abc");
+
+    // ── 32f. Evidence produced under a manifest is reproducible: validating
+    //         the same project with the same seed yields the same score ──
+    let project_a = scorestrata_testkit::minimal_project();
+    let project_b = project_a.clone();
+    let report_a = build_report(&project_a);
+    let report_b = build_report(&project_b);
+    assert_eq!(
+        report_a.scorecard.overall_score, report_b.scorecard.overall_score,
+        "same inputs produce the same validation score"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

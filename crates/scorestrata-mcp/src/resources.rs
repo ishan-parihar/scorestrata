@@ -159,6 +159,12 @@ impl PolicyProfileView {
 }
 
 /// Provenance manifest view — reproducibility metadata for a project.
+///
+/// Derived from [`scorestrata_storage::provenance::ProvenanceManifest`]
+/// (architecture §15.2): every artifact must be reproducible from brief,
+/// config, policy, seed, asset hashes, engine versions, and render settings.
+/// The [`ProvenanceView::provenance_hash`] is the deterministic composite
+/// hash used as the content-addressed cache key (§9.3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvenanceView {
     /// Project ID.
@@ -169,6 +175,8 @@ pub struct ProvenanceView {
     pub validator_version: String,
     /// Audio engine version.
     pub audio_engine_version: String,
+    /// DSP graph version.
+    pub dsp_graph_version: String,
     /// Seed used for deterministic generation.
     pub seed: Option<u64>,
     /// Asset hashes.
@@ -177,6 +185,40 @@ pub struct ProvenanceView {
     pub render_settings: BTreeMap<String, String>,
     /// Policy profile hash.
     pub policy_hash: String,
+    /// Brief hash.
+    pub brief_hash: String,
+    /// Config hash.
+    pub config_hash: String,
+    /// Base snapshot hash.
+    pub snapshot_hash: String,
+    /// Deterministic composite provenance hash (cache key, §9.3/§15.2).
+    pub provenance_hash: String,
+    /// Whether all required provenance inputs are present.
+    pub complete: bool,
+}
+
+impl ProvenanceView {
+    /// Build the view from a real [`ProvenanceManifest`].
+    #[must_use]
+    pub fn from_manifest(manifest: &scorestrata_storage::provenance::ProvenanceManifest) -> Self {
+        let provenance_hash = manifest.provenance_hash();
+        Self {
+            project_id: manifest.project_id.clone(),
+            compiler_version: manifest.compiler_version.clone(),
+            validator_version: manifest.validator_version.clone(),
+            audio_engine_version: manifest.audio_engine_version.clone(),
+            dsp_graph_version: manifest.dsp_graph_version.clone(),
+            seed: manifest.seed,
+            asset_hashes: manifest.asset_hashes.clone(),
+            render_settings: manifest.render_settings.clone(),
+            policy_hash: manifest.policy_hash.clone(),
+            brief_hash: manifest.brief_hash.clone(),
+            config_hash: manifest.config_hash.clone(),
+            snapshot_hash: manifest.snapshot_hash.clone(),
+            complete: manifest.is_complete(),
+            provenance_hash,
+        }
+    }
 }
 
 /// Ledger summary — event counts and recent activity.
@@ -693,14 +735,28 @@ mod tests {
             compiler_version: "0.1.0".to_string(),
             validator_version: "0.1.0".to_string(),
             audio_engine_version: "0.1.0".to_string(),
+            dsp_graph_version: "v3".to_string(),
             seed: Some(1337),
             asset_hashes: BTreeMap::new(),
             render_settings: BTreeMap::new(),
             policy_hash: "abc".to_string(),
+            brief_hash: "brief".to_string(),
+            config_hash: "config".to_string(),
+            snapshot_hash: "snap".to_string(),
+            provenance_hash: "h".to_string(),
+            complete: true,
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let json = serde_json::to_string_pretty(&provenance).unwrap();
         assert!(json.contains("compiler_version"));
+
+        // ProvenanceView derives from a real manifest and carries its hash.
+        let mut manifest = scorestrata_storage::provenance::ProvenanceManifest::new("p1");
+        manifest.compiler_version = "0.1.0".to_string();
+        let view = ProvenanceView::from_manifest(&manifest);
+        assert_eq!(view.project_id, "p1");
+        assert_eq!(view.provenance_hash, manifest.provenance_hash());
+        assert!(!view.complete);
 
         let ledger = LedgerSummary {
             project_id: "p1".to_string(),

@@ -20,6 +20,7 @@ pub mod experiment;
 pub mod ledger;
 pub mod lesson_store;
 pub mod memory;
+pub mod provenance;
 pub mod render_job;
 pub mod replay;
 pub mod snapshot_graph;
