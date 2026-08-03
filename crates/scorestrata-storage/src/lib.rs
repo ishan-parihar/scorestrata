@@ -17,6 +17,7 @@ pub mod docs;
 pub mod engineering;
 pub mod evidence;
 pub mod experiment;
+pub mod knowledge;
 pub mod ledger;
 pub mod lesson_store;
 pub mod memory;

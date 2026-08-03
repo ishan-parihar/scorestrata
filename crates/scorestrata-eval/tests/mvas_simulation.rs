@@ -2698,6 +2698,159 @@ fn mvas_step_33_deterministic_replay_and_time_travel() {
     );
 }
 
+/// Step 34 — knowledge graph / ontology layer (§9.6).
+///
+/// "A graph layer makes the system more queryable and more learnable." This
+/// step proves the typed ontology: real validation diagnostics are ingested
+/// into the graph, the §9.6 relationships (Diagnostic → affects → Metric,
+/// Metric → evidence in → Segment, Patch → fixes → Metric) materialize, and
+/// the query patterns the spec lists actually work — "which patches fix this
+/// failure" and "what does this diagnostic affect".
+#[test]
+fn mvas_step_34_knowledge_graph_answers_ontology_queries() {
+    use scorestrata_storage::knowledge::{EdgeKind, KnowledgeGraph, NodeKind, node_id};
+
+    // ── 34a. Ingest real diagnostics from the over-the-wire validation ──
+    let project = project_with_out_of_scale_lead();
+    let report = build_report(&project);
+    let mut graph = KnowledgeGraph::new();
+    graph.ingest_diagnostics("p34", &report.diagnostics);
+    assert!(graph.node_count() > 3, "ontology has project + entities");
+    assert!(
+        graph.edges.iter().any(|e| e.kind == EdgeKind::Affects),
+        "diagnostics affect metrics"
+    );
+
+    // ── 34b. Patch → fixes → Metric edges materialize from suggestions ──
+    let scale_diag = report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "SCALE_COMPLIANCE_VIOLATION" || d.metric.contains("scale"));
+    if let Some(diag) = scale_diag {
+        let metric_id = node_id(NodeKind::Metric, &format!("{}:p34", diag.metric));
+        let fixers = graph.frequent_fixers(&metric_id);
+        if !diag.suggested_patches.is_empty() {
+            assert!(!fixers.is_empty(), "suggested patches become fixers");
+            assert!(
+                fixers.iter().any(|(node, _)| node.kind == NodeKind::Patch),
+                "fixers are patch nodes"
+            );
+        }
+    }
+
+    // ── 34e. Blocking query: "which tasks block the validator milestone?" ──
+    let mut tasks = KnowledgeGraph::new();
+    for (id, label) in [
+        ("core-001", "Define core IDs"),
+        ("theory-001", "Implement scales"),
+        ("validator-001", "Implement scale compliance"),
+        ("compiler-001", "Timeline IR"),
+    ] {
+        tasks.add_node(NodeKind::Task, id, label);
+    }
+    tasks.link(
+        NodeKind::Task,
+        "validator-001",
+        NodeKind::Task,
+        "theory-001",
+        EdgeKind::DependsOn,
+    );
+    tasks.link(
+        NodeKind::Task,
+        "theory-001",
+        NodeKind::Task,
+        "core-001",
+        EdgeKind::DependsOn,
+    );
+    tasks.link(
+        NodeKind::Task,
+        "compiler-001",
+        NodeKind::Task,
+        "validator-001",
+        EdgeKind::DependsOn,
+    );
+    let blockers = tasks.blocking_tasks(&node_id(NodeKind::Task, "compiler-001"));
+    assert_eq!(blockers.len(), 3);
+    assert!(
+        blockers
+            .iter()
+            .any(|n| n.id == node_id(NodeKind::Task, "core-001"))
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|n| n.id == node_id(NodeKind::Task, "theory-001"))
+    );
+    assert!(
+        blockers
+            .iter()
+            .any(|n| n.id == node_id(NodeKind::Task, "validator-001"))
+    );
+
+    // ── 34c. The spec's relationship vocabulary is fully represented ──
+    let mut ontology = KnowledgeGraph::new();
+    ontology.add_node(NodeKind::Lesson, "l1", "lesson");
+    ontology.add_node(NodeKind::Experiment, "e1", "experiment");
+    ontology.add_node(NodeKind::Task, "t1", "task");
+    ontology.add_node(NodeKind::Spec, "s1", "spec");
+    ontology.add_node(NodeKind::GoldenTest, "g1", "golden");
+    ontology.add_node(NodeKind::Candidate, "c1", "candidate");
+    ontology.add_node(NodeKind::Snapshot, "sn1", "snapshot");
+    ontology.add_node(NodeKind::PreferenceSignal, "p1", "signal");
+    ontology.add_node(NodeKind::GenreProfile, "gp1", "techno");
+    assert!(ontology.link(
+        NodeKind::Lesson,
+        "l1",
+        NodeKind::Experiment,
+        "e1",
+        EdgeKind::DerivedFrom
+    ));
+    assert!(ontology.link(
+        NodeKind::Task,
+        "t1",
+        NodeKind::Spec,
+        "s1",
+        EdgeKind::Implements
+    ));
+    assert!(ontology.link(
+        NodeKind::Spec,
+        "s1",
+        NodeKind::GoldenTest,
+        "g1",
+        EdgeKind::VerifiedBy
+    ));
+    assert!(ontology.link(
+        NodeKind::Candidate,
+        "c1",
+        NodeKind::Snapshot,
+        "sn1",
+        EdgeKind::ChildOf
+    ));
+    assert!(ontology.link(
+        NodeKind::PreferenceSignal,
+        "p1",
+        NodeKind::GenreProfile,
+        "gp1",
+        EdgeKind::Calibrates
+    ));
+    assert_eq!(ontology.edge_count(), 5);
+
+    // ── 34d. Neighbor traversal answers "what affects this metric" ──
+    // Not all diagnostics are scale violations, so use whatever exists.
+    let any_diag = report.diagnostics.first();
+    if let Some(diag) = any_diag {
+        let metric = format!("metric:{}:p34", diag.metric);
+        let affecting = graph.neighbors(&metric, EdgeKind::Affects);
+        // incoming() gives the diagnostics that affect this metric.
+        let incoming_edges = graph.incoming(&metric);
+        assert!(
+            !incoming_edges.is_empty(),
+            "metric has at least one affecting diagnostic"
+        );
+        assert_eq!(affecting.len(), 0); // outgoing Affects from metric — none
+    }
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

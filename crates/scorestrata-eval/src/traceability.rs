@@ -772,6 +772,22 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-KNOWLEDGE-GRAPH".to_string(),
+        title: "Knowledge graph / ontology layer with typed relationships (§9.6)".to_string(),
+        phase: "9".to_string(),
+        tasks: vec!["EVID-004".to_string()],
+        code: vec!["scorestrata_storage::knowledge".to_string()],
+        tests: vec![
+            "knowledge::tests".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec![],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §9.6".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),
