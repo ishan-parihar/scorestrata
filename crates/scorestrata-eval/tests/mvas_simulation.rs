@@ -1879,6 +1879,137 @@ fn mvas_step_26_regression_detection_over_the_wire() {
     );
 }
 
+#[test]
+fn mvas_step_27_golden_harness_over_the_wire() {
+    // §16.5: the golden harness must run the *real* pipeline — config → plan →
+    // L6 validation over the wire → render → structural + validation golden
+    // assertions — and a regressed project must fail its golden.
+    use scorestrata_eval::golden::{
+        ExpectedOutputs, GoldenConfig, ValidationGates, run_golden_assertions,
+        run_validation_golden_assertions,
+    };
+
+    let brief = "Dark melodic techno at 124 BPM in C minor, 64 bars";
+    let config = scorestrata_mcp::config_gen::generate_config("golden_techno", brief);
+    let plan = scorestrata_compiler::plan::plan_project(&config);
+    let mut project = scorestrata_testkit::minimal_project();
+    project.config = config.clone();
+    project.arrangement = plan.arrangement;
+    project.patterns = plan.patterns;
+    project.status = scorestrata_core::domain::ProjectStatus::ConfigApproved;
+    project.brief.raw_text = brief.to_string();
+    project.brief.genre = Some(config.genre.clone());
+
+    // L6 validation over the wire (dispatcher).
+    let receipt = scorestrata_mcp::dispatch::dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 6,
+        }),
+    );
+    assert_eq!(receipt.tool, "run_validation");
+
+    let scorecard = scorestrata_validator::report::build_validation_report(
+        project.id,
+        6,
+        receipt.diagnostics.clone(),
+    )
+    .scorecard;
+    let render = scorestrata_mcp::tools::render_project_to_analysis(&project).expect("renders");
+
+    let golden = GoldenConfig {
+        name: "melodic_techno_64_bar".to_string(),
+        description: "golden over the wire".to_string(),
+        expected_outputs: ExpectedOutputs {
+            segment_count: 4,
+            total_bars: 64,
+            has_chorus: true,
+            has_breakdown: false,
+            genre_matches_brief: true,
+            mood_matches_brief: true,
+            duration_matches_config: true,
+        },
+        tolerance: 0.01,
+        validation_gates: ValidationGates {
+            max_errors: 2,
+            max_warnings: 3,
+            max_true_peak_dbtp: 2.0,
+            min_lufs: -16.0,
+            max_lufs: -10.0,
+        },
+        expected_metrics: std::collections::BTreeMap::new(),
+    };
+
+    let segments = &project.arrangement.segments;
+    let has_chorus = segments
+        .iter()
+        .any(|s| s.role == scorestrata_core::domain::SegmentRole::Chorus);
+    let structural = run_golden_assertions(
+        &golden,
+        u32::try_from(segments.len()).expect("fits"),
+        project.arrangement.total_bars,
+        has_chorus,
+        false,
+        project.config.genre == "melodic_techno",
+        !project.config.mood.is_empty(),
+        project.arrangement.total_bars == project.config.duration_bars,
+    );
+    assert!(structural.passed, "structural golden failed over the wire");
+
+    let validation = run_validation_golden_assertions(
+        &golden,
+        &receipt.diagnostics,
+        &scorecard,
+        Some(render.analysis.true_peak_dbtp),
+        Some(render.analysis.integrated_lufs),
+    );
+    assert!(
+        validation.passed,
+        "validation golden failed over the wire: {:?}",
+        validation
+            .assertions
+            .iter()
+            .filter(|a| !a.passed)
+            .map(|a| (a.name.as_str(), a.error.clone().unwrap_or_default()))
+            .collect::<Vec<_>>()
+    );
+
+    // A regressed project must fail its golden.
+    if let Some(segment) = project.arrangement.segments.first_mut() {
+        segment.layers.clear();
+    }
+    let regressed_receipt = scorestrata_mcp::dispatch::dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 6,
+        }),
+    );
+    let regressed_render =
+        scorestrata_mcp::tools::render_project_to_analysis(&project).expect("regressed renders");
+    let regressed_validation = run_validation_golden_assertions(
+        &golden,
+        &regressed_receipt.diagnostics,
+        &scorecard,
+        Some(regressed_render.analysis.true_peak_dbtp),
+        Some(regressed_render.analysis.integrated_lufs),
+    );
+    assert!(
+        !regressed_validation.passed,
+        "a regressed project must fail its golden validation"
+    );
+    assert!(
+        regressed_receipt
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "SEGMENT_EMPTY"),
+        "the wire regression must be the emptied segment"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

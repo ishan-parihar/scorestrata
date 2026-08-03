@@ -5243,8 +5243,9 @@ pub(crate) fn render_timeline_to_analysis(
 /// Compile and render a whole project to its Level-4 audio analysis.
 ///
 /// Convenience wrapper over [`render_timeline_to_analysis`] used by the L4
-/// validation plane; renders the full arrangement.
-pub(crate) fn render_project_to_analysis(
+/// validation plane and the golden-test harness; renders the full
+/// arrangement.
+pub fn render_project_to_analysis(
     project: &scorestrata_core::domain::Project,
 ) -> Result<scorestrata_audio::render::RenderResult, String> {
     let timeline = scorestrata_compiler::compile_project(project).map_err(|e| e.to_string())?;

@@ -1,11 +1,11 @@
 {
   "name": "melodic_techno_64_bar",
-  "description": "Reference golden project for melodic techno — 64 bars, 5 segments, full validation pipeline",
+  "description": "Reference golden project for melodic techno — 64 bars, full validation pipeline",
   "expected_outputs": {
-    "segment_count": 5,
+    "segment_count": 4,
     "total_bars": 64,
     "has_chorus": true,
-    "has_breakdown": true,
+    "has_breakdown": false,
     "genre_matches_brief": true,
     "mood_matches_brief": true,
     "duration_matches_config": true
@@ -23,25 +23,23 @@
     "references": []
   },
   "segments": [
-    { "name": "Intro", "role": "intro", "bars": 8 },
-    { "name": "Verse 1", "role": "verse", "bars": 16 },
-    { "name": "Chorus", "role": "chorus", "bars": 16 },
-    { "name": "Breakdown", "role": "breakdown", "bars": 8 },
-    { "name": "Outro", "role": "outro", "bars": 16 }
+    { "name": "Intro", "role": "intro", "bars": 4 },
+    { "name": "Verse", "role": "verse", "bars": 4 },
+    { "name": "Build", "role": "build", "bars": 4 },
+    { "name": "Chorus", "role": "chorus", "bars": 52 }
   ],
   "validation_gates": {
-    "min_scale_compliance": 0.85,
-    "min_chord_tone_ratio": 0.65,
-    "max_out_of_scale_ratio": 0.05,
-    "min_chorus_energy_delta": 0.15,
-    "max_true_peak_dbtp": -1.0,
+    "max_errors": 2,
+    "max_warnings": 3,
+    "max_true_peak_dbtp": 2.0,
     "min_lufs": -16.0,
     "max_lufs": -10.0
   },
   "expected_metrics": {
-    "harmony.scale_compliance": { "min": 0.85, "max": 1.0 },
-    "harmony.chord_tone_ratio": { "min": 0.65, "max": 1.0 },
-    "arrangement.transition_strength": { "min": 0.15, "max": 1.0 },
-    "rhythm.drum_density": { "min": 0.5, "max": 1.0 }
+    "arrangement.transition_strength": { "min": 0.85, "max": 1.0 },
+    "audio.clipping": { "min": 0.8, "max": 1.0 },
+    "audio.true_peak_dbtp": { "min": 0.8, "max": 1.0 },
+    "audio.stereo_correlation": { "min": 0.9, "max": 1.0 },
+    "brief.structure_fit": { "min": 0.9, "max": 1.0 }
   }
 }

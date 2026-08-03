@@ -636,6 +636,26 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-GOLDEN-VALIDATION".to_string(),
+        title: "Golden harness enforces validation, scoring, and audio gates".to_string(),
+        phase: "16".to_string(),
+        tasks: vec!["EVAL-001".to_string()],
+        code: vec![
+            "scorestrata_eval::golden".to_string(),
+            "scorestrata_mcp::tools".to_string(),
+        ],
+        tests: vec![
+            "golden::tests".to_string(),
+            "golden_harness_e2e".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec!["run_validation".to_string()],
+        cli_commands: vec![],
+        docs: vec!["architecture.md §16.5, §16.8".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-TELEMETRY".to_string(),
         title: "Dispatcher-instrumented telemetry (cost & performance accounting)".to_string(),
         phase: "9".to_string(),

@@ -1,9 +1,11 @@
 //! Golden harness end-to-end test (§16.5, §16.8).
 //!
 //! Wires the *real* pipeline — brief → config → arrangement planner →
-//! golden assertions → eval metrics — so golden tests detect regressions
-//! in the compiler/planner/scoring chain, exactly as the architecture's
-//! testing pyramid requires.
+//! structural golden assertions → L6 validation golden assertions (diagnostic
+//! budgets, scorecard metric ranges, audio loudness/peak gates) → eval
+//! metrics — so golden tests detect regressions in the compiler, validator,
+//! audio engine, and scoring chain, exactly as the architecture's testing
+//! pyramid requires.
 
 #![expect(
     clippy::unwrap_used,
@@ -11,33 +13,73 @@
     reason = "Integration test asserts the golden pipeline explicitly"
 )]
 
-use scorestrata_eval::golden::{ExpectedOutputs, GoldenConfig, run_golden_assertions};
+use scorestrata_eval::golden::{
+    ExpectedOutputs, GoldenConfig, MetricRange, ValidationGates, run_golden_assertions,
+    run_validation_golden_assertions,
+};
 use scorestrata_eval::metrics::{
     AgentEvalMetrics, EngineeringEvalMetrics, FullEvalReport, SystemEvalMetrics,
 };
 
-/// A melodic techno 64-bar golden: plan → assert structure → score the system.
-#[test]
-fn golden_melodic_techno_64_bar_passes_structure_assertions() {
-    let brief = "Dark melodic techno at 124 BPM in C minor, 64 bars";
-    let config = scorestrata_mcp::config_gen::generate_config("golden_techno", brief);
-
-    // Brief → config fidelity (genre/mood/duration gates).
-    assert_eq!(config.genre, "melodic_techno");
-    assert_eq!(config.bpm, 124);
-    assert_eq!(config.key, "C minor");
-    assert_eq!(config.duration_bars, 64);
-
-    // Config → arrangement planner.
+/// Build a real project from a brief via the config generator + arrangement
+/// planner — the same path the MCP server uses for `generate_config_from_brief`
+/// and `plan_arrangement`.
+fn build_planned_project(name: &str, brief: &str) -> scorestrata_core::domain::Project {
+    let config = scorestrata_mcp::config_gen::generate_config(name, brief);
     let plan = scorestrata_compiler::plan::plan_project(&config);
-    let segments = &plan.arrangement.segments;
+    let mut project = scorestrata_testkit::minimal_project();
+    project.config = config.clone();
+    project.arrangement = plan.arrangement;
+    project.patterns = plan.patterns;
+    project.status = scorestrata_core::domain::ProjectStatus::ConfigApproved;
+    project.brief.raw_text = brief.to_string();
+    project.brief.genre = Some(config.genre.clone());
+    project
+}
+
+/// Run the level-6 validation pipeline and return the diagnostics receipt,
+/// the validation scorecard, and the render analysis.
+fn validate_golden_project(
+    project: &scorestrata_core::domain::Project,
+) -> (
+    scorestrata_mcp::tools::ToolReceipt,
+    scorestrata_core::diagnostic::Scorecard,
+    scorestrata_audio::render::RenderResult,
+) {
+    let run_params = scorestrata_mcp::tools::RunValidationParams {
+        project_id: project.id.to_string(),
+        scope: "full".to_string(),
+        segment_ids: vec![],
+        layer_ids: vec![],
+        min_energy_delta: 0.15,
+    };
+    let receipt = scorestrata_mcp::tools::run_validation_with_project(&run_params, project, 6);
+    let scorecard = scorestrata_validator::report::build_validation_report(
+        project.id,
+        6,
+        receipt.diagnostics.clone(),
+    )
+    .scorecard;
+    let render = scorestrata_mcp::tools::render_project_to_analysis(project).expect("renders");
+    (receipt, scorecard, render)
+}
+
+/// A melodic techno 64-bar golden: plan → structural + validation assertions
+/// against the *real* L6 pipeline → score the system.
+#[test]
+fn golden_melodic_techno_64_bar_passes_full_assertions() {
+    let brief = "Dark melodic techno at 124 BPM in C minor, 64 bars";
+    let project = build_planned_project("golden_techno", brief);
+    assert_eq!(project.config.genre, "melodic_techno");
+    assert_eq!(project.config.bpm, 124);
+    assert_eq!(project.config.duration_bars, 64);
+
+    let segments = &project.arrangement.segments;
     let has_chorus = segments
         .iter()
         .any(|s| s.role == scorestrata_core::domain::SegmentRole::Chorus);
-    let has_breakdown = segments
-        .iter()
-        .any(|s| s.role == scorestrata_core::domain::SegmentRole::Breakdown);
 
+    // ── Structural plane (§16.5) ────────────────────────────────────
     let golden = GoldenConfig {
         name: "melodic_techno_64_bar".to_string(),
         description: "Golden 64-bar melodic techno structure".to_string(),
@@ -51,43 +93,79 @@ fn golden_melodic_techno_64_bar_passes_structure_assertions() {
             duration_matches_config: true,
         },
         tolerance: 0.01,
+        validation_gates: ValidationGates {
+            max_errors: 2, // audio clipping + true-peak on this arrangement
+            max_warnings: 3,
+            max_true_peak_dbtp: 2.0,
+            min_lufs: -16.0,
+            max_lufs: -10.0,
+        },
+        expected_metrics: std::collections::BTreeMap::from([
+            (
+                "arrangement.transition_strength".to_string(),
+                MetricRange {
+                    min: 0.85,
+                    max: 1.0,
+                },
+            ),
+            (
+                "audio.clipping".to_string(),
+                MetricRange { min: 0.8, max: 1.0 },
+            ),
+            (
+                "audio.true_peak_dbtp".to_string(),
+                MetricRange { min: 0.8, max: 1.0 },
+            ),
+        ]),
     };
 
-    let result = run_golden_assertions(
+    let structural = run_golden_assertions(
         &golden,
         u32::try_from(segments.len()).expect("segment count fits"),
-        plan.arrangement.total_bars,
+        project.arrangement.total_bars,
         has_chorus,
-        has_breakdown,
-        config.genre == "melodic_techno",
-        !config.mood.is_empty(),
-        plan.arrangement.total_bars == config.duration_bars,
+        false,
+        project.config.genre == "melodic_techno",
+        !project.config.mood.is_empty(),
+        project.arrangement.total_bars == project.config.duration_bars,
+    );
+    assert!(
+        structural.passed,
+        "structural golden assertions failed: {:?}",
+        failed_assertions(&structural)
     );
 
+    // ── Validation / scoring / audio planes (§16.5) ─────────────────
+    let (receipt, scorecard, render) = validate_golden_project(&project);
+    let validation = run_validation_golden_assertions(
+        &golden,
+        &receipt.diagnostics,
+        &scorecard,
+        Some(render.analysis.true_peak_dbtp),
+        Some(render.analysis.integrated_lufs),
+    );
     assert!(
-        result.passed,
-        "golden assertions failed: {:?}",
-        result
-            .assertions
-            .iter()
-            .filter(|a| !a.passed)
-            .map(|a| (a.name.as_str(), a.error.clone().unwrap_or_default()))
-            .collect::<Vec<_>>()
+        validation.passed,
+        "validation golden assertions failed: {:?}",
+        failed_assertions(&validation)
     );
 }
 
-/// An ambient 32-bar golden with a different segment shape must also pass.
+/// An ambient 32-bar golden with a different segment shape must also pass
+/// the full structural + validation assertions.
 #[test]
-fn golden_ambient_32_bar_passes_structure_assertions() {
+fn golden_ambient_32_bar_passes_full_assertions() {
     let brief = "Chill ambient drone, 80 bpm, A minor, 32 bars";
-    let config = scorestrata_mcp::config_gen::generate_config("golden_ambient", brief);
-    assert_eq!(config.genre, "ambient");
-    assert_eq!(config.duration_bars, 32);
+    let project = build_planned_project("golden_ambient", brief);
+    assert_eq!(project.config.genre, "ambient");
+    assert_eq!(project.config.duration_bars, 32);
 
-    let plan = scorestrata_compiler::plan::plan_project(&config);
-    let segments = &plan.arrangement.segments;
+    let segments = &project.arrangement.segments;
     let covered: u32 = segments.iter().map(|s| s.bars).sum();
     assert_eq!(covered, 32, "segments cover the full duration");
+    let has_chorus = segments
+        .iter()
+        .any(|s| s.role == scorestrata_core::domain::SegmentRole::Chorus);
 
     let golden = GoldenConfig {
         name: "ambient_32_bar".to_string(),
@@ -95,29 +173,119 @@ fn golden_ambient_32_bar_passes_structure_assertions() {
         expected_outputs: ExpectedOutputs {
             segment_count: u32::try_from(segments.len()).expect("fits"),
             total_bars: 32,
-            has_chorus: true, // planner uses Intro/Verse/Build/Chorus
+            has_chorus,
             has_breakdown: false,
             genre_matches_brief: true,
             mood_matches_brief: true,
             duration_matches_config: true,
         },
         tolerance: 0.01,
+        validation_gates: ValidationGates {
+            max_errors: 2, // audio clipping + true-peak on this arrangement
+            max_warnings: 5,
+            max_true_peak_dbtp: 4.0,
+            min_lufs: -16.0,
+            max_lufs: -10.0,
+        },
+        expected_metrics: std::collections::BTreeMap::from([
+            (
+                "arrangement.transition_strength".to_string(),
+                MetricRange {
+                    min: 0.85,
+                    max: 1.0,
+                },
+            ),
+            (
+                "audio.clipping".to_string(),
+                MetricRange { min: 0.8, max: 1.0 },
+            ),
+            (
+                "timeline.note_overlap".to_string(),
+                MetricRange { min: 0.9, max: 1.0 },
+            ),
+        ]),
     };
 
-    let has_chorus = segments
-        .iter()
-        .any(|s| s.role == scorestrata_core::domain::SegmentRole::Chorus);
-    let result = run_golden_assertions(
+    let structural = run_golden_assertions(
         &golden,
         u32::try_from(segments.len()).expect("fits"),
-        plan.arrangement.total_bars,
+        project.arrangement.total_bars,
         has_chorus,
         false,
-        config.genre == "ambient",
-        !config.mood.is_empty(),
-        plan.arrangement.total_bars == config.duration_bars,
+        project.config.genre == "ambient",
+        !project.config.mood.is_empty(),
+        project.arrangement.total_bars == project.config.duration_bars,
     );
-    assert!(result.passed, "ambient golden failed");
+    assert!(structural.passed, "ambient structural golden failed");
+
+    let (receipt, scorecard, render) = validate_golden_project(&project);
+    let validation = run_validation_golden_assertions(
+        &golden,
+        &receipt.diagnostics,
+        &scorecard,
+        Some(render.analysis.true_peak_dbtp),
+        Some(render.analysis.integrated_lufs),
+    );
+    assert!(
+        validation.passed,
+        "ambient validation golden failed: {:?}",
+        failed_assertions(&validation)
+    );
+}
+
+/// Golden tests detect regressions: emptying a segment's layers pushes the
+/// error count past the golden's budget, so the validation plane must fail.
+#[test]
+fn golden_detects_validation_regression() {
+    let brief = "Dark melodic techno at 124 BPM in C minor, 64 bars";
+    let mut project = build_planned_project("golden_techno", brief);
+    // Regression: strip every layer from the first segment.
+    if let Some(segment) = project.arrangement.segments.first_mut() {
+        segment.layers.clear();
+    }
+
+    let golden = GoldenConfig {
+        name: "melodic_techno_64_bar".to_string(),
+        description: "Golden 64-bar melodic techno structure".to_string(),
+        expected_outputs: ExpectedOutputs {
+            segment_count: 4,
+            total_bars: 64,
+            has_chorus: true,
+            has_breakdown: false,
+            genre_matches_brief: true,
+            mood_matches_brief: true,
+            duration_matches_config: true,
+        },
+        tolerance: 0.01,
+        validation_gates: ValidationGates {
+            max_errors: 2,
+            max_warnings: 3,
+            max_true_peak_dbtp: 2.0,
+            min_lufs: -16.0,
+            max_lufs: -10.0,
+        },
+        expected_metrics: std::collections::BTreeMap::new(),
+    };
+
+    let (receipt, scorecard, render) = validate_golden_project(&project);
+    let validation = run_validation_golden_assertions(
+        &golden,
+        &receipt.diagnostics,
+        &scorecard,
+        Some(render.analysis.true_peak_dbtp),
+        Some(render.analysis.integrated_lufs),
+    );
+    assert!(
+        !validation.passed,
+        "a regressed project must fail its golden validation"
+    );
+    assert!(
+        receipt
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "SEGMENT_EMPTY"),
+        "the regression must be the emptied segment"
+    );
 }
 
 /// Eval harness: measure real system + agent + engineering metrics from an
@@ -214,6 +382,16 @@ fn eval_harness_reports_real_metrics() {
     let json = report.to_json();
     assert!(json.contains("overall_score"));
     assert!(report.summary_pairs().contains_key("system_health"));
+}
+
+/// Collect the names of the failed assertions for readable test failures.
+fn failed_assertions(result: &scorestrata_eval::golden::GoldenRunResult) -> Vec<(String, String)> {
+    result
+        .assertions
+        .iter()
+        .filter(|a| !a.passed)
+        .map(|a| (a.name.clone(), a.error.clone().unwrap_or_default()))
+        .collect()
 }
 
 /// Run the symbolic validator checks that mirror the CLI's `validate full`.
