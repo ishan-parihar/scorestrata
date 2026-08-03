@@ -138,12 +138,17 @@ pub fn run_validation(
     finish_validation_receipt(params, level, diagnostics)
 }
 
-/// Run validation at a full level (L2 symbolic + L5 brief compliance).
+/// Run validation at a full level against the whole project.
 ///
-/// Unlike [`run_validation`], this takes the whole project, so when `level >= 5`
-/// the brief-compliance plane (§11.2 L5) is exercised against the real brief,
-/// config, and arrangement — producing `BRIEF_*` diagnostics the segments-only
-/// path cannot see. Levels below 5 degrade to the symbolic checks.
+/// Unlike [`run_validation`], this takes the whole project, so it can
+/// exercise the arrangement-wide planes the segments-only path cannot see:
+/// - `level >= 3`: timeline plane (§11.2 L3) — unresolved patterns, empty
+///   required segments, note overlaps, automation range, absolute timing
+///   (`TIMELINE_*` diagnostics)
+/// - `level >= 5`: brief-compliance plane (§11.2 L5) against the real brief,
+///   config, and arrangement (`BRIEF_*` diagnostics)
+///
+/// Levels below 3 degrade to the symbolic checks (L2) only.
 #[must_use]
 pub fn run_validation_with_project(
     params: &RunValidationParams,
@@ -151,6 +156,12 @@ pub fn run_validation_with_project(
     level: u8,
 ) -> ToolReceipt {
     let mut diagnostics = collect_symbolic_diagnostics(params, &project.arrangement.segments);
+
+    if level >= 3 {
+        diagnostics.extend(scorestrata_validator::timeline_check::check_timeline(
+            project,
+        ));
+    }
 
     if level >= 5 {
         let brief_report = scorestrata_validator::brief_check::check_brief_compliance(
@@ -5895,6 +5906,140 @@ mod tests {
         assert!(
             codes.iter().any(|c| c == "SEGMENT_EMPTY"),
             "L2 symbolic plane present: {codes:?}"
+        );
+    }
+
+    #[test]
+    fn run_validation_with_project_at_l3_emits_timeline_diagnostics() {
+        // A layer referencing a pattern that does not exist must surface as
+        // TIMELINE_UNRESOLVED_PATTERN at L3 (the arrangement-wide plane the
+        // segments-only L2 path cannot see).
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        project.arrangement.segments[0].layers[0]
+            .pattern_instances
+            .push(scorestrata_core::domain::PatternInstance {
+                id: scorestrata_core::ids::PatternInstanceId::new(),
+                pattern_id: scorestrata_core::ids::PatternId::new(),
+                start_tick: scorestrata_core::domain::Tick::new(0),
+                transpose: 0,
+                velocity_multiplier: 1.0,
+            });
+        let receipt = run_validation_with_project(&default_params(), &project, 3);
+        assert_eq!(receipt.tool, "run_validation");
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "TIMELINE_UNRESOLVED_PATTERN"),
+            "expected TIMELINE_UNRESOLVED_PATTERN at L3, got: {:?}",
+            receipt
+                .diagnostics
+                .iter()
+                .map(|d| d.code.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn run_validation_with_project_below_l3_skips_timeline_plane() {
+        // At L2 the timeline plane is not exercised, so the same defective
+        // project produces no TIMELINE_* diagnostics.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        project.arrangement.segments[0].layers[0]
+            .pattern_instances
+            .push(scorestrata_core::domain::PatternInstance {
+                id: scorestrata_core::ids::PatternInstanceId::new(),
+                pattern_id: scorestrata_core::ids::PatternId::new(),
+                start_tick: scorestrata_core::domain::Tick::new(0),
+                transpose: 0,
+                velocity_multiplier: 1.0,
+            });
+        let receipt = run_validation_with_project(&default_params(), &project, 2);
+        assert!(
+            !receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code.starts_with("TIMELINE_")),
+            "L2 must not emit timeline diagnostics: {:?}",
+            receipt
+                .diagnostics
+                .iter()
+                .map(|d| d.code.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn l3_planes_compose_with_l2_and_l5() {
+        // A project with an unresolved pattern (L3), an empty segment (L2),
+        // and a genre mismatch (L5) must yield diagnostics from ALL three
+        // planes at level 5 — planes compose, not replace.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        project.config.genre = "house".to_string();
+        // L3 defect in the SECOND segment's layer (kept alive — the first
+        // segment's layers are cleared below for the L2 defect).
+        if let Some(second) = project.arrangement.segments.get_mut(1) {
+            if let Some(layer) = second.layers.first_mut() {
+                layer
+                    .pattern_instances
+                    .push(scorestrata_core::domain::PatternInstance {
+                        id: scorestrata_core::ids::PatternInstanceId::new(),
+                        pattern_id: scorestrata_core::ids::PatternId::new(),
+                        start_tick: scorestrata_core::domain::Tick::new(0),
+                        transpose: 0,
+                        velocity_multiplier: 1.0,
+                    });
+            }
+        }
+        // L2 defect: the first segment has no layers at all.
+        if let Some(segment) = project.arrangement.segments.first_mut() {
+            segment.layers.clear();
+        }
+        let receipt = run_validation_with_project(&default_params(), &project, 5);
+        let codes: Vec<String> = receipt.diagnostics.iter().map(|d| d.code.clone()).collect();
+        assert!(
+            codes.iter().any(|c| c == "TIMELINE_UNRESOLVED_PATTERN"),
+            "L3 timeline plane: {codes:?}"
+        );
+        assert!(
+            codes.iter().any(|c| c == "SEGMENT_EMPTY"),
+            "L2 symbolic plane: {codes:?}"
+        );
+        assert!(
+            codes.iter().any(|c| c == "BRIEF_GENRE_MISMATCH"),
+            "L5 brief plane: {codes:?}"
+        );
+    }
+
+    #[test]
+    fn dispatcher_run_validation_l3_with_project_payload() {
+        // The wire path: level 3 + project payload must reach the timeline
+        // plane.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        project.arrangement.segments[0].layers[0]
+            .pattern_instances
+            .push(scorestrata_core::domain::PatternInstance {
+                id: scorestrata_core::ids::PatternInstanceId::new(),
+                pattern_id: scorestrata_core::ids::PatternId::new(),
+                start_tick: scorestrata_core::domain::Tick::new(0),
+                transpose: 0,
+                velocity_multiplier: 1.0,
+            });
+        let receipt = crate::dispatch::dispatch_tool(
+            "run_validation",
+            serde_json::json!({
+                "project_id": project.id.to_string(),
+                "project": project,
+                "level": 3,
+            }),
+        );
+        assert_eq!(receipt.tool, "run_validation");
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "TIMELINE_UNRESOLVED_PATTERN"),
+            "dispatcher L3 must emit timeline diagnostics"
         );
     }
 

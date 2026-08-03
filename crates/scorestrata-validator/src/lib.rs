@@ -13,6 +13,7 @@ pub mod regression_check;
 pub mod report;
 pub mod scale_check;
 pub mod segment_check;
+pub mod timeline_check;
 pub mod transition_check;
 
 use scorestrata_core::error::ScorestrataError;

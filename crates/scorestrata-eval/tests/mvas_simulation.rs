@@ -1690,6 +1690,85 @@ fn mvas_step_23_learning_loop_accumulates_confidence() {
     assert!(query.summary.contains("quantize_to_scale"));
 }
 
+/// §11.2 L3 timeline validation over the wire: a layer referencing a missing
+/// pattern must surface as TIMELINE_UNRESOLVED_PATTERN at level 3 through the
+/// dispatcher, and must be absent at level 2 (plane gating).
+#[test]
+fn mvas_step_24_timeline_validation_over_the_wire() {
+    use scorestrata_mcp::tools::ToolStatus;
+
+    let mut project = scorestrata_testkit::melodic_techno_project();
+    project.arrangement.segments[0].layers[0]
+        .pattern_instances
+        .push(scorestrata_core::domain::PatternInstance {
+            id: scorestrata_core::ids::PatternInstanceId::new(),
+            pattern_id: scorestrata_core::ids::PatternId::new(),
+            start_tick: scorestrata_core::domain::Tick::new(0),
+            transpose: 0,
+            velocity_multiplier: 1.0,
+        });
+
+    // L3: the timeline plane fires.
+    let at_l3 = scorestrata_mcp::dispatch::dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 3,
+        }),
+    );
+    assert_eq!(at_l3.tool, "run_validation");
+    assert!(
+        at_l3
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "TIMELINE_UNRESOLVED_PATTERN"),
+        "L3 must emit TIMELINE_UNRESOLVED_PATTERN: {:?}",
+        at_l3
+            .diagnostics
+            .iter()
+            .map(|d| d.code.clone())
+            .collect::<Vec<_>>()
+    );
+
+    // L2: the timeline plane is gated off.
+    let at_l2 = scorestrata_mcp::dispatch::dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 2,
+        }),
+    );
+    assert_eq!(at_l2.tool, "run_validation");
+    assert!(
+        !at_l2
+            .diagnostics
+            .iter()
+            .any(|d| d.code.starts_with("TIMELINE_")),
+        "L2 must not emit timeline diagnostics"
+    );
+
+    // A clean project passes L3 with no timeline diagnostics.
+    let clean = scorestrata_testkit::melodic_techno_project();
+    let clean_receipt = scorestrata_mcp::dispatch::dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": clean.id.to_string(),
+            "project": &clean,
+            "level": 3,
+        }),
+    );
+    assert!(matches!(clean_receipt.status, ToolStatus::Succeeded));
+    assert!(
+        !clean_receipt
+            .diagnostics
+            .iter()
+            .any(|d| d.code.starts_with("TIMELINE_")),
+        "clean project passes L3"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

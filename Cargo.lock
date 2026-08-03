@@ -855,6 +855,7 @@ dependencies = [
  "proptest",
  "scorestrata-audio",
  "scorestrata-core",
+ "scorestrata-testkit",
  "scorestrata-theory",
  "serde",
  "serde_json",
