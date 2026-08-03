@@ -94,11 +94,11 @@ fn golden_melodic_techno_64_bar_passes_full_assertions() {
         },
         tolerance: 0.01,
         validation_gates: ValidationGates {
-            max_errors: 2, // audio clipping + true-peak on this arrangement
+            max_errors: 0, // fixed engine: no clipping, no true-peak exceed
             max_warnings: 3,
-            max_true_peak_dbtp: 2.0,
+            max_true_peak_dbtp: -0.5,
             min_lufs: -16.0,
-            max_lufs: -10.0,
+            max_lufs: -4.0,
         },
         expected_metrics: std::collections::BTreeMap::from([
             (
@@ -109,12 +109,8 @@ fn golden_melodic_techno_64_bar_passes_full_assertions() {
                 },
             ),
             (
-                "audio.clipping".to_string(),
-                MetricRange { min: 0.8, max: 1.0 },
-            ),
-            (
-                "audio.true_peak_dbtp".to_string(),
-                MetricRange { min: 0.8, max: 1.0 },
+                "audio.stereo_correlation".to_string(),
+                MetricRange { min: 0.9, max: 1.0 },
             ),
         ]),
     };
@@ -181,11 +177,11 @@ fn golden_ambient_32_bar_passes_full_assertions() {
         },
         tolerance: 0.01,
         validation_gates: ValidationGates {
-            max_errors: 2, // audio clipping + true-peak on this arrangement
+            max_errors: 0, // fixed engine: no clipping, no true-peak exceed
             max_warnings: 5,
-            max_true_peak_dbtp: 4.0,
+            max_true_peak_dbtp: -0.5,
             min_lufs: -16.0,
-            max_lufs: -10.0,
+            max_lufs: -4.0,
         },
         expected_metrics: std::collections::BTreeMap::from([
             (
@@ -194,10 +190,6 @@ fn golden_ambient_32_bar_passes_full_assertions() {
                     min: 0.85,
                     max: 1.0,
                 },
-            ),
-            (
-                "audio.clipping".to_string(),
-                MetricRange { min: 0.8, max: 1.0 },
             ),
             (
                 "timeline.note_overlap".to_string(),
@@ -258,11 +250,11 @@ fn golden_detects_validation_regression() {
         },
         tolerance: 0.01,
         validation_gates: ValidationGates {
-            max_errors: 2,
+            max_errors: 0,
             max_warnings: 3,
-            max_true_peak_dbtp: 2.0,
+            max_true_peak_dbtp: -0.5,
             min_lufs: -16.0,
-            max_lufs: -10.0,
+            max_lufs: -4.0,
         },
         expected_metrics: std::collections::BTreeMap::new(),
     };

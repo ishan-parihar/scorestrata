@@ -649,13 +649,23 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
     let timeline = scorestrata_compiler::compile_project(&project)
         .context("Compilation failed — check project status")?;
 
-    // Map layer IDs to human-readable names for voice assignment.
+    // Map layer IDs to human-readable names for voice assignment, and build
+    // the per-instrument voice table (drums, bass, lead each get their own
+    // timbre instead of the default saw).
     let mut layer_names = std::collections::HashMap::new();
+    let mut layer_instruments: Vec<(&str, &str)> = Vec::new();
     for segment in &project.arrangement.segments {
         for layer in &segment.layers {
             layer_names.insert(layer.id.to_string(), layer.name.clone());
+            if !layer_instruments
+                .iter()
+                .any(|(n, _)| *n == layer.name.as_str())
+            {
+                layer_instruments.push((layer.name.as_str(), layer.instrument.as_str()));
+            }
         }
     }
+    let voices = scorestrata_audio::render::build_voices(&layer_instruments);
 
     use scorestrata_compiler::timeline::EventKind;
     let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
@@ -684,11 +694,16 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
 
     // Stems mode: write one WAV per layer plus the master mix (§16 stems).
     if mode == "stems" {
-        let (stems, master) = scorestrata_audio::render::render_stems(
+        let config = scorestrata_audio::render::RenderConfig {
+            stereo: true,
+            limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
+        };
+        let (stems, master) = scorestrata_audio::render::render_stems_with_config(
             &notes,
             timeline.bpm,
             scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-            &[],
+            &voices,
+            &config,
         )
         .context("Stems render failed")?;
 
@@ -733,11 +748,16 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
         return Ok(());
     }
 
-    let result = scorestrata_audio::render::render_notes(
+    let config = scorestrata_audio::render::RenderConfig {
+        stereo: true,
+        limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
+    };
+    let result = scorestrata_audio::render::render_notes_with_config(
         &notes,
         timeline.bpm,
         scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        &[],
+        &voices,
+        &config,
     )
     .context("Render failed")?;
 

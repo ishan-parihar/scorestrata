@@ -284,11 +284,19 @@ fn apply_normalize_loudness(params: &ApplyPatchParams, project: &mut Project) ->
     };
 
     let mut layer_names = std::collections::HashMap::new();
+    let mut layer_instruments: Vec<(&str, &str)> = Vec::new();
     for segment in &project.arrangement.segments {
         for layer in &segment.layers {
             layer_names.insert(layer.id.to_string(), layer.name.clone());
+            if !layer_instruments
+                .iter()
+                .any(|(n, _)| *n == layer.name.as_str())
+            {
+                layer_instruments.push((layer.name.as_str(), layer.instrument.as_str()));
+            }
         }
     }
+    let voices = scorestrata_audio::render::build_voices(&layer_instruments);
 
     let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
         .events
@@ -315,7 +323,7 @@ fn apply_normalize_loudness(params: &ApplyPatchParams, project: &mut Project) ->
         &notes,
         timeline.bpm,
         scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        &[],
+        &voices,
     ) {
         Ok(r) => r,
         Err(e) => return failed_receipt(params, &format!("render failed: {e}")),

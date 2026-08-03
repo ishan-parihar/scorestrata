@@ -1772,10 +1772,11 @@ fn mvas_step_24_timeline_validation_over_the_wire() {
 
 #[test]
 fn mvas_step_25_audio_validation_over_the_wire() {
-    // The L4 audio plane renders the project and analyzes the mix. The
-    // melodic-techno fixture deterministically clips (true peak > 0 dBTP),
-    // so the wire must surface audio diagnostics at level 4 and keep them
-    // hidden below it.
+    // The L4 audio plane renders the project and analyzes the mix. With the
+    // fixed engine (limiter ceiling −1.0 dBTP, polyBLEP, gain staging) the
+    // melodic-techno fixture renders clean — no clipping, no true-peak
+    // violation — but the audio plane must still surface diagnostics at
+    // level 4 (narrow-stereo on the mono render) and stay hidden below it.
     let project = scorestrata_testkit::melodic_techno_project();
 
     let at_l3 = scorestrata_mcp::dispatch::dispatch_tool(
@@ -1808,8 +1809,22 @@ fn mvas_step_25_audio_validation_over_the_wire() {
         at_l4
             .diagnostics
             .iter()
+            .any(|d| d.code == "AUDIO_NARROW_STEREO"),
+        "L4 audio plane must surface diagnostics over the wire"
+    );
+    assert!(
+        !at_l4
+            .diagnostics
+            .iter()
             .any(|d| d.code == "AUDIO_CLIPPING_DETECTED"),
-        "L4 audio plane must report clipping over the wire"
+        "the fixed engine must not clip over the wire"
+    );
+    assert!(
+        !at_l4
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "AUDIO_TRUE_PEAK_EXCEEDED"),
+        "the fixed engine must respect the −1.0 dBTP ceiling over the wire"
     );
     assert!(
         !at_l4
@@ -1823,30 +1838,41 @@ fn mvas_step_25_audio_validation_over_the_wire() {
 #[test]
 fn mvas_step_26_regression_detection_over_the_wire() {
     // L6 (§11.2 L6, §11.7): a baseline scorecard claiming clean audio must be
-    // flagged when the current project clips — both as a metric regression and
-    // as a hard-gate violation. Also, a matching render signature must pass.
+    // flagged when the current project regresses — both as a metric regression
+    // and as a hard-gate violation. With the fixed engine the melodic-techno
+    // fixture renders clean, so the regression is driven by a genuinely broken
+    // project: silenced layers collapse audio.integrated_lufs below the 1.0
+    // baseline (a hard gate).
     use scorestrata_core::diagnostic::{MetricSample, MetricScope, Scorecard};
     use scorestrata_core::error::Severity;
     use scorestrata_core::ids::{MetricId, ScorecardId};
 
-    let project = scorestrata_testkit::melodic_techno_project();
+    let mut project = scorestrata_testkit::melodic_techno_project();
+    let gate = |name: &str| MetricSample {
+        id: MetricId::new(),
+        name: name.to_string(),
+        value: 1.0,
+        severity: Severity::Info,
+        scope: MetricScope::default(),
+        evidence_uri: format!("project://baseline/{name}"),
+        explanation: "baseline clean".to_string(),
+        confidence: 1.0,
+        suggested_patches: vec![],
+    };
     let baseline = Scorecard {
         id: ScorecardId::new(),
-        metrics: vec![MetricSample {
-            id: MetricId::new(),
-            name: "audio.clipping".to_string(),
-            value: 1.0,
-            severity: Severity::Info,
-            scope: MetricScope::default(),
-            evidence_uri: "project://baseline/audio/clipping".to_string(),
-            explanation: "baseline clean".to_string(),
-            confidence: 1.0,
-            suggested_patches: vec![],
-        }],
+        metrics: vec![
+            gate("audio.clipping"),
+            gate("audio.true_peak_dbtp"),
+            gate("audio.integrated_lufs"),
+        ],
         overall_score: 1.0,
         hard_failures: 0,
         warnings: 0,
     };
+    for segment in &mut project.arrangement.segments {
+        segment.layers.clear();
+    }
 
     let receipt = scorestrata_mcp::dispatch::dispatch_tool(
         "check_regressions",
@@ -1862,7 +1888,7 @@ fn mvas_step_26_regression_detection_over_the_wire() {
             .diagnostics
             .iter()
             .any(|d| d.code == "METRIC_REGRESSION_DETECTED"),
-        "wire L6 must flag the clipping regression"
+        "wire L6 must flag the loudness regression"
     );
     assert!(
         receipt
@@ -1934,11 +1960,11 @@ fn mvas_step_27_golden_harness_over_the_wire() {
         },
         tolerance: 0.01,
         validation_gates: ValidationGates {
-            max_errors: 2,
+            max_errors: 0, // fixed engine: no clipping, no true-peak exceed
             max_warnings: 3,
-            max_true_peak_dbtp: 2.0,
+            max_true_peak_dbtp: -0.5,
             min_lufs: -16.0,
-            max_lufs: -10.0,
+            max_lufs: -4.0,
         },
         expected_metrics: std::collections::BTreeMap::new(),
     };
@@ -2082,11 +2108,11 @@ fn mvas_step_28_genre_calibration_feeds_l6_scoring() {
         },
         tolerance: 0.01,
         validation_gates: ValidationGates {
-            max_errors: 2,
+            max_errors: 0, // fixed engine: no clipping, no true-peak exceed
             max_warnings: 3,
-            max_true_peak_dbtp: 2.0,
+            max_true_peak_dbtp: -0.5,
             min_lufs: -16.0,
-            max_lufs: -10.0,
+            max_lufs: -4.0,
         },
         expected_metrics: std::collections::BTreeMap::from([(
             "arrangement.transition_strength".to_string(),

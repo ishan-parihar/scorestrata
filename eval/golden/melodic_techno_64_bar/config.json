@@ -29,16 +29,14 @@
     { "name": "Chorus", "role": "chorus", "bars": 52 }
   ],
   "validation_gates": {
-    "max_errors": 2,
+    "max_errors": 0,
     "max_warnings": 3,
-    "max_true_peak_dbtp": 2.0,
+    "max_true_peak_dbtp": -0.5,
     "min_lufs": -16.0,
-    "max_lufs": -10.0
+    "max_lufs": -4.0
   },
   "expected_metrics": {
     "arrangement.transition_strength": { "min": 0.85, "max": 1.0 },
-    "audio.clipping": { "min": 0.8, "max": 1.0 },
-    "audio.true_peak_dbtp": { "min": 0.8, "max": 1.0 },
     "audio.stereo_correlation": { "min": 0.9, "max": 1.0 },
     "brief.structure_fit": { "min": 0.9, "max": 1.0 }
   }

@@ -16,9 +16,10 @@ use scorestrata_core::domain::PPQ;
 use scorestrata_core::error::ScorestrataError;
 
 use crate::analysis::AudioAnalysis;
+use crate::mastering::{LimiterConfig, apply_limiter};
 use crate::mixer::{Mixer, MixerChannel};
-use crate::synth::{SynthParams, Waveform, render_note};
-use crate::wav::write_wav;
+use crate::synth::{SynthParams, Waveform, drum_kind_for_pitch, render_drum_note, render_note};
+use crate::wav::{write_wav, write_wav_stereo};
 
 /// Sample rate used for offline rendering (48 kHz per render policy).
 pub const DEFAULT_SAMPLE_RATE: u32 = 48_000;
@@ -37,6 +38,9 @@ pub struct RenderVoice {
     pub layer_name: String,
     /// Synth parameters.
     pub params: SynthParams,
+    /// Whether the layer is a percussion (drum) layer — notes route through
+    /// the GM drum synthesizer instead of the pitched oscillator.
+    pub is_percussion: bool,
 }
 
 impl RenderVoice {
@@ -46,6 +50,25 @@ impl RenderVoice {
         Self {
             layer_name: layer_name.to_string(),
             params: SynthParams::default(),
+            is_percussion: false,
+        }
+    }
+}
+
+/// Render options controlling the offline mix.
+#[derive(Debug, Clone)]
+pub struct RenderConfig {
+    /// Whether to write a stereo WAV (interleaved L/R) instead of a mono fold.
+    pub stereo: bool,
+    /// Peak limiter applied to the master mix; `None` disables limiting.
+    pub limiter: Option<LimiterConfig>,
+}
+
+impl Default for RenderConfig {
+    fn default() -> Self {
+        Self {
+            stereo: false,
+            limiter: Some(LimiterConfig::default()),
         }
     }
 }
@@ -124,11 +147,11 @@ pub fn tick_to_seconds(tick: u64, bpm: u32) -> f64 {
     beats * 60.0 / f64::from(bpm)
 }
 
-/// Render a set of notes into stereo WAV bytes.
+/// Render a set of notes into WAV bytes with the default render config.
 ///
 /// Notes are grouped into per-layer mono buffers, rendered with the assigned
-/// voice (or the default synth voice), then mixed into stereo and encoded
-/// as a 16-bit WAV.
+/// voice (or the default synth voice), mixed, peak-limited, and encoded as
+/// a 16-bit WAV.
 ///
 /// # Errors
 ///
@@ -138,6 +161,21 @@ pub fn render_notes(
     bpm: u32,
     sample_rate: u32,
     voices: &[RenderVoice],
+) -> Result<RenderResult, ScorestrataError> {
+    render_notes_with_config(notes, bpm, sample_rate, voices, &RenderConfig::default())
+}
+
+/// Render a set of notes with an explicit render config (stereo / limiter).
+///
+/// # Errors
+///
+/// Returns an error if `sample_rate` is 0.
+pub fn render_notes_with_config(
+    notes: &[RenderNote],
+    bpm: u32,
+    sample_rate: u32,
+    voices: &[RenderVoice],
+    config: &RenderConfig,
 ) -> Result<RenderResult, ScorestrataError> {
     if sample_rate == 0 {
         return Err(ScorestrataError::RenderError {
@@ -153,8 +191,8 @@ pub fn render_notes(
         }
     }
 
-    // Total duration in samples (from the last note end).
-    let total_samples = notes
+    // Total duration in samples: last note end plus the longest release tail.
+    let last_note_end = notes
         .iter()
         .map(|n| {
             let start = tick_to_sample(n.start_tick, bpm, sample_rate);
@@ -163,6 +201,11 @@ pub fn render_notes(
         })
         .max()
         .unwrap_or(0);
+    let total_samples = if last_note_end == 0 {
+        0
+    } else {
+        last_note_end + release_tail_samples(voices, sample_rate)
+    };
 
     let mut mixer = Mixer::new();
 
@@ -171,44 +214,69 @@ pub fn render_notes(
             render_layer_buffer(notes, layer_name, voices, bpm, sample_rate, total_samples);
         mixer.add_channel(MixerChannel {
             name: layer_name.clone(),
-            gain: 0.8,
-            pan: 0.0,
+            gain: layer_gain(layer_name),
+            pan: if config.stereo {
+                layer_pan(layer_name)
+            } else {
+                0.0
+            },
             muted: false,
             data: buffer,
         });
     }
 
     let (left, right) = mixer.mix();
-
-    // Interleave stereo.
-    let mut interleaved = Vec::with_capacity(left.len() * 2);
-    for (l, r) in left.iter().zip(&right) {
-        interleaved.push(*l);
-        interleaved.push(*r);
-    }
-
-    // The WAV writer currently writes mono (1 channel). To keep determinism
-    // and a correct file, we render a mono fold (L+R)/2 — standard for
-    // offline master previews — and document channels=1 in the result.
-    let mono: Vec<f32> = interleaved
-        .chunks_exact(2)
-        .map(|c| (c[0] + c[1]) * 0.5)
+    let mono: Vec<f32> = left
+        .iter()
+        .zip(&right)
+        .map(|(l, r)| (l + r) * 0.5)
         .collect();
-
-    let wav_bytes = write_wav(&mono, sample_rate, 16);
     let duration_seconds = f64::from(total_samples as u32) / f64::from(sample_rate);
-    let checksum = sha256_hex(&wav_bytes);
-    let analysis = crate::analysis::analyze_mono(&mono);
 
-    Ok(RenderResult {
-        wav_bytes,
-        duration_seconds,
-        sample_rate,
-        channels: 1,
-        checksum,
-        mono_samples: mono,
-        analysis,
-    })
+    if config.stereo {
+        let mut left = left;
+        let mut right = right;
+        if let Some(limiter) = &config.limiter {
+            apply_limiter(&mut left, limiter);
+            apply_limiter(&mut right, limiter);
+        }
+        let wav_bytes = write_wav_stereo(&left, &right, sample_rate, 16);
+        let checksum = sha256_hex(&wav_bytes);
+        let analysis = crate::analysis::analyze_stereo(&left, &right);
+        // `mono_samples` must always be the *mastered* fold so it agrees with
+        // `analysis.true_peak_dbtp` regardless of the stereo setting.
+        let mono = left
+            .iter()
+            .zip(&right)
+            .map(|(l, r)| (l + r) * 0.5)
+            .collect();
+        Ok(RenderResult {
+            wav_bytes,
+            duration_seconds,
+            sample_rate,
+            channels: 2,
+            checksum,
+            mono_samples: mono,
+            analysis,
+        })
+    } else {
+        let mut mono = mono;
+        if let Some(limiter) = &config.limiter {
+            apply_limiter(&mut mono, limiter);
+        }
+        let wav_bytes = write_wav(&mono, sample_rate, 16);
+        let checksum = sha256_hex(&wav_bytes);
+        let analysis = crate::analysis::analyze_mono(&mono);
+        Ok(RenderResult {
+            wav_bytes,
+            duration_seconds,
+            sample_rate,
+            channels: 1,
+            checksum,
+            mono_samples: mono,
+            analysis,
+        })
+    }
 }
 
 /// Render each layer to its own mono WAV (stems), plus a mixed master.
@@ -226,6 +294,27 @@ pub fn render_stems(
     sample_rate: u32,
     voices: &[RenderVoice],
 ) -> Result<(Vec<Stem>, RenderResult), ScorestrataError> {
+    render_stems_with_config(notes, bpm, sample_rate, voices, &RenderConfig::default())
+}
+
+/// Render per-layer mono stems plus a mastered mix with an explicit config.
+///
+/// Each stem is peak-limited at the same ceiling as the master (per-layer
+/// overlapping notes can sum past full scale, so stems never hard-clip).
+/// Note the stems are individually limited, so summing them does not
+/// reproduce the mastered master exactly — that is expected for a stem
+/// export; the master is the authoritative mixdown.
+///
+/// # Errors
+///
+/// Returns an error if `sample_rate` is 0.
+pub fn render_stems_with_config(
+    notes: &[RenderNote],
+    bpm: u32,
+    sample_rate: u32,
+    voices: &[RenderVoice],
+    config: &RenderConfig,
+) -> Result<(Vec<Stem>, RenderResult), ScorestrataError> {
     if sample_rate == 0 {
         return Err(ScorestrataError::RenderError {
             message: "sample rate must be non-zero".to_string(),
@@ -240,7 +329,7 @@ pub fn render_stems(
         }
     }
 
-    let total_samples = notes
+    let last_note_end = notes
         .iter()
         .map(|n| {
             let start = tick_to_sample(n.start_tick, bpm, sample_rate);
@@ -249,15 +338,26 @@ pub fn render_stems(
         })
         .max()
         .unwrap_or(0);
+    let total_samples = if last_note_end == 0 {
+        0
+    } else {
+        last_note_end + release_tail_samples(voices, sample_rate)
+    };
 
     let mut stems = Vec::new();
     let mut mixer = Mixer::new();
 
     for layer_name in &layer_order {
-        let buffer =
+        let mut buffer =
             render_layer_buffer(notes, layer_name, voices, bpm, sample_rate, total_samples);
 
-        // Stem artifact (mono WAV per layer).
+        // Stem artifact (mono WAV per layer). Per-layer overlapping notes can
+        // sum past full scale, so each stem is peak-limited before encoding —
+        // the same ceiling as the master — so exported stems never hard-clip
+        // (the first-listen defect: the master was protected but stems were not).
+        if let Some(limiter) = &config.limiter {
+            apply_limiter(&mut buffer, limiter);
+        }
         let stem_wav = write_wav(&buffer, sample_rate, 16);
         let stem_checksum = sha256_hex(&stem_wav);
         let stem_analysis = crate::analysis::analyze_mono(&buffer);
@@ -272,29 +372,62 @@ pub fn render_stems(
 
         mixer.add_channel(MixerChannel {
             name: layer_name.clone(),
-            gain: 0.8,
-            pan: 0.0,
+            gain: layer_gain(layer_name),
+            pan: if config.stereo {
+                layer_pan(layer_name)
+            } else {
+                0.0
+            },
             muted: false,
             data: buffer,
         });
     }
 
     let (left, right) = mixer.mix();
-    let mono: Vec<f32> = left
+    let mut mono: Vec<f32> = left
         .iter()
         .zip(&right)
         .map(|(l, r)| (l + r) * 0.5)
         .collect();
-    let master_wav = write_wav(&mono, sample_rate, 16);
+    let duration_seconds = f64::from(total_samples as u32) / f64::from(sample_rate);
+
+    let (master_wav, channels, master_analysis, mono_fold) = if config.stereo {
+        let mut left = left;
+        let mut right = right;
+        if let Some(limiter) = &config.limiter {
+            apply_limiter(&mut left, limiter);
+            apply_limiter(&mut right, limiter);
+        }
+        let mono_fold: Vec<f32> = left
+            .iter()
+            .zip(&right)
+            .map(|(l, r)| (l + r) * 0.5)
+            .collect();
+        (
+            write_wav_stereo(&left, &right, sample_rate, 16),
+            2,
+            crate::analysis::analyze_stereo(&left, &right),
+            mono_fold,
+        )
+    } else {
+        if let Some(limiter) = &config.limiter {
+            apply_limiter(&mut mono, limiter);
+        }
+        (
+            write_wav(&mono, sample_rate, 16),
+            1,
+            crate::analysis::analyze_mono(&mono),
+            mono,
+        )
+    };
     let master_checksum = sha256_hex(&master_wav);
-    let master_analysis = crate::analysis::analyze_mono(&mono);
     let master = RenderResult {
         wav_bytes: master_wav,
-        duration_seconds: f64::from(total_samples as u32) / f64::from(sample_rate),
+        duration_seconds,
         sample_rate,
-        channels: 1,
+        channels,
         checksum: master_checksum,
-        mono_samples: mono,
+        mono_samples: mono_fold,
         analysis: master_analysis,
     };
 
@@ -314,27 +447,45 @@ fn render_layer_buffer(
     total_samples: u64,
 ) -> Vec<f32> {
     let mut buffer = vec![0.0f32; total_samples as usize];
-    let params = voices
-        .iter()
-        .find(|v| v.layer_name == layer_name)
-        .map_or_else(SynthParams::default, |v| v.params.clone());
+    let voice = voices.iter().find(|v| v.layer_name == layer_name);
+    let params = voice.map_or_else(SynthParams::default, |v| v.params.clone());
+    let is_percussion = voice.is_some_and(|v| v.is_percussion);
 
     for note in notes.iter().filter(|n| n.layer_name == layer_name) {
         let start = tick_to_sample(note.start_tick, bpm, sample_rate) as usize;
-        let dur = tick_to_sample(note.duration_ticks, bpm, sample_rate).max(1) as usize;
-        let freq = midi_to_frequency(note.pitch);
-        let end = (start + dur).min(buffer.len());
         if start >= buffer.len() {
             continue;
         }
+        let dur = tick_to_sample(note.duration_ticks, bpm, sample_rate).max(1) as usize;
+        let release = (params.release.max(0.0) * sample_rate as f32) as usize;
+        let end = (start + dur + release).min(buffer.len());
         let mut note_buffer = vec![0.0f32; end - start];
-        render_note(
-            &params,
-            freq,
-            note.velocity,
-            sample_rate as f32,
-            &mut note_buffer,
-        );
+        if is_percussion {
+            if let Some(kind) = drum_kind_for_pitch(note.pitch) {
+                // Real drum synthesis (kick pitch-sweep, snare/hay noise).
+                render_drum_note(kind, note.velocity, sample_rate as f32, &mut note_buffer);
+            } else {
+                let freq = midi_to_frequency(note.pitch);
+                render_note(
+                    &params,
+                    freq,
+                    note.velocity,
+                    sample_rate as f32,
+                    dur.min(note_buffer.len()),
+                    &mut note_buffer,
+                );
+            }
+        } else {
+            let freq = midi_to_frequency(note.pitch);
+            render_note(
+                &params,
+                freq,
+                note.velocity,
+                sample_rate as f32,
+                dur.min(note_buffer.len()),
+                &mut note_buffer,
+            );
+        }
         for (i, sample) in note_buffer.iter().enumerate() {
             buffer[start + i] += sample;
         }
@@ -366,6 +517,148 @@ pub fn waveform_for_instrument(instrument: &str) -> Waveform {
         "drums" | "percussion" => Waveform::Sine,
         _ => Waveform::Saw,
     }
+}
+
+/// Map a layer instrument name to its voice family (normalizes suffixes like
+/// `bass_synth`, `drum_sampler`, `lead_synth` down to the family).
+fn instrument_family(instrument: &str) -> &str {
+    let lower = instrument.to_lowercase();
+    if lower.contains("drum") || lower.contains("perc") || lower.contains("sampler") {
+        "drums"
+    } else if lower.contains("bass") {
+        "bass"
+    } else if lower.contains("lead") || lower.contains("pluck") || lower.contains("arp") {
+        "lead"
+    } else if lower.contains("pad") || lower.contains("string") || lower.contains("key") {
+        "pad"
+    } else {
+        "synth"
+    }
+}
+
+/// Whether an instrument renders through the GM drum synthesizer.
+#[must_use]
+pub fn is_percussion_instrument(instrument: &str) -> bool {
+    instrument_family(instrument) == "drums"
+}
+
+/// Synth parameters for a layer instrument (per-family timbre).
+///
+/// These are the timbres the first listen test was missing: bass gets a
+/// driving filtered saw, lead a plucky square, pad a slow-attack triangle,
+/// and percussion its own short body (drums bypass the pitched oscillator).
+#[must_use]
+pub fn voice_params_for_instrument(instrument: &str) -> SynthParams {
+    match instrument_family(instrument) {
+        "drums" => SynthParams {
+            waveform: Waveform::Sine,
+            filter_cutoff: 0.6,
+            filter_resonance: 0.1,
+            attack: 0.002,
+            decay: 0.1,
+            sustain: 0.2,
+            release: 0.05,
+        },
+        "bass" => SynthParams {
+            waveform: Waveform::Saw,
+            filter_cutoff: 0.4,
+            filter_resonance: 0.3,
+            attack: 0.01,
+            decay: 0.1,
+            sustain: 0.8,
+            release: 0.15,
+        },
+        "lead" => SynthParams {
+            waveform: Waveform::Square,
+            filter_cutoff: 0.55,
+            filter_resonance: 0.25,
+            attack: 0.005,
+            decay: 0.08,
+            sustain: 0.6,
+            release: 0.15,
+        },
+        "pad" => SynthParams {
+            waveform: Waveform::Triangle,
+            filter_cutoff: 0.35,
+            filter_resonance: 0.2,
+            attack: 0.4,
+            decay: 0.2,
+            sustain: 0.8,
+            release: 0.5,
+        },
+        _ => SynthParams {
+            waveform: Waveform::Saw,
+            filter_cutoff: 0.5,
+            filter_resonance: 0.2,
+            attack: 0.01,
+            decay: 0.1,
+            sustain: 0.7,
+            release: 0.2,
+        },
+    }
+}
+
+/// Build the voice table for a set of `(layer name, instrument)` pairs.
+///
+/// Callers gather the pairs from the arrangement so every layer gets an
+/// explicit timbre (previously the render path passed an empty voice table
+/// and every layer fell back to the same default saw).
+#[must_use]
+pub fn build_voices(layers: &[(&str, &str)]) -> Vec<RenderVoice> {
+    layers
+        .iter()
+        .map(|(name, instrument)| RenderVoice {
+            layer_name: name.to_string(),
+            params: voice_params_for_instrument(instrument),
+            is_percussion: is_percussion_instrument(instrument),
+        })
+        .collect()
+}
+
+/// Deterministic per-layer mix gain (gain staging).
+///
+/// Drums sit forward, bass supports, and melodic layers sit slightly behind
+/// so the lead is audible instead of 10 dB under the bass (the first-listen
+/// defect).
+#[must_use]
+pub fn layer_gain(layer_name: &str) -> f32 {
+    let lower = layer_name.to_lowercase();
+    if lower.contains("drum") || lower.contains("perc") {
+        0.9
+    } else if lower.contains("bass") || lower.contains("sub") {
+        0.7
+    } else if lower.contains("lead") || lower.contains("pluck") || lower.contains("arp") {
+        0.65
+    } else if lower.contains("pad") || lower.contains("string") || lower.contains("key") {
+        0.5
+    } else {
+        0.7
+    }
+}
+
+/// Deterministic per-layer pan for stereo renders (mono keeps everything
+/// centered). Doubled layers split left/right for width.
+#[must_use]
+pub fn layer_pan(layer_name: &str) -> f32 {
+    let lower = layer_name.to_lowercase();
+    if lower.contains("octave") {
+        -0.35
+    } else if lower.contains("lead") || lower.contains("pluck") || lower.contains("arp") {
+        0.35
+    } else {
+        0.0
+    }
+}
+
+/// The longest release tail across the voices (in samples), so note tails
+/// are not truncated at the end of the buffer.
+fn release_tail_samples(voices: &[RenderVoice], sample_rate: u32) -> u64 {
+    let default_release = SynthParams::default().release;
+    let max_release = voices
+        .iter()
+        .map(|v| v.params.release)
+        .fold(default_release, f32::max);
+    (max_release * sample_rate as f32) as u64
 }
 
 #[cfg(test)]
@@ -520,5 +813,266 @@ mod tests {
     #[test]
     fn render_stems_rejects_zero_sample_rate() {
         assert!(render_stems(&[], 120, 0, &[]).is_err());
+    }
+
+    #[test]
+    fn stereo_render_produces_two_channel_wav() {
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        let config = RenderConfig {
+            stereo: true,
+            limiter: Some(LimiterConfig::default()),
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let result = render_notes_with_config(&notes, 120, 48_000, &[], &config).unwrap();
+        assert_eq!(result.channels, 2);
+        // WAV fmt chunk channel field is 2 for stereo.
+        assert_eq!(
+            u16::from_le_bytes([result.wav_bytes[22], result.wav_bytes[23]]),
+            2
+        );
+        // Data size covers twice the sample count (L+R interleaved).
+        let data_size = u32::from_le_bytes([
+            result.wav_bytes[40],
+            result.wav_bytes[41],
+            result.wav_bytes[42],
+            result.wav_bytes[43],
+        ]);
+        assert_eq!(data_size % 4, 0, "stereo frames are 4 bytes each");
+    }
+
+    #[test]
+    fn stereo_pan_splits_doubled_lead() {
+        // A centered layer and a panned layer must differ across channels.
+        let notes = vec![
+            RenderNote {
+                pitch: 60,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 0.8,
+                layer_name: "Lead".to_string(),
+            },
+            RenderNote {
+                pitch: 72,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 0.8,
+                layer_name: "Lead Octave".to_string(),
+            },
+        ];
+        let voices = build_voices(&[("Lead", "lead_synth"), ("Lead Octave", "lead_synth")]);
+        let config = RenderConfig {
+            stereo: true,
+            limiter: Some(LimiterConfig::default()),
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let result = render_notes_with_config(&notes, 120, 48_000, &voices, &config).unwrap();
+        assert_eq!(result.channels, 2);
+        // Decode the interleaved i16 frames from the WAV data chunk (offset 44).
+        let data = &result.wav_bytes[44..];
+        let frames = data.len() / 4;
+        let mut left_energy = 0.0f64;
+        let mut right_energy = 0.0f64;
+        for i in 0..frames {
+            let l = i16::from_le_bytes([data[i * 4], data[i * 4 + 1]]) as f64 / 32768.0;
+            let r = i16::from_le_bytes([data[i * 4 + 2], data[i * 4 + 3]]) as f64 / 32768.0;
+            left_energy += l * l;
+            right_energy += r * r;
+        }
+        // Panned layers (lead +0.35, octave −0.35) make the channels differ
+        // while both carry real signal.
+        assert!(
+            left_energy > 0.0 && right_energy > 0.0,
+            "both channels live"
+        );
+        let ratio = (left_energy / right_energy).abs();
+        assert!(
+            (ratio - 1.0).abs() > 0.01,
+            "panning splits the channels (L/R energy ratio {ratio:.3})"
+        );
+    }
+
+    #[test]
+    fn voice_wiring_gives_distinct_timbres() {
+        let bass = build_voices(&[("Bass", "bass_synth")]);
+        let lead = build_voices(&[("Lead", "lead_synth")]);
+        let drums = build_voices(&[("Drums", "drum_sampler")]);
+        assert!(matches!(bass[0].params.waveform, Waveform::Saw));
+        assert!(matches!(lead[0].params.waveform, Waveform::Square));
+        assert!(!bass[0].is_percussion);
+        assert!(
+            drums[0].is_percussion,
+            "drum_sampler routes through drum synth"
+        );
+    }
+
+    #[test]
+    fn mastered_render_never_clips_even_when_mix_overs() {
+        // Three loud simultaneous layers would overs the old 0.8-gain mix;
+        // the limiter must keep the master under full scale.
+        let notes = vec![
+            RenderNote {
+                pitch: 36,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 1.0,
+                layer_name: "Drums".to_string(),
+            },
+            RenderNote {
+                pitch: 38,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 1.0,
+                layer_name: "Drums".to_string(),
+            },
+            RenderNote {
+                pitch: 40,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 1.0,
+                layer_name: "Bass".to_string(),
+            },
+        ];
+        let voices = build_voices(&[("Drums", "drum_sampler"), ("Bass", "bass_synth")]);
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let result = render_notes(&notes, 120, 48_000, &voices).unwrap();
+        assert!(
+            !result.analysis.clipping_detected,
+            "limiter prevents clipping"
+        );
+        assert!(
+            result.analysis.true_peak_dbtp <= -0.4,
+            "true peak {:.2} dBTP within ceiling",
+            result.analysis.true_peak_dbtp
+        );
+        assert!(
+            result.analysis.true_peak_dbtp > -3.0,
+            "render is not silence ({:.2} dBTP)",
+            result.analysis.true_peak_dbtp
+        );
+    }
+
+    #[test]
+    fn lead_stem_is_within_6db_of_bass() {
+        // The first-listen defect: the lead was 10 dB under the bass and
+        // inaudible. With gain staging + timbre the gap must be small.
+        let notes = vec![
+            RenderNote {
+                pitch: 36,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 0.8,
+                layer_name: "Bass".to_string(),
+            },
+            RenderNote {
+                pitch: 72,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 0.8,
+                layer_name: "Lead".to_string(),
+            },
+        ];
+        let voices = build_voices(&[("Bass", "bass_synth"), ("Lead", "lead_synth")]);
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let (stems, _) = render_stems(&notes, 120, 48_000, &voices).unwrap();
+        let bass = stems
+            .iter()
+            .find(|s| s.layer_name == "Bass")
+            .expect("bass stem");
+        let lead = stems
+            .iter()
+            .find(|s| s.layer_name == "Lead")
+            .expect("lead stem");
+        let gap = (bass.analysis.integrated_lufs - lead.analysis.integrated_lufs).abs();
+        assert!(
+            gap < 6.0,
+            "lead must be audible relative to bass (gap {gap:.1} dB)"
+        );
+    }
+
+    #[test]
+    fn stems_are_peak_limited_never_clip() {
+        // Three loud overlapping layers on one layer can sum past full scale;
+        // each exported stem must be limited so no stem hard-clips (the master
+        // was protected but raw stems were not — first-listen defect).
+        let notes = vec![
+            RenderNote {
+                pitch: 36,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 1.0,
+                layer_name: "Bass".to_string(),
+            },
+            RenderNote {
+                pitch: 43,
+                start_tick: u64::from(PPQ) / 2,
+                duration_ticks: u64::from(PPQ),
+                velocity: 1.0,
+                layer_name: "Bass".to_string(),
+            },
+            RenderNote {
+                pitch: 50,
+                start_tick: u64::from(PPQ),
+                duration_ticks: u64::from(PPQ),
+                velocity: 1.0,
+                layer_name: "Bass".to_string(),
+            },
+        ];
+        let voices = build_voices(&[("Bass", "bass_synth")]);
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let (stems, _) = render_stems(&notes, 120, 48_000, &voices).unwrap();
+        assert_eq!(stems.len(), 1);
+        assert!(
+            !stems[0].analysis.clipping_detected,
+            "stem must not clip: {} clipped samples",
+            stems[0].analysis.clipped_sample_count
+        );
+        assert!(
+            stems[0].analysis.true_peak_dbtp <= -0.4,
+            "stem true peak {:.2} dBTP within ceiling",
+            stems[0].analysis.true_peak_dbtp
+        );
+    }
+
+    #[test]
+    fn drum_layer_uses_percussion_synthesis() {
+        // A GM kick (36) on a drum layer must produce a pitch-swept body, not
+        // a sustained saw: compare the first 50 ms against the same pitch on a
+        // non-percussion layer — the drum decays far faster.
+        let drums = build_voices(&[("Drums", "drum_sampler")]);
+        let synthy = build_voices(&[("Drums", "synth")]);
+        let note = RenderNote {
+            pitch: 36,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 1.0,
+            layer_name: "Drums".to_string(),
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let (drum_stems, _) = render_stems(&[note.clone()], 120, 48_000, &drums).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let (tone_stems, _) = render_stems(&[note], 120, 48_000, &synthy).unwrap();
+        // Compare late in the note (250-270 ms): the kick body has decayed
+        // (0.22 s envelope) while the sustained synth tone is still at its
+        // sustain level.
+        let drum_tail = drum_stems[0].samples[12_000..13_000]
+            .iter()
+            .map(|s| s * s)
+            .sum::<f32>()
+            / 1_000.0;
+        let tone_tail = tone_stems[0].samples[12_000..13_000]
+            .iter()
+            .map(|s| s * s)
+            .sum::<f32>()
+            / 1_000.0;
+        assert!(
+            drum_tail < tone_tail * 0.5,
+            "drum decays faster than a sustained tone (drum {drum_tail:.4} vs tone {tone_tail:.4})"
+        );
     }
 }

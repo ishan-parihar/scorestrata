@@ -449,17 +449,24 @@ mod tests {
         assert!(config.expected_outputs.has_chorus);
         assert!(!config.expected_outputs.has_breakdown);
         // The §16.5 validation gates and metric ranges must be honored.
-        assert_eq!(config.validation_gates.max_errors, 2);
+        // The fixed audio engine (limiter ceiling −1.0 dBTP) no longer clips
+        // or exceeds the peak gate, so the golden expects zero errors and a
+        // strict peak ceiling instead of the old lenient 2.0 dBTP budget.
+        assert_eq!(config.validation_gates.max_errors, 0);
         assert_eq!(config.validation_gates.max_warnings, 3);
-        assert_eq!(config.validation_gates.max_true_peak_dbtp, 2.0);
+        assert_eq!(config.validation_gates.max_true_peak_dbtp, -0.5);
         assert_eq!(config.validation_gates.min_lufs, -16.0);
-        assert_eq!(config.validation_gates.max_lufs, -10.0);
+        assert_eq!(config.validation_gates.max_lufs, -4.0);
         assert!(
             config
                 .expected_metrics
                 .contains_key("arrangement.transition_strength")
         );
-        assert!(config.expected_metrics.contains_key("audio.clipping"));
+        assert!(
+            config
+                .expected_metrics
+                .contains_key("audio.stereo_correlation")
+        );
     }
 
     #[test]

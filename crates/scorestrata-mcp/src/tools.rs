@@ -5643,11 +5643,21 @@ pub(crate) fn render_timeline_to_analysis(
     timeline: &scorestrata_compiler::TimelineIR,
     project: &scorestrata_core::domain::Project,
 ) -> Result<scorestrata_audio::render::RenderResult, String> {
-    // Map layer IDs to human-readable names for voice assignment.
+    // Map layer IDs to human-readable names for voice assignment, and gather
+    // each layer's instrument so the render path gets real per-instrument
+    // timbres. (The first-listen defect: an empty voice table rendered every
+    // layer — drums, bass, lead — with the same default saw.)
     let mut layer_names = std::collections::HashMap::new();
+    let mut layer_instruments: Vec<(&str, &str)> = Vec::new();
     for segment in &project.arrangement.segments {
         for layer in &segment.layers {
             layer_names.insert(layer.id.to_string(), layer.name.clone());
+            if !layer_instruments
+                .iter()
+                .any(|(n, _)| *n == layer.name.as_str())
+            {
+                layer_instruments.push((layer.name.as_str(), layer.instrument.as_str()));
+            }
         }
     }
 
@@ -5673,11 +5683,12 @@ pub(crate) fn render_timeline_to_analysis(
         })
         .collect();
 
+    let voices = scorestrata_audio::render::build_voices(&layer_instruments);
     scorestrata_audio::render::render_notes(
         &notes,
         timeline.bpm,
         scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        &[],
+        &voices,
     )
     .map_err(|e| e.to_string())
 }
@@ -6091,11 +6102,21 @@ pub fn render_stems(params: &RenderStemsParams) -> ToolReceipt {
         }
     };
 
-    // Map layer IDs to human-readable names for voice assignment.
+    // Map layer IDs to human-readable names for voice assignment, and gather
+    // each layer's instrument so the render path gets real per-instrument
+    // timbres. (The first-listen defect: an empty voice table rendered every
+    // layer — drums, bass, lead — with the same default saw.)
     let mut layer_names = std::collections::HashMap::new();
+    let mut layer_instruments: Vec<(&str, &str)> = Vec::new();
     for segment in &project.arrangement.segments {
         for layer in &segment.layers {
             layer_names.insert(layer.id.to_string(), layer.name.clone());
+            if !layer_instruments
+                .iter()
+                .any(|(n, _)| *n == layer.name.as_str())
+            {
+                layer_instruments.push((layer.name.as_str(), layer.instrument.as_str()));
+            }
         }
     }
 
@@ -6120,11 +6141,12 @@ pub fn render_stems(params: &RenderStemsParams) -> ToolReceipt {
         })
         .collect();
 
+    let voices = scorestrata_audio::render::build_voices(&layer_instruments);
     match scorestrata_audio::render::render_stems(
         &notes,
         timeline.bpm,
         scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        &[],
+        &voices,
     ) {
         Ok((stems, master)) => {
             let stem_summary = stems
@@ -6258,17 +6280,37 @@ pub fn render_candidate_preview(params: &RenderCandidatePreviewParams) -> ToolRe
         }
     };
 
+    // Voice assignment from the project's layers (instrument → timbre).
+    let mut layer_names = std::collections::HashMap::new();
+    let mut layer_instruments: Vec<(&str, &str)> = Vec::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            layer_names.insert(layer.id.to_string(), layer.name.clone());
+            if !layer_instruments
+                .iter()
+                .any(|(n, _)| *n == layer.name.as_str())
+            {
+                layer_instruments.push((layer.name.as_str(), layer.instrument.as_str()));
+            }
+        }
+    }
+    let voices = scorestrata_audio::render::build_voices(&layer_instruments);
+
     let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
         .events
         .iter()
         .filter_map(|e| match &e.kind {
             scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
+                let layer_name = layer_names
+                    .get(&e.layer_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| e.layer_id.to_string());
                 Some(scorestrata_audio::render::RenderNote {
                     pitch: pitch.0,
                     start_tick: e.tick.0,
                     duration_ticks: crate::patch_ops::next_note_off_duration(&timeline, e),
                     velocity: velocity.as_f32(),
-                    layer_name: e.layer_id.to_string(),
+                    layer_name,
                 })
             }
             _ => None,
@@ -6307,7 +6349,7 @@ pub fn render_candidate_preview(params: &RenderCandidatePreviewParams) -> ToolRe
         &notes,
         timeline.bpm,
         scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        &[],
+        &voices,
     ) {
         Ok((_, master)) => {
             jobs.complete(&job_id, &artifact_uri);
@@ -9221,19 +9263,25 @@ mod tests {
 
     #[test]
     fn l4_emits_audio_diagnostics_on_fixture() {
-        // The melodic-techno fixture renders deterministically with a true peak
-        // above 0 dBTP and detected clipping (verified empirically), so L4 must
-        // surface those as audio-plane diagnostics.
+        // The melodic-techno fixture renders deterministically. With the fixed
+        // engine (limiter ceiling −1.0 dBTP, polyBLEP oscillators, gain
+        // staging) it no longer clips or exceeds the true-peak limit, so L4
+        // must surface the audio plane (narrow-stereo on the mono render) but
+        // must NOT report clipping or a true-peak violation.
         let project = scorestrata_testkit::melodic_techno_project();
         let receipt = run_validation_with_project(&default_params(), &project, 4);
         let codes: Vec<String> = receipt.diagnostics.iter().map(|d| d.code.clone()).collect();
         assert!(
-            codes.iter().any(|c| c == "AUDIO_CLIPPING_DETECTED"),
-            "L4 audio plane must report clipping: {codes:?}"
+            codes.iter().any(|c| c == "AUDIO_NARROW_STEREO"),
+            "L4 audio plane must be active: {codes:?}"
         );
         assert!(
-            codes.iter().any(|c| c == "AUDIO_TRUE_PEAK_EXCEEDED"),
-            "L4 audio plane must report true-peak violation: {codes:?}"
+            !codes.iter().any(|c| c == "AUDIO_CLIPPING_DETECTED"),
+            "fixed engine must not clip: {codes:?}"
+        );
+        assert!(
+            !codes.iter().any(|c| c == "AUDIO_TRUE_PEAK_EXCEEDED"),
+            "fixed engine must respect the −1.0 dBTP ceiling: {codes:?}"
         );
         assert!(
             !codes.iter().any(|c| c == "AUDIO_RENDER_FAILED"),
@@ -9275,28 +9323,41 @@ mod tests {
             receipt
                 .diagnostics
                 .iter()
-                .any(|d| d.code == "AUDIO_CLIPPING_DETECTED"),
+                .any(|d| d.code == "AUDIO_NARROW_STEREO"),
             "dispatcher L4 must emit audio diagnostics"
+        );
+        assert!(
+            !receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "AUDIO_CLIPPING_DETECTED"),
+            "dispatcher L4 must not report clipping on the fixed engine"
         );
     }
 
+    /// A "perfect audio" baseline: every audio hard gate at 1.0.
     fn clean_scorecard_baseline() -> scorestrata_core::diagnostic::Scorecard {
         use scorestrata_core::diagnostic::{MetricSample, MetricScope, Scorecard};
         use scorestrata_core::error::Severity;
         use scorestrata_core::ids::{MetricId, ScorecardId};
+        let gate = |name: &str| MetricSample {
+            id: MetricId::new(),
+            name: name.to_string(),
+            value: 1.0,
+            severity: Severity::Info,
+            scope: MetricScope::default(),
+            evidence_uri: format!("project://baseline/{name}"),
+            explanation: "baseline clean".to_string(),
+            confidence: 1.0,
+            suggested_patches: vec![],
+        };
         Scorecard {
             id: ScorecardId::new(),
-            metrics: vec![MetricSample {
-                id: MetricId::new(),
-                name: "audio.clipping".to_string(),
-                value: 1.0,
-                severity: Severity::Info,
-                scope: MetricScope::default(),
-                evidence_uri: "project://baseline/audio/clipping".to_string(),
-                explanation: "baseline clean".to_string(),
-                confidence: 1.0,
-                suggested_patches: vec![],
-            }],
+            metrics: vec![
+                gate("audio.clipping"),
+                gate("audio.true_peak_dbtp"),
+                gate("audio.integrated_lufs"),
+            ],
             overall_score: 1.0,
             hard_failures: 0,
             warnings: 0,
@@ -9305,17 +9366,48 @@ mod tests {
 
     #[test]
     fn check_regressions_flags_scorecard_regression() {
-        // Baseline says audio.clipping is perfect (1.0). The melodic-techno
-        // fixture deterministically clips, so the current L4 scorecard drops
-        // below — a hard-gate regression.
-        let project = scorestrata_testkit::melodic_techno_project();
-        let params = CheckRegressionsParams {
-            project_id: project.id.to_string(),
+        // Baseline claims perfect audio (all hard gates at 1.0). With the fixed
+        // engine the clean melodic-techno fixture renders within every limit,
+        // so it must NOT be flagged as a regression — while a genuinely
+        // regressed project (silenced layers → loudness collapse) drops
+        // audio.integrated_lufs below the baseline and must be flagged as a
+        // hard-gate regression.
+        let clean = scorestrata_testkit::melodic_techno_project();
+        let clean_params = CheckRegressionsParams {
+            project_id: clean.id.to_string(),
             baseline_scorecard: Some(clean_scorecard_baseline()),
             baseline_checksum: None,
             baseline_integrated_lufs: None,
             baseline_true_peak_dbtp: None,
-            project: Some(serde_json::to_value(&project).expect("project serializes")),
+            project: Some(serde_json::to_value(&clean).expect("project serializes")),
+        };
+        let clean_receipt = check_regressions(&clean_params);
+        assert!(
+            !clean_receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "METRIC_REGRESSION_DETECTED"),
+            "the fixed clean fixture must not be flagged: {:?}",
+            clean_receipt
+                .diagnostics
+                .iter()
+                .map(|d| d.code.clone())
+                .collect::<Vec<_>>()
+        );
+
+        // Silence every layer: the render collapses to near-silence and
+        // audio.integrated_lufs drops from the 1.0 baseline — a hard gate.
+        let mut regressed = clean;
+        for segment in &mut regressed.arrangement.segments {
+            segment.layers.clear();
+        }
+        let params = CheckRegressionsParams {
+            project_id: regressed.id.to_string(),
+            baseline_scorecard: Some(clean_scorecard_baseline()),
+            baseline_checksum: None,
+            baseline_integrated_lufs: None,
+            baseline_true_peak_dbtp: None,
+            project: Some(serde_json::to_value(&regressed).expect("project serializes")),
         };
         let receipt = check_regressions(&params);
         assert!(
@@ -9323,14 +9415,14 @@ mod tests {
                 .diagnostics
                 .iter()
                 .any(|d| d.code == "METRIC_REGRESSION_DETECTED"),
-            "clipping regression must be flagged"
+            "loudness regression must be flagged"
         );
         assert!(
             receipt
                 .diagnostics
                 .iter()
                 .any(|d| d.code == "HARD_GATE_REGRESSION"),
-            "audio.clipping is a hard gate"
+            "audio.integrated_lufs is a hard gate"
         );
         assert_eq!(
             receipt
@@ -9451,7 +9543,12 @@ mod tests {
         // Serialize with the shared registry lock: this test records telemetry
         // and must not race the telemetry module's exact-count assertions.
         let _guard = crate::telemetry::test_lock_guard();
-        let project = scorestrata_testkit::melodic_techno_project();
+        // A genuinely regressed project (silenced layers → loudness collapse)
+        // must be flagged as a metric regression over the dispatcher wire.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        for segment in &mut project.arrangement.segments {
+            segment.layers.clear();
+        }
         let baseline =
             serde_json::to_value(clean_scorecard_baseline()).expect("scorecard serializes");
         let receipt = crate::dispatch::dispatch_tool(
