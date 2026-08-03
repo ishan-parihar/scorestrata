@@ -184,6 +184,76 @@ impl LessonStore {
         self.lessons.get(lesson_id)
     }
 
+    /// Record a lesson or accumulate evidence into an existing matching lesson.
+    ///
+    /// Matching key: `(trigger, scope, genre)` — genre uses strict equality,
+    /// so a genre-agnostic lesson (`None`) and a genre-specific one
+    /// (`Some("techno")`) with the same trigger+scope are distinct lessons;
+    /// queries such as [`LessonStore::get_best_for_trigger`] are lenient by
+    /// contrast and may match either. When a lesson already exists for that
+    /// key, this occurrence merges into it instead of creating a duplicate,
+    /// per §13.5 (lessons earn confidence through repeated experience):
+    /// - `successful_patch: Some(_)` → success occurrence: `success_count`
+    ///   increments and confidence rises by 0.1 (capped at 1.0).
+    /// - non-empty `failed_patches` → failure occurrence: `failure_count`
+    ///   increments, confidence falls by 0.1 (floored at 0.0), and each
+    ///   failed patch is appended to the lesson's `failed_patches`
+    ///   (failure-pattern memory) so the same patch is not tried again.
+    ///
+    /// When no lesson matches the key, the incoming lesson is inserted and the
+    /// creating occurrence counts as its first outcome (success_count or
+    /// failure_count starts at 1); the declared confidence is kept as-is.
+    /// Returns the stored lesson — the existing one after merging, or the
+    /// newly inserted one.
+    pub fn upsert(&mut self, lesson: StoredLesson) -> Option<&StoredLesson> {
+        let id = lesson.id.clone();
+        let trigger = lesson.trigger.clone();
+        let scope = lesson.scope.clone();
+        let genre = lesson.genre.clone();
+
+        let existing_id = self
+            .by_trigger
+            .get(&trigger)
+            .into_iter()
+            .flatten()
+            .filter_map(|candidate_id| self.lessons.get(candidate_id))
+            .find(|existing| existing.scope == scope && existing.genre == genre)
+            .map(|existing| existing.id.clone());
+
+        let Some(existing_id) = existing_id else {
+            let mut lesson = lesson;
+            if lesson.successful_patch.is_some() {
+                lesson.success_count = 1;
+            } else if !lesson.failed_patches.is_empty() {
+                lesson.failure_count = 1;
+            }
+            self.record(lesson);
+            return self.lessons.get(&id);
+        };
+
+        let is_success = lesson.successful_patch.is_some();
+        let is_failure = !lesson.failed_patches.is_empty();
+        if let Some(existing) = self.lessons.get_mut(&existing_id) {
+            if is_success {
+                existing.success_count += 1;
+                existing.confidence = (existing.confidence + 0.1).min(1.0);
+                if existing.successful_patch.is_none() {
+                    existing.successful_patch = lesson.successful_patch;
+                }
+            } else if is_failure {
+                existing.failure_count += 1;
+                existing.confidence = (existing.confidence - 0.1).max(0.0);
+                for patch in lesson.failed_patches {
+                    if !existing.failed_patches.contains(&patch) {
+                        existing.failed_patches.push(patch);
+                    }
+                }
+            }
+            existing.updated_at = chrono::Utc::now().to_rfc3339();
+        }
+        self.lessons.get(&existing_id)
+    }
+
     /// Get the total number of lessons.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -304,6 +374,80 @@ mod tests {
         store.record_outcome(&id, false);
         let lesson = store.get(&id).unwrap();
         assert_eq!(lesson.failure_count, 1);
+    }
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "Test should panic on unexpected error")]
+    fn upsert_creates_new_lesson_when_no_match() {
+        let mut store = LessonStore::new();
+        let lesson = make_lesson("SCALE_VIOLATION", "harmony", Some("melodic_techno"));
+        store.upsert(lesson);
+
+        assert_eq!(store.len(), 1);
+        // The creating occurrence counts as the first outcome.
+        let stored = store
+            .get_best_for_trigger("SCALE_VIOLATION", Some("melodic_techno"))
+            .unwrap();
+        assert_eq!(stored.success_count, 1);
+        assert_eq!(stored.failure_count, 0);
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "Test should panic on unexpected error")]
+    fn upsert_accumulates_confidence_on_repeated_success() {
+        let mut store = LessonStore::new();
+        store.upsert(make_lesson("TRANSITION_ENERGY_LOW", "transition", None));
+        store.upsert(make_lesson("TRANSITION_ENERGY_LOW", "transition", None));
+
+        // Repeated success on the same key merges instead of duplicating.
+        assert_eq!(store.len(), 1);
+        let stored = store
+            .get_best_for_trigger("TRANSITION_ENERGY_LOW", None)
+            .unwrap();
+        assert_eq!(stored.success_count, 2);
+        assert!((stored.confidence - 0.6).abs() < 0.01);
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used, reason = "Test should panic on unexpected error")]
+    fn upsert_records_failure_patterns_and_lowers_confidence() {
+        let mut store = LessonStore::new();
+        store.upsert(make_lesson("TRANSITION_ENERGY_LOW", "transition", None));
+
+        // A failed attempt of the same trigger/scope/genre with a different
+        // patch records the failure pattern and lowers confidence.
+        let mut failure = make_lesson("TRANSITION_ENERGY_LOW", "transition", None);
+        failure.successful_patch = None;
+        failure.failed_patches = vec!["boost_transition_energy".to_string()];
+        store.upsert(failure);
+
+        assert_eq!(store.len(), 1);
+        let stored = store
+            .get_best_for_trigger("TRANSITION_ENERGY_LOW", None)
+            .unwrap();
+        assert_eq!(stored.success_count, 1);
+        assert_eq!(stored.failure_count, 1);
+        assert!(
+            stored
+                .failed_patches
+                .contains(&"boost_transition_energy".to_string())
+        );
+        assert!((stored.confidence - 0.4).abs() < 0.01);
+    }
+
+    #[test]
+    fn upsert_distinguishes_by_genre() {
+        let mut store = LessonStore::new();
+        store.upsert(make_lesson("SCALE_VIOLATION", "harmony", Some("ambient")));
+        store.upsert(make_lesson(
+            "SCALE_VIOLATION",
+            "harmony",
+            Some("melodic_techno"),
+        ));
+
+        // Same trigger + scope but different genre is a different lesson.
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.get_by_genre("ambient").len(), 1);
+        assert_eq!(store.get_by_genre("melodic_techno").len(), 1);
     }
 
     #[test]

@@ -1578,10 +1578,10 @@ fn mvas_step_22_telemetry_measures_dispatched_calls() {
     // immune to parallel pollution — including a failing probe to prove failed
     // dispatches are still measured.
     scorestrata_mcp::telemetry::reset();
-    dispatch_tool("mvas22_probe_a", serde_json::json!({}));
-    dispatch_tool("mvas22_probe_b", serde_json::json!({}));
-    dispatch_tool("mvas22_probe_a", serde_json::json!({}));
-    dispatch_tool("mvas22_failing_probe", serde_json::json!({}));
+    let _ = dispatch_tool("mvas22_probe_a", serde_json::json!({}));
+    let _ = dispatch_tool("mvas22_probe_b", serde_json::json!({}));
+    let _ = dispatch_tool("mvas22_probe_a", serde_json::json!({}));
+    let _ = dispatch_tool("mvas22_failing_probe", serde_json::json!({}));
 
     let receipt = dispatch_tool("get_telemetry", serde_json::json!({}));
     assert_eq!(receipt.tool, "get_telemetry");
@@ -1599,6 +1599,95 @@ fn mvas_step_22_telemetry_measures_dispatched_calls() {
     assert!(snap.total_tool_calls() >= 4);
     assert_eq!(snap.tool_calls.get("mvas22_probe_a"), Some(&2));
     assert_eq!(snap.tool_calls.get("mvas22_failing_probe"), Some(&1));
+}
+
+/// §13.5 Learning loop closes: kernel lessons export into a persistent store,
+/// and repeated wire-level recording of the same diagnostic accumulates
+/// confidence instead of duplicating.
+#[test]
+fn mvas_step_23_learning_loop_accumulates_confidence() {
+    use scorestrata_agent::kernel::{AgentKernel, Candidate, Diagnosis};
+    use scorestrata_agent::lessons::export_lessons_to_store;
+    use scorestrata_mcp::tools::{GetLessonsParams, RecordLessonParams, ToolStatus};
+    use scorestrata_storage::lesson_store::LessonStore;
+
+    // 1. Kernel experience → export → persistent store (the §13.5 bridge).
+    let mut kernel = AgentKernel::new(scorestrata_core::ids::ProjectId::new());
+    let diagnosis = Diagnosis {
+        metric: "scale_violation".to_string(),
+        scope: "harmony".to_string(),
+        current_value: 0.3,
+        target_value: 0.8,
+        severity: 0.7,
+        is_hard_failure: false,
+        evidence_uri: None,
+    };
+    let candidate = Candidate {
+        id: "c1".to_string(),
+        operation: "quantize_to_scale".to_string(),
+        description: "Quantize".to_string(),
+        scope: "harmony".to_string(),
+        diagnosis_metric: "scale_violation".to_string(),
+        estimated_delta: 0.05,
+        is_repair: false,
+        template_id: None,
+    };
+    kernel.l4_learn(&diagnosis, &candidate, 0.1);
+    kernel.l4_learn(&diagnosis, &candidate, 0.1);
+
+    let mut store = LessonStore::new();
+    let exported = export_lessons_to_store(
+        &kernel.lessons_learned,
+        &mut store,
+        Some("melodic_techno"),
+        "proj_1",
+    );
+    assert_eq!(exported, 2);
+    // Both successes merge into one keyed lesson.
+    assert_eq!(store.len(), 1);
+    let lesson = store
+        .get_best_for_trigger("scale_violation", Some("melodic_techno"))
+        .expect("lesson present after export");
+    assert_eq!(lesson.success_count, 2);
+
+    // 2. Wire-level accumulation: recording the same trigger through the MCP
+    //    tool merges into the same lesson and keeps raising confidence.
+    let mut current = serde_json::to_value(&store).expect("store serializes");
+    for _ in 0..2 {
+        let receipt = scorestrata_mcp::tools::record_lesson(&RecordLessonParams {
+            project_id: "proj_1".to_string(),
+            trigger: "scale_violation".to_string(),
+            scope: "harmony".to_string(),
+            successful_patch: Some("quantize_to_scale".to_string()),
+            genre: Some("melodic_techno".to_string()),
+            confidence: 0.6,
+            lesson_store: Some(current.clone()),
+        });
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "record should succeed: {}",
+            receipt.summary
+        );
+        let updated = receipt
+            .evidence_uris
+            .iter()
+            .find_map(|u| u.strip_prefix("memory://lessons/proj_1?store="))
+            .expect("updated store in evidence");
+        current = serde_json::from_str(updated).expect("updated store parses");
+    }
+
+    // 3. Query: one accumulated lesson, retrievable, never duplicated.
+    let query = scorestrata_mcp::tools::get_lessons(&GetLessonsParams {
+        project_id: "proj_1".to_string(),
+        trigger: Some("scale_violation".to_string()),
+        genre: None,
+        min_confidence: 0.5,
+        lesson_store: Some(current),
+    });
+    assert!(matches!(query.status, ToolStatus::Succeeded));
+    assert_eq!(query.score_delta["lessons.matched"], "1");
+    assert_eq!(query.score_delta["lessons.total_in_store"], "1");
+    assert!(query.summary.contains("quantize_to_scale"));
 }
 
 /// Build a full validation report for a project (Level 2 symbolic).

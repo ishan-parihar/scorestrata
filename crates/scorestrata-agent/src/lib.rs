@@ -15,6 +15,7 @@
 #![deny(missing_docs)]
 
 pub mod kernel;
+pub mod lessons;
 pub mod task_board;
 
 // Re-export key types

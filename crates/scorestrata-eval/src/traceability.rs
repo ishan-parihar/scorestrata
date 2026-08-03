@@ -384,11 +384,14 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
         code: vec![
             "scorestrata_storage::lesson_store".to_string(),
             "scorestrata_storage::memory".to_string(),
+            "scorestrata_agent::lessons".to_string(),
+            "scorestrata_agent::kernel".to_string(),
             "scorestrata_mcp::debug_ops".to_string(),
             "scorestrata_mcp::tools".to_string(),
         ],
         tests: vec![
             "lesson_store::tests".to_string(),
+            "lessons::tests".to_string(),
             "memory::tests".to_string(),
             "mvas_simulation".to_string(),
         ],

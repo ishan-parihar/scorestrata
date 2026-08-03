@@ -3314,7 +3314,9 @@ pub fn record_lesson(params: &RecordLessonParams) -> ToolReceipt {
         created_at: now.clone(),
         updated_at: now,
     };
-    store.record(lesson);
+    // Upsert (§13.5): a lesson matching the same (trigger, scope, genre) key
+    // accumulates confidence through repeated success instead of duplicating.
+    store.upsert(lesson);
 
     // Return the updated store so the caller can persist it (MCP adapter
     // owns persistence; the tool is a pure function).
@@ -6811,6 +6813,49 @@ mod tests {
         assert_eq!(receipt.tool, "record_lesson");
         assert_eq!(receipt.score_delta["lessons.total"], "1");
         assert!(receipt.summary.contains("store now has 1 lessons"));
+    }
+
+    #[test]
+    fn record_lesson_same_trigger_accumulates_confidence() {
+        // §13.5: recording the same (trigger, scope, genre) twice must merge
+        // into one lesson with rising confidence, not create a duplicate.
+        let store = scorestrata_storage::lesson_store::LessonStore::new();
+        let mut current = serde_json::to_value(&store).unwrap_or_default();
+
+        for _ in 0..2 {
+            let params = RecordLessonParams {
+                project_id: "proj_1".to_string(),
+                trigger: "TRANSITION_ENERGY_LOW".to_string(),
+                scope: "transition".to_string(),
+                successful_patch: Some("add_transition_package".to_string()),
+                genre: Some("techno".to_string()),
+                confidence: 0.8,
+                lesson_store: Some(current.clone()),
+            };
+            let receipt = record_lesson(&params);
+            assert!(matches!(receipt.status, ToolStatus::Succeeded));
+            // Round-trip the updated store from evidence for the next call.
+            let store_prefix = "memory://lessons/proj_1?store=";
+            let updated = receipt
+                .evidence_uris
+                .iter()
+                .find_map(|u| u.strip_prefix(store_prefix))
+                .expect("updated store in evidence");
+            current = serde_json::from_str(updated).expect("updated store parses");
+        }
+
+        let store: scorestrata_storage::lesson_store::LessonStore =
+            serde_json::from_value(current).expect("store deserializes");
+        assert_eq!(store.len(), 1, "repeated recording must not duplicate");
+        let lesson = store
+            .get_best_for_trigger("TRANSITION_ENERGY_LOW", Some("techno"))
+            .expect("lesson present");
+        assert_eq!(lesson.success_count, 2);
+        assert!(
+            (lesson.confidence - 0.9).abs() < 0.01,
+            "0.8 base + 0.1 from the second occurrence, got {}",
+            lesson.confidence
+        );
     }
 
     #[test]
