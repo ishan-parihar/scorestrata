@@ -1769,6 +1769,56 @@ fn mvas_step_24_timeline_validation_over_the_wire() {
     );
 }
 
+#[test]
+fn mvas_step_25_audio_validation_over_the_wire() {
+    // The L4 audio plane renders the project and analyzes the mix. The
+    // melodic-techno fixture deterministically clips (true peak > 0 dBTP),
+    // so the wire must surface audio diagnostics at level 4 and keep them
+    // hidden below it.
+    let project = scorestrata_testkit::melodic_techno_project();
+
+    let at_l3 = scorestrata_mcp::dispatch::dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 3,
+        }),
+    );
+    assert_eq!(at_l3.tool, "run_validation");
+    assert!(
+        !at_l3
+            .diagnostics
+            .iter()
+            .any(|d| d.code.starts_with("AUDIO_")),
+        "audio plane must stay off below L4"
+    );
+
+    let at_l4 = scorestrata_mcp::dispatch::dispatch_tool(
+        "run_validation",
+        serde_json::json!({
+            "project_id": project.id.to_string(),
+            "project": &project,
+            "level": 4,
+        }),
+    );
+    assert_eq!(at_l4.tool, "run_validation");
+    assert!(
+        at_l4
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "AUDIO_CLIPPING_DETECTED"),
+        "L4 audio plane must report clipping over the wire"
+    );
+    assert!(
+        !at_l4
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "AUDIO_RENDER_FAILED"),
+        "clean fixture must render at L4 without failure"
+    );
+}
+
 /// Build a full validation report for a project (Level 2 symbolic).
 fn build_report(
     project: &scorestrata_core::domain::Project,

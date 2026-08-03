@@ -145,6 +145,9 @@ pub fn run_validation(
 /// - `level >= 3`: timeline plane (§11.2 L3) — unresolved patterns, empty
 ///   required segments, note overlaps, automation range, absolute timing
 ///   (`TIMELINE_*` diagnostics)
+/// - `level >= 4`: audio plane (§11.2 L4) — renders the project and converts
+///   the Level-4 analysis (LUFS, true peak, clipping, …) into `AUDIO_*`
+///   diagnostics
 /// - `level >= 5`: brief-compliance plane (§11.2 L5) against the real brief,
 ///   config, and arrangement (`BRIEF_*` diagnostics)
 ///
@@ -161,6 +164,15 @@ pub fn run_validation_with_project(
         diagnostics.extend(scorestrata_validator::timeline_check::check_timeline(
             project,
         ));
+    }
+
+    if level >= 4 {
+        match render_project_to_analysis(project) {
+            Ok(result) => diagnostics.extend(
+                scorestrata_validator::audio_check::generate_audio_diagnostics(&result.analysis),
+            ),
+            Err(e) => diagnostics.push(audio_render_failed_diagnostic(e)),
+        }
     }
 
     if level >= 5 {
@@ -4939,6 +4951,82 @@ pub struct RenderProjectParams {
     pub segment_id: Option<String>,
 }
 
+/// Render a compiled timeline to audio and produce its Level-4 analysis.
+///
+/// Single source for the event→note→render mapping shared by
+/// [`render_project`] and the L4 validation plane, so the audio path stays
+/// deterministic and consistent everywhere.
+pub(crate) fn render_timeline_to_analysis(
+    timeline: &scorestrata_compiler::TimelineIR,
+    project: &scorestrata_core::domain::Project,
+) -> Result<scorestrata_audio::render::RenderResult, String> {
+    // Map layer IDs to human-readable names for voice assignment.
+    let mut layer_names = std::collections::HashMap::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            layer_names.insert(layer.id.to_string(), layer.name.clone());
+        }
+    }
+
+    // Convert timeline events to render notes (layer name from event layer).
+    let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
+                let layer_name = layer_names
+                    .get(&e.layer_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| e.layer_id.to_string());
+                Some(scorestrata_audio::render::RenderNote {
+                    pitch: pitch.0,
+                    start_tick: e.tick.0,
+                    duration_ticks: crate::patch_ops::next_note_off_duration(timeline, e),
+                    velocity: velocity.as_f32(),
+                    layer_name,
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    scorestrata_audio::render::render_notes(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &[],
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Compile and render a whole project to its Level-4 audio analysis.
+///
+/// Convenience wrapper over [`render_timeline_to_analysis`] used by the L4
+/// validation plane; renders the full arrangement.
+pub(crate) fn render_project_to_analysis(
+    project: &scorestrata_core::domain::Project,
+) -> Result<scorestrata_audio::render::RenderResult, String> {
+    let timeline = scorestrata_compiler::compile_project(project).map_err(|e| e.to_string())?;
+    render_timeline_to_analysis(&timeline, project)
+}
+
+/// Build a diagnostic explaining why the Level-4 audio plane could not run.
+fn audio_render_failed_diagnostic(err: String) -> Diagnostic {
+    Diagnostic {
+        id: scorestrata_core::ids::DiagnosticId::new(),
+        code: "AUDIO_RENDER_FAILED".to_string(),
+        metric: "audio.render".to_string(),
+        severity: Severity::Error,
+        message: format!("Level-4 audio render failed: {err}"),
+        scope: scorestrata_core::diagnostic::MetricScope::default(),
+        evidence_uris: vec!["project://audio/render".to_string()],
+        root_causes: vec!["project could not be compiled or rendered".to_string()],
+        suggested_patches: vec![],
+        expected_delta: None,
+        confidence: 1.0,
+    }
+}
+
 fn default_render_mode() -> String {
     "master".to_string()
 }
@@ -5031,42 +5119,7 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
         };
     };
 
-    // Map layer IDs to human-readable names for voice assignment.
-    let mut layer_names = std::collections::HashMap::new();
-    for segment in &project.arrangement.segments {
-        for layer in &segment.layers {
-            layer_names.insert(layer.id.to_string(), layer.name.clone());
-        }
-    }
-
-    // Convert timeline events to render notes (layer name from event layer).
-    let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
-        .events
-        .iter()
-        .filter_map(|e| match &e.kind {
-            scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
-                let layer_name = layer_names
-                    .get(&e.layer_id.to_string())
-                    .cloned()
-                    .unwrap_or_else(|| e.layer_id.to_string());
-                Some(scorestrata_audio::render::RenderNote {
-                    pitch: pitch.0,
-                    start_tick: e.tick.0,
-                    duration_ticks: crate::patch_ops::next_note_off_duration(&timeline, e),
-                    velocity: velocity.as_f32(),
-                    layer_name,
-                })
-            }
-            _ => None,
-        })
-        .collect();
-
-    match scorestrata_audio::render::render_notes(
-        &notes,
-        timeline.bpm,
-        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        &[],
-    ) {
+    match render_timeline_to_analysis(&timeline, &project) {
         Ok(result) => {
             // Level-4 audio validation: surface LUFS / true peak / clipping
             // diagnostics on the receipt so the agent loop can react to mix
@@ -7784,6 +7837,64 @@ mod tests {
             receipt.summary.contains("Cannot cancel"),
             "terminal job must refuse cancellation: {}",
             receipt.summary
+        );
+    }
+
+    #[test]
+    fn l4_emits_audio_diagnostics_on_fixture() {
+        // The melodic-techno fixture renders deterministically with a true peak
+        // above 0 dBTP and detected clipping (verified empirically), so L4 must
+        // surface those as audio-plane diagnostics.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let receipt = run_validation_with_project(&default_params(), &project, 4);
+        let codes: Vec<String> = receipt.diagnostics.iter().map(|d| d.code.clone()).collect();
+        assert!(
+            codes.iter().any(|c| c == "AUDIO_CLIPPING_DETECTED"),
+            "L4 audio plane must report clipping: {codes:?}"
+        );
+        assert!(
+            codes.iter().any(|c| c == "AUDIO_TRUE_PEAK_EXCEEDED"),
+            "L4 audio plane must report true-peak violation: {codes:?}"
+        );
+        assert!(
+            !codes.iter().any(|c| c == "AUDIO_RENDER_FAILED"),
+            "clean fixture must render without failure: {codes:?}"
+        );
+    }
+
+    #[test]
+    fn l4_gated_off_below_level_four() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        for level in [2, 3] {
+            let receipt = run_validation_with_project(&default_params(), &project, level);
+            assert!(
+                !receipt
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code.starts_with("AUDIO_")),
+                "audio plane must stay off below L4 (level {level})"
+            );
+        }
+    }
+
+    #[test]
+    fn dispatcher_l4_emits_audio_diagnostics() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let receipt = crate::dispatch::dispatch_tool(
+            "run_validation",
+            serde_json::json!({
+                "project_id": project.id.to_string(),
+                "project": project,
+                "level": 4,
+            }),
+        );
+        assert_eq!(receipt.tool, "run_validation");
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "AUDIO_CLIPPING_DETECTED"),
+            "dispatcher L4 must emit audio diagnostics"
         );
     }
 }
