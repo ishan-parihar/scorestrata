@@ -75,6 +75,7 @@ fn valid_segment() -> Segment {
             name: "Drums".to_string(),
             instrument: "drum_sampler".to_string(),
             pattern_instances: Vec::new(),
+            register: None,
         }],
     }
 }

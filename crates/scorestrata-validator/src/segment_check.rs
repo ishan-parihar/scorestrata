@@ -136,6 +136,7 @@ mod tests {
                 name: "drums".to_string(),
                 instrument: "drum_sampler".to_string(),
                 pattern_instances: Vec::new(),
+                register: None,
             }],
         };
         assert!(check_segment_has_layers(&segment).is_none());

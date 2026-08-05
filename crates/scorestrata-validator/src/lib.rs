@@ -9,6 +9,7 @@ pub mod audio_check;
 pub mod brief_check;
 pub mod chord_check;
 pub mod density;
+pub mod register_check;
 pub mod regression_check;
 pub mod report;
 pub mod scale_check;

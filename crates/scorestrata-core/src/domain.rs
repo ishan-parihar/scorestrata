@@ -285,6 +285,60 @@ pub struct Layer {
     /// Pattern instances placed in this layer.
     #[serde(default)]
     pub pattern_instances: Vec<PatternInstance>,
+    /// Declared octave register (G2) — the range this layer is expected to
+    /// occupy. The compiler clamps and the validator flags notes outside it,
+    /// enforcing the production-grade register discipline (bass 1–2, chords
+    /// 3–5, lead 5–7, …). `None` = no constraint (legacy layers).
+    #[serde(default)]
+    pub register: Option<Register>,
+}
+
+/// An octave register — the vertical band a layer occupies on the timeline.
+///
+/// Encodes the DAW convention of keeping instruments in separate registers so
+/// layers don't fight for the same frequency range (sub/bass in octaves 1–2,
+/// chords/pads 3–5, leads 5–7, hats/air 6–8). Octaves follow the MIDI
+/// convention (C4 = middle C).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Register {
+    /// Lowest octave (inclusive).
+    pub min_octave: i8,
+    /// Highest octave (inclusive).
+    pub max_octave: i8,
+}
+
+impl Register {
+    /// Create a register, normalizing an inverted range.
+    #[must_use]
+    pub fn new(min_octave: i8, max_octave: i8) -> Self {
+        Self {
+            min_octave: min_octave.min(max_octave),
+            max_octave: max_octave.max(min_octave),
+        }
+    }
+
+    /// Whether a MIDI note falls inside this register.
+    #[must_use]
+    pub fn contains_note(&self, pitch: MidiNote) -> bool {
+        let octave = pitch.octave();
+        octave >= self.min_octave && octave <= self.max_octave
+    }
+
+    /// Clamp a MIDI note into this register (moves it to the nearest octave
+    /// boundary while keeping the pitch class).
+    #[must_use]
+    pub fn clamp_note(&self, pitch: MidiNote) -> MidiNote {
+        let octave = pitch.octave();
+        if octave < self.min_octave {
+            let lift = 12 * u8::try_from(self.min_octave - octave).unwrap_or(0);
+            MidiNote::new(pitch.0.saturating_add(lift))
+        } else if octave > self.max_octave {
+            let drop = 12 * u8::try_from(octave - self.max_octave).unwrap_or(0);
+            MidiNote::new(pitch.0.saturating_sub(drop))
+        } else {
+            pitch
+        }
+    }
 }
 
 /// A reference to a pattern placed in a specific time position.

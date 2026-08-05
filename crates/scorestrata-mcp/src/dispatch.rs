@@ -19,20 +19,21 @@ use std::collections::BTreeMap;
 use crate::tools::{
     AddDrumFillParams, AddTransitionParams, ApplyMotivicVariationParams, ApplyPatchParams,
     ApproveConfigParams, CancelRenderJobParams, CandidateDiffParams, CheckBudgetParams,
-    CheckRegressionsParams, ClaimTaskParams, CompareCandidatesParams, CreateAdrParams,
-    CreateHumanReviewPacketParams, CreatePatternParams, CreateProjectParams, DryRunPatchParams,
-    ExplainMetricParams, GenerateConfigParams, GetAuditSummaryParams, GetCommandTraceParams,
-    GetEvalReportParams, GetFailureReportParams, GetLessonsParams, GetMetricEvidenceParams,
-    GetNextTaskParams, GetPolicyProfileParams, GetProjectSummaryParams, GetRenderJobParams,
-    GetRenderManifestParams, GetRepairTemplatesParams, GetRootCausesParams, GetTimelineViewParams,
-    GetValidationReportParams, HarmonizeMelodyParams, IncreaseSegmentDensityParams,
-    IsolateLayerParams, NormalizeLoudnessTargetParams, PlacePatternInSegmentParams,
-    PlanArrangementParams, QuantizeLayerParams, RecordLessonParams, ReduceMaskingParams,
-    RenderCandidatePreviewParams, RenderProjectParams, RenderSegmentParams, RenderStemsParams,
-    RunAcceptanceTestsParams, RunValidationParams, SetEnergyCurveParams, SetLayerInstrumentParams,
-    SetSegmentGoalsParams, SnapshotDiffParams, SoloSegmentParams, SubmitTaskResultParams,
-    SuggestFixesParams, ToolCost, ToolReceipt, ToolStatus, UpdateCalibrationProfileParams,
-    UpdateDocsParams, ValidateConfigParams, WritePatternNotesParams, WritePatternStepsParams,
+    CheckRegressionsParams, ClaimTaskParams, ClonePatternTransposedParams, CompareCandidatesParams,
+    CreateAdrParams, CreateHumanReviewPacketParams, CreatePatternParams, CreateProjectParams,
+    DryRunPatchParams, ExplainMetricParams, GenerateConfigParams, GetAuditSummaryParams,
+    GetCommandTraceParams, GetEvalReportParams, GetFailureReportParams, GetLessonsParams,
+    GetMetricEvidenceParams, GetNextTaskParams, GetPolicyProfileParams, GetProjectSummaryParams,
+    GetRenderJobParams, GetRenderManifestParams, GetRepairTemplatesParams, GetRootCausesParams,
+    GetTimelineViewParams, GetValidationReportParams, HarmonizeMelodyParams,
+    IncreaseSegmentDensityParams, IsolateLayerParams, NormalizeLoudnessTargetParams,
+    PlacePatternInSegmentParams, PlanArrangementParams, QuantizeLayerParams, RecordLessonParams,
+    ReduceMaskingParams, RenderCandidatePreviewParams, RenderProjectParams, RenderSegmentParams,
+    RenderStemsParams, RepeatPatternInSegmentParams, RunAcceptanceTestsParams, RunValidationParams,
+    SetEnergyCurveParams, SetLayerInstrumentParams, SetLayerRegisterParams, SetSegmentGoalsParams,
+    SnapshotDiffParams, SoloSegmentParams, SubmitTaskResultParams, SuggestFixesParams, ToolCost,
+    ToolReceipt, ToolStatus, UpdateCalibrationProfileParams, UpdateDocsParams,
+    ValidateConfigParams, WritePatternNotesParams, WritePatternStepsParams,
 };
 
 /// Deserialize `params` into `$ty` and forward to `$func`, mapping any
@@ -371,6 +372,30 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 params,
                 GetTimelineViewParams,
                 crate::tools::get_timeline_view
+            )
+        }
+        "set_layer_register" => {
+            route!(
+                tool_name,
+                params,
+                SetLayerRegisterParams,
+                crate::tools::set_layer_register
+            )
+        }
+        "repeat_pattern_in_segment" => {
+            route!(
+                tool_name,
+                params,
+                RepeatPatternInSegmentParams,
+                crate::tools::repeat_pattern_in_segment
+            )
+        }
+        "clone_pattern_transposed" => {
+            route!(
+                tool_name,
+                params,
+                ClonePatternTransposedParams,
+                crate::tools::clone_pattern_transposed
             )
         }
         "solo_segment" => {

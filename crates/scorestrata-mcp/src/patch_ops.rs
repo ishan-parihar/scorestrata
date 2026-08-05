@@ -497,6 +497,7 @@ fn apply_add_segment_layer(params: &ApplyPatchParams, project: &mut Project) -> 
         name: format!("layer_{}", segment.layers.len()),
         instrument: "synth".to_string(),
         pattern_instances: Vec::new(),
+        register: None,
     });
 
     let mut score_delta = BTreeMap::new();
@@ -711,6 +712,7 @@ mod tests {
                 transpose: 0,
                 velocity_multiplier: 1.0,
             }],
+            register: None,
         };
 
         Project {

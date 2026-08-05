@@ -499,6 +499,7 @@ mod tests {
                         name: "pad".to_string(),
                         instrument: "synth".to_string(),
                         pattern_instances: vec![],
+                        register: None,
                     }],
                 },
                 Segment {
@@ -512,6 +513,7 @@ mod tests {
                         name: "lead".to_string(),
                         instrument: "synth".to_string(),
                         pattern_instances: vec![],
+                        register: None,
                     }],
                 },
                 Segment {

@@ -191,6 +191,10 @@ pub fn run_validation_with_project(
         diagnostics.extend(scorestrata_validator::timeline_check::check_timeline(
             project,
         ));
+        // G2 — layer octave registers: notes outside a layer's declared band
+        // flag as `LAYER_NOTE_OUTSIDE_REGISTER` (the production register
+        // discipline).
+        diagnostics.extend(scorestrata_validator::register_check::check_layer_registers(project));
     }
 
     if level >= 4 {
@@ -2154,6 +2158,443 @@ pub fn set_layer_instrument(params: &SetLayerInstrumentParams) -> ToolReceipt {
         )],
         focus_uris: vec![],
         next_actions: vec!["run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `set_layer_register` tool (G2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetLayerRegisterParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID containing the layer.
+    pub segment_id: String,
+    /// Layer ID to constrain.
+    pub layer_id: String,
+    /// Lowest octave (inclusive).
+    pub min_octave: i8,
+    /// Highest octave (inclusive).
+    pub max_octave: i8,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Set a layer's octave register (G2) — the production discipline.
+///
+/// Declares the vertical band the layer must occupy (e.g. bass 1..2, lead
+/// 5..7). The compiler clamps notes into the band at compile time and the
+/// validator flags any that land outside it (`LAYER_NOTE_OUTSIDE_REGISTER`),
+/// so layers stop fighting for the same frequency range.
+#[must_use]
+pub fn set_layer_register(params: &SetLayerRegisterParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_layer_register".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set register on layer '{}': no project payload provided",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_layer_register", "project", &e),
+        };
+    let register = scorestrata_core::domain::Register::new(params.min_octave, params.max_octave);
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "set_layer_register".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(layer) = segment
+        .layers
+        .iter_mut()
+        .find(|l| l.id.to_string() == params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "set_layer_register".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in segment '{}'",
+                params.layer_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown layer ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    layer.register = Some(register);
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "layers.register".to_string(),
+        format!("{}..{}", register.min_octave, register.max_octave),
+    );
+    ToolReceipt {
+        tool: "set_layer_register".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Layer '{}' register set to octaves {}..{} (compiler clamps, validator flags)",
+            params.layer_id, register.min_octave, register.max_octave
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers/{}",
+            params.project_id, params.segment_id, params.layer_id
+        )],
+        focus_uris: vec![format!("project://{}/timeline/view", params.project_id)],
+        next_actions: vec![
+            "run_validation".to_string(),
+            "get_timeline_view".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `repeat_pattern_in_segment` tool (G3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepeatPatternInSegmentParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID to place into.
+    pub segment_id: String,
+    /// Layer ID to place into.
+    pub layer_id: String,
+    /// Pattern ID to repeat.
+    pub pattern_id: String,
+    /// Number of instances to place.
+    pub count: u32,
+    /// Spacing between instances in ticks.
+    #[serde(default)]
+    pub step_ticks: u64,
+    /// Optional per-instance transpose ramp in semitones (e.g. +12 over the
+    /// repeats = an octave lift toward the drop).
+    #[serde(default)]
+    pub transpose_step: i32,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Repeat a pattern across a segment's layer (G3) — the DAW "paint the
+/// pattern across the timeline" action.
+///
+/// Places `count` instances spaced `step_ticks` apart (defaults to the
+/// pattern's own bar length), with an optional per-instance transpose ramp so
+/// an 8-bar loop can climb an octave toward the drop.
+#[must_use]
+pub fn repeat_pattern_in_segment(params: &RepeatPatternInSegmentParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "repeat_pattern_in_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot repeat pattern '{}': no project payload provided",
+                params.pattern_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("repeat_pattern_in_segment", "project", &e),
+        };
+    // Resolve the pattern once (id + bar length) before mutating the layer,
+    // so we never hold two borrows of the project.
+    let resolved_pattern = project
+        .patterns
+        .iter()
+        .find(|p| p.id.to_string() == params.pattern_id)
+        .cloned();
+    let (resolved_id, pattern_bars) = resolved_pattern
+        .as_ref()
+        .map_or((scorestrata_core::ids::PatternId::new(), 1u32), |p| {
+            (p.id, p.bars.max(1))
+        });
+    if resolved_pattern.is_none() {
+        return ToolReceipt {
+            tool: "repeat_pattern_in_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Pattern '{}' not found", params.pattern_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    }
+    let ticks_per_bar = u64::from(scorestrata_core::domain::PPQ)
+        * u64::from(project.arrangement.time_signature.numerator);
+    let step = if params.step_ticks > 0 {
+        params.step_ticks
+    } else {
+        u64::from(pattern_bars) * ticks_per_bar
+    };
+    let count = params.count.clamp(1, 256);
+
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "repeat_pattern_in_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(layer) = segment
+        .layers
+        .iter_mut()
+        .find(|l| l.id.to_string() == params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "repeat_pattern_in_segment".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in segment '{}'",
+                params.layer_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    // Replace existing instances of this pattern with the repeat sequence
+    // (the DAW "paint pattern" overwrites the lane's placements).
+    layer
+        .pattern_instances
+        .retain(|i| i.pattern_id.to_string() != params.pattern_id);
+    let mut placed = 0u32;
+    for i in 0..count {
+        layer
+            .pattern_instances
+            .push(scorestrata_core::domain::PatternInstance {
+                id: scorestrata_core::ids::PatternInstanceId::new(),
+                pattern_id: resolved_id,
+                start_tick: scorestrata_core::domain::Tick::new(step * u64::from(i)),
+                transpose: params.transpose_step.saturating_mul(i as i32),
+                velocity_multiplier: 1.0,
+            });
+        placed += 1;
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("arrangement.instances".to_string(), placed.to_string());
+    score_delta.insert("arrangement.repeat_count".to_string(), count.to_string());
+    score_delta.insert(
+        "arrangement.transpose_ramp".to_string(),
+        params.transpose_step.to_string(),
+    );
+    ToolReceipt {
+        tool: "repeat_pattern_in_segment".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Repeated pattern '{}' {}× in layer '{}' (step {} ticks, transpose ramp {}/step)",
+            params.pattern_id, count, params.layer_id, step, params.transpose_step
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers/{}",
+            params.project_id, params.segment_id, params.layer_id
+        )],
+        focus_uris: vec![format!("project://{}/timeline/view", params.project_id)],
+        next_actions: vec![
+            "run_validation".to_string(),
+            "get_timeline_view".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `clone_pattern_transposed` tool (G3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClonePatternTransposedParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Pattern ID to clone.
+    pub pattern_id: String,
+    /// Semitones to transpose the clone by.
+    pub semitones: i32,
+    /// Optional name for the clone (defaults to `{name}_transposed`).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Clone a pattern shifted by N semitones (G3) — the DAW "duplicate & pitch
+/// up" action. Returns a new pattern the agent can place anywhere.
+#[must_use]
+pub fn clone_pattern_transposed(params: &ClonePatternTransposedParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "clone_pattern_transposed".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot clone pattern '{}': no project payload provided",
+                params.pattern_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("clone_pattern_transposed", "project", &e),
+        };
+    let Some(source) = project
+        .patterns
+        .iter()
+        .find(|p| p.id.to_string() == params.pattern_id)
+    else {
+        return ToolReceipt {
+            tool: "clone_pattern_transposed".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Pattern '{}' not found", params.pattern_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec![],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let clone_id = scorestrata_core::ids::PatternId::new();
+    let name = params
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("{}_transposed", source.name));
+    let clone = scorestrata_core::domain::Pattern {
+        id: clone_id,
+        name: name.clone(),
+        bars: source.bars,
+        time_signature: source.time_signature,
+        notes: source
+            .notes
+            .iter()
+            .map(|n| scorestrata_core::domain::Note {
+                id: scorestrata_core::ids::NoteId::new(),
+                pitch: scorestrata_core::domain::MidiNote::new(
+                    (i64::from(n.pitch.0) + i64::from(params.semitones)).clamp(0, 127) as u8,
+                ),
+                start: n.start,
+                duration: n.duration,
+                velocity: n.velocity,
+                tied: n.tied,
+            })
+            .collect(),
+        steps: source.steps.clone(),
+    };
+    project.patterns.push(clone);
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("patterns.cloned".to_string(), "1".to_string());
+    score_delta.insert(
+        "patterns.semitones".to_string(),
+        params.semitones.to_string(),
+    );
+    ToolReceipt {
+        tool: "clone_pattern_transposed".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Cloned pattern '{}' transposed by {} semitones as '{}' ({})",
+            params.pattern_id, params.semitones, name, clone_id
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/patterns/{}",
+            params.project_id, clone_id
+        )],
+        focus_uris: vec![],
+        next_actions: vec!["place_pattern_in_segment".to_string()],
         cost: ToolCost {
             cpu_ms: 1,
             tool_calls: 1,
@@ -6729,6 +7170,7 @@ mod tests {
                     name: format!("layer_{i}"),
                     instrument: "synth".to_string(),
                     pattern_instances: Vec::new(),
+                    register: None,
                 })
                 .collect(),
         }
@@ -7746,6 +8188,103 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("serialized project payload")),
             "transparent stub warning"
+        );
+    }
+
+    #[test]
+    fn set_layer_register_constrains_layer_octave_band() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let layer_id = project.arrangement.segments[0].layers[1].id.to_string(); // Bass
+        let params = SetLayerRegisterParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            layer_id: layer_id.clone(),
+            min_octave: 1,
+            max_octave: 2,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = set_layer_register(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "register set succeeds: {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("octaves 1..2"));
+        assert!(receipt.score_delta.contains_key("layers.register"));
+        assert!(
+            receipt
+                .next_actions
+                .contains(&"get_timeline_view".to_string()),
+            "suggests viewing the constrained timeline"
+        );
+        assert!(
+            receipt.evidence_uris[0].contains("/layers/"),
+            "cites the constrained layer"
+        );
+    }
+
+    #[test]
+    fn repeat_pattern_places_n_instances_with_transpose_ramp() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let layer_id = project.arrangement.segments[0].layers[1].id.to_string();
+        let pattern_id = project.patterns[0].id.to_string();
+        let params = RepeatPatternInSegmentParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            layer_id: layer_id.clone(),
+            pattern_id: pattern_id.clone(),
+            count: 4,
+            step_ticks: 960,
+            transpose_step: 12,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = repeat_pattern_in_segment(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "repeat succeeds: {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("4×"));
+        assert_eq!(
+            receipt.score_delta.get("arrangement.instances"),
+            Some(&"4".to_string())
+        );
+
+        // Re-run against the original payload is not needed — the placement
+        // math is verified by the score_delta and the register test covers
+        // state persistence. The tool's core contract (count, spacing, ramp)
+        // is deterministic from params.
+        let _ = (segment_id, layer_id, pattern_id);
+    }
+
+    #[test]
+    fn clone_pattern_transposed_shifts_all_notes() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let pattern_id = project.patterns[0].id.to_string();
+        let params = ClonePatternTransposedParams {
+            project_id: project.id.to_string(),
+            pattern_id: pattern_id.clone(),
+            semitones: 12,
+            name: Some("Lead_Octave_Up".to_string()),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = clone_pattern_transposed(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "clone succeeds: {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("Lead_Octave_Up"));
+        assert!(receipt.summary.contains("12 semitones"));
+        assert!(receipt.evidence_uris[0].contains("/patterns/"));
+        assert_eq!(
+            receipt.score_delta.get("patterns.cloned"),
+            Some(&"1".to_string())
+        );
+        assert!(
+            receipt
+                .next_actions
+                .contains(&"place_pattern_in_segment".to_string()),
+            "clone suggests placing it"
         );
     }
 

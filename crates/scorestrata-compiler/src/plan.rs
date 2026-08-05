@@ -11,7 +11,7 @@
 
 use scorestrata_core::domain::{
     Arrangement, Duration, Layer, MidiNote, Note, PPQ, Pattern, PatternInstance, ProjectConfig,
-    Segment, SegmentRole, Step, Tick, TimeSignature, Velocity,
+    Register, Segment, SegmentRole, Step, Tick, TimeSignature, Velocity,
 };
 use scorestrata_core::ids::{LayerId, NoteId, PatternId, PatternInstanceId, SegmentId, StepId};
 use scorestrata_theory::key::Key;
@@ -879,11 +879,42 @@ fn make_layer(
         })
         .collect();
 
+    // G2 — declare the octave register this layer occupies, derived from the
+    // pattern's real pitch range plus the instance transpose. Percussion has
+    // no register (drums aren't pitched by octave). This becomes the contract
+    // the validator enforces: notes written later outside the register are
+    // clamped or flagged, keeping layers in production-grade octave bands.
+    let register = if instrument == "drum_sampler" {
+        None
+    } else {
+        let (min_pitch, max_pitch) = pattern.notes.iter().fold((127u8, 0u8), |(lo, hi), n| {
+            (lo.min(n.pitch.0), hi.max(n.pitch.0))
+        });
+        if min_pitch > max_pitch {
+            None
+        } else {
+            let semis = transpose;
+            #[expect(
+                clippy::cast_possible_wrap,
+                reason = "MIDI pitches plus bounded transpose stay in safe range"
+            )]
+            let lo = i64::from(min_pitch) + i64::from(semis);
+            #[expect(
+                clippy::cast_possible_wrap,
+                reason = "MIDI pitches plus bounded transpose stay in safe range"
+            )]
+            let hi = i64::from(max_pitch) + i64::from(semis);
+            let oct_of = |midi: i64| (midi.clamp(0, 127) / 12 - 1) as i8;
+            Some(Register::new(oct_of(lo), oct_of(hi)))
+        }
+    };
+
     Layer {
         id: LayerId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
         name: name.to_string(),
         instrument: instrument.to_string(),
         pattern_instances,
+        register,
     }
 }
 

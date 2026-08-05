@@ -820,6 +820,7 @@ mod tests {
             name: "NewPad".to_string(),
             instrument: "pad_synth".to_string(),
             pattern_instances: vec![],
+            register: None,
         });
         let diff = compute_snapshot_diff(&project_a, &project_b);
         assert!(

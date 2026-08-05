@@ -94,7 +94,16 @@ pub fn compile_project(project: &Project) -> Result<TimelineIR, ScorestrataError
                     let abs_tick = segment_start_tick + instance_start + note.start.0;
                     // Note pitch 0-127 plus bounded transpose stays in i64 range;
                     // the clamp makes the narrowing cast provably lossless.
-                    let pitch = (i64::from(note.pitch.0) + transpose).clamp(0, 127) as u8;
+                    let mut pitch = (i64::from(note.pitch.0) + transpose).clamp(0, 127) as u8;
+                    // G2 — enforce the layer's declared octave register: notes
+                    // outside it are clamped into the band so a transposed
+                    // pattern can never spill into a neighboring layer's
+                    // register (the production-grade octave discipline).
+                    if let Some(register) = &layer.register {
+                        pitch = register
+                            .clamp_note(scorestrata_core::domain::MidiNote::new(pitch))
+                            .0;
+                    }
 
                     let track_id = track_id_for_layer(&layer.id);
                     events.push(TimelineEvent {
@@ -307,6 +316,7 @@ mod tests {
                 transpose: 0,
                 velocity_multiplier: 1.0,
             }],
+            register: None,
         };
 
         Project {

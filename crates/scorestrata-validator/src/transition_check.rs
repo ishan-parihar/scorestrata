@@ -156,6 +156,7 @@ mod tests {
                     name: format!("layer_{i}"),
                     instrument: "synth".to_string(),
                     pattern_instances: Vec::new(),
+                    register: None,
                 })
                 .collect(),
         }

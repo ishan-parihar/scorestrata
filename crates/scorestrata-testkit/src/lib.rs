@@ -60,6 +60,7 @@ pub fn minimal_project() -> Project {
                         name: "Drums".to_string(),
                         instrument: "drum_sampler".to_string(),
                         pattern_instances: Vec::new(),
+                        register: None,
                     }],
                 },
                 Segment {
@@ -73,6 +74,7 @@ pub fn minimal_project() -> Project {
                         name: "Drums".to_string(),
                         instrument: "drum_sampler".to_string(),
                         pattern_instances: Vec::new(),
+                        register: None,
                     }],
                 },
             ],
@@ -292,6 +294,7 @@ pub fn eight_bar_loop() -> Project {
                     transpose: 0,
                     velocity_multiplier: 1.0,
                 }],
+                register: None,
             },
             Layer {
                 id: LayerId::new(),
@@ -304,6 +307,7 @@ pub fn eight_bar_loop() -> Project {
                     transpose: 0,
                     velocity_multiplier: 1.0,
                 }],
+                register: None,
             },
             Layer {
                 id: LayerId::new(),
@@ -316,6 +320,7 @@ pub fn eight_bar_loop() -> Project {
                     transpose: 12,
                     velocity_multiplier: 1.0,
                 }],
+                register: None,
             },
         ],
     };
