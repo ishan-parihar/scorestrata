@@ -433,6 +433,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "debug",
         ),
         ("isolate_layer", "read-only", false, "read", "low", "debug"),
+        (
+            "get_timeline_view",
+            "read-only",
+            false,
+            "read",
+            "low",
+            "debug",
+        ),
         ("solo_segment", "read-only", false, "read", "low", "debug"),
         (
             "get_failure_report",

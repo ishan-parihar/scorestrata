@@ -2812,6 +2812,85 @@ pub fn isolate_layer(params: &IsolateLayerParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `get_timeline_view` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTimelineViewParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project (when provided, the view is real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Get the layered timeline view — the agent's "arrange view" (G1).
+///
+/// Returns a compact JSON [`TimelineView`](crate::resources::TimelineView)
+/// in the receipt summary: arrangement sections × layer lanes with note
+/// events, occupied octave registers, and per-layer note counts. This is the
+/// production-pipeline analogue of a DAW's arrangement + piano-roll view.
+#[must_use]
+pub fn get_timeline_view(params: &GetTimelineViewParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "get_timeline_view".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Timeline view requested for project '{}' but no serialized project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "Supply a serialized project payload to compute the timeline view".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("get_timeline_view", "project", &e),
+        };
+    let view = crate::resources::build_timeline_view(&project);
+    let summary = serde_json::to_string(&view).unwrap_or_else(|_| "{}".to_string());
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "timeline.sections".to_string(),
+        view.sections.len().to_string(),
+    );
+    score_delta.insert("timeline.layers".to_string(), view.layers.len().to_string());
+    score_delta.insert(
+        "timeline.total_bars".to_string(),
+        view.total_bars.to_string(),
+    );
+
+    ToolReceipt {
+        tool: "get_timeline_view".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!("timeline_view {summary}"),
+        score_delta,
+        evidence_uris: vec![format!("project://{}/timeline", params.project_id)],
+        focus_uris: vec![format!("project://{}/timeline/view", params.project_id)],
+        next_actions: vec![
+            "get_project_summary".to_string(),
+            "render_project".to_string(),
+            "ss timeline".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 4,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 /// Parameters for `solo_segment` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoloSegmentParams {
@@ -7594,6 +7673,80 @@ mod tests {
         };
         let receipt = isolate_layer(&params);
         assert!(matches!(receipt.status, ToolStatus::Failed));
+    }
+
+    #[test]
+    fn get_timeline_view_reflects_layers_segments_and_octaves() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = GetTimelineViewParams {
+            project_id: project.id.to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = get_timeline_view(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "timeline view should succeed, got {receipt:#?}"
+        );
+        // The summary embeds the compact JSON view for the agent.
+        assert!(
+            receipt.summary.starts_with("timeline_view {"),
+            "summary embeds JSON"
+        );
+        assert!(receipt.summary.contains("\"sections\""));
+        assert!(receipt.summary.contains("\"layers\""));
+        assert!(receipt.score_delta.contains_key("timeline.sections"));
+        assert!(receipt.score_delta.contains_key("timeline.layers"));
+        assert!(
+            receipt
+                .evidence_uris
+                .contains(&format!("project://{}/timeline", project.id)),
+            "timeline evidence uri"
+        );
+
+        // The structured view itself: segments become sections, each layer
+        // becomes a lane with a derived octave register and note rows.
+        let view: crate::resources::TimelineView =
+            serde_json::from_str(&receipt.summary["timeline_view ".len()..]).expect("view JSON");
+        assert_eq!(view.genre, "melodic_techno");
+        assert!(!view.sections.is_empty(), "has arrangement sections");
+        assert!(!view.layers.is_empty(), "has layer lanes");
+        for layer in &view.layers {
+            assert!(
+                layer.min_octave <= layer.max_octave,
+                "octave register is ordered: {}..={}",
+                layer.min_octave,
+                layer.max_octave
+            );
+            assert!(layer.note_count > 0, "lane has notes");
+            assert!(
+                layer.notes.len() <= layer.note_count as usize,
+                "note rows are a sample of the lane"
+            );
+            for note in &layer.notes {
+                assert!(
+                    note.duration_ticks > 0,
+                    "durations are computed from note-offs, got {}",
+                    note.duration_ticks
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn get_timeline_view_without_payload_fails_transparently() {
+        let params = GetTimelineViewParams {
+            project_id: "proj_1".to_string(),
+            project: None,
+        };
+        let receipt = get_timeline_view(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("serialized project payload")),
+            "transparent stub warning"
+        );
     }
 
     #[test]

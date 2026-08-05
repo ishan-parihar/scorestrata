@@ -485,6 +485,181 @@ pub struct TraceabilityEntry {
     pub mcp_tools: Vec<String>,
 }
 
+// ── Timeline View (G1) ──────────────────────────────────────────────
+
+/// A section row in the layered timeline view (arrangement header).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineSection {
+    /// Section name (segment name).
+    pub name: String,
+    /// Section role (intro, build, drop, …).
+    pub role: String,
+    /// Start bar (0-indexed).
+    pub start_bar: u32,
+    /// Duration in bars.
+    pub bars: u32,
+    /// Target energy for this section (0..1), if configured.
+    pub energy: Option<f32>,
+    /// Layer names active in this section.
+    pub layers: Vec<String>,
+}
+
+/// A note row in a layer lane.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineNote {
+    /// Absolute start tick.
+    pub start_tick: u64,
+    /// Bar number the note starts in (0-indexed).
+    pub bar: u32,
+    /// MIDI pitch.
+    pub pitch: u8,
+    /// Pitch name (e.g. `C6`).
+    pub name: String,
+    /// Duration in ticks.
+    pub duration_ticks: u64,
+    /// Velocity (0–127).
+    pub velocity: u8,
+}
+
+/// A layer lane in the timeline view — one instrument's notes over time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineLayer {
+    /// Layer ID.
+    pub layer_id: String,
+    /// Layer name.
+    pub name: String,
+    /// Instrument.
+    pub instrument: String,
+    /// Segment this layer belongs to.
+    pub segment: String,
+    /// Lowest MIDI octave occupied by this layer's notes (derived).
+    pub min_octave: i8,
+    /// Highest MIDI octave occupied by this layer's notes (derived).
+    pub max_octave: i8,
+    /// Total note count.
+    pub note_count: u32,
+    /// Note rows (capped for payload size).
+    pub notes: Vec<TimelineNote>,
+}
+
+/// The layered timeline view — the agent's "arrange view".
+///
+/// Sections (arrangement rows) × layers (piano-roll lanes) with note events,
+/// derived purely from the project + compiled timeline. This is the G1
+/// deliverable that makes the composition *visible* to agents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineView {
+    /// Project ID.
+    pub project_id: String,
+    /// Project name.
+    pub name: String,
+    /// Genre.
+    pub genre: String,
+    /// BPM.
+    pub bpm: u32,
+    /// Key.
+    pub key: String,
+    /// Total bars.
+    pub total_bars: u32,
+    /// Arrangement sections in order.
+    pub sections: Vec<TimelineSection>,
+    /// Layer lanes (one per segment-layer, in arrangement order).
+    pub layers: Vec<TimelineLayer>,
+}
+
+/// Build the layered timeline view from a real project.
+///
+/// Pure derivation (no storage): sections come from the arrangement, lanes
+/// from the compiled timeline's note-on events grouped per segment+layer,
+/// with the occupied octave register computed from the notes themselves.
+#[must_use]
+pub fn build_timeline_view(project: &scorestrata_core::domain::Project) -> TimelineView {
+    use scorestrata_compiler::timeline::EventKind;
+
+    const MAX_NOTES_PER_LAYER: usize = 24;
+    let ppq = scorestrata_core::domain::PPQ as u64;
+    let ts_num = u64::from(project.arrangement.time_signature.numerator);
+    let ticks_per_bar = ppq * ts_num;
+
+    let mut sections = Vec::new();
+    for segment in &project.arrangement.segments {
+        let energy = project
+            .arrangement
+            .energy_curve
+            .iter()
+            .find(|e| e.segment_id == segment.id)
+            .map(|e| e.target_energy);
+        sections.push(TimelineSection {
+            name: segment.name.clone(),
+            role: format!("{:?}", segment.role).to_lowercase(),
+            start_bar: segment.start_bar,
+            bars: segment.bars,
+            energy,
+            layers: segment.layers.iter().map(|l| l.name.clone()).collect(),
+        });
+    }
+
+    // Group note-on events per segment+layer, pairing each with its note-off
+    // (same layer + pitch) to report real durations.
+    let mut lanes: Vec<TimelineLayer> = Vec::new();
+    if let Ok(timeline) = scorestrata_compiler::compile_project(project) {
+        for segment in &project.arrangement.segments {
+            for layer in &segment.layers {
+                let events = timeline.events_for_layer(layer.id);
+                let mut notes: Vec<TimelineNote> = Vec::new();
+                for (i, e) in events.iter().enumerate() {
+                    let EventKind::NoteOn { pitch, velocity } = &e.kind else {
+                        continue;
+                    };
+                    // Next event with the same pitch on this layer (the note-off).
+                    let duration_ticks = events[i + 1..]
+                        .iter()
+                        .find(|next| matches!(&next.kind, EventKind::NoteOff { pitch: p } if p == pitch))
+                        .map_or(0, |off| off.tick.0.saturating_sub(e.tick.0));
+                    notes.push(TimelineNote {
+                        start_tick: e.tick.0,
+                        bar: (e.tick.0 / ticks_per_bar) as u32,
+                        pitch: pitch.0,
+                        name: pitch.name(),
+                        duration_ticks,
+                        velocity: velocity.0,
+                    });
+                }
+                if notes.is_empty() {
+                    continue;
+                }
+                let (min_octave, max_octave) =
+                    notes.iter().fold((i8::MAX, i8::MIN), |(lo, hi), n| {
+                        let oct = n.pitch as i8 / 12 - 1;
+                        (lo.min(oct), hi.max(oct))
+                    });
+                let note_count = notes.len() as u32;
+                lanes.push(TimelineLayer {
+                    layer_id: layer.id.to_string(),
+                    name: layer.name.clone(),
+                    instrument: layer.instrument.clone(),
+                    segment: segment.name.clone(),
+                    min_octave,
+                    max_octave,
+                    note_count,
+                    notes: notes.into_iter().take(MAX_NOTES_PER_LAYER).collect(),
+                });
+            }
+        }
+    }
+
+    TimelineView {
+        project_id: project.id.to_string(),
+        name: project.name.clone(),
+        genre: project.config.genre.clone(),
+        bpm: project.config.bpm,
+        key: project.config.key.clone(),
+        total_bars: project.arrangement.total_bars,
+        sections,
+        layers: lanes,
+    }
+}
+
 // ── Existing Resource Types ──────────────────────────────────────────
 
 /// A project summary resource — high-level state overview.

@@ -73,6 +73,11 @@ enum Commands {
         /// Project path
         path: String,
     },
+    /// Layered timeline view (sections × layers × octave registers)
+    Timeline {
+        /// Project path
+        path: String,
+    },
     /// Export a project to MIDI
     ExportMidi {
         /// Project path
@@ -221,6 +226,7 @@ fn main() -> Result<()> {
         Commands::Validate { path, scope } => handle_validate(&path, &scope)?,
         Commands::Render { path, mode } => handle_render(&path, &mode)?,
         Commands::Analyze { path } => handle_analyze(&path)?,
+        Commands::Timeline { path } => handle_timeline(&path)?,
         Commands::ExportMidi { path, output } => handle_export_midi(&path, output.as_deref())?,
         Commands::Capabilities => handle_capabilities()?,
         Commands::Trace {
@@ -916,6 +922,87 @@ fn handle_analyze(path: &str) -> Result<()> {
     println!(
         "  Waveform:          {}",
         artifact.waveform_path.display().to_string().green()
+    );
+    Ok(())
+}
+
+/// Layered timeline view (G1) — the agent's and operator's "arrange view".
+///
+/// Renders the composition as sections × layer lanes with occupied octave
+/// registers, using the same derivation as the `get_timeline_view` MCP tool.
+fn handle_timeline(path: &str) -> Result<()> {
+    println!("{}", format!("Timeline: {path}").cyan());
+
+    let project_path = Path::new(path);
+    let project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+    let view = scorestrata_mcp::resources::build_timeline_view(&project);
+
+    println!(
+        "{} {} · {} · {} bpm · {} bars · {} sections · {} layer lanes",
+        view.name.bold(),
+        view.genre.cyan(),
+        view.key,
+        view.bpm,
+        view.total_bars,
+        view.sections.len(),
+        view.layers.len()
+    );
+
+    // Section ruler.
+    println!();
+    println!("  {}", "bars:".dimmed());
+    let bar_width = 8usize;
+    let mut ruler = String::from("      ");
+    for bar in (0..view.total_bars).step_by(8) {
+        ruler.push_str(&format!("{bar:<width$}", width = bar_width));
+    }
+    println!("{ruler}");
+    let mut sec_line = String::from("  sec ");
+    for section in &view.sections {
+        sec_line.push_str(&format!("{:<width$}", section.name, width = bar_width));
+    }
+    println!("{}", sec_line.cyan());
+    println!();
+
+    // Per-layer lanes with octave registers.
+    for layer in &view.layers {
+        println!(
+            "  {:<10} [oct {}..{}]  {}  {} notes · {}",
+            layer.name.yellow(),
+            layer.min_octave,
+            layer.max_octave,
+            layer.segment.dimmed(),
+            layer.note_count,
+            layer.instrument.dimmed()
+        );
+    }
+
+    // Note summary per layer (first notes with pitch names).
+    println!();
+    for layer in &view.layers {
+        let sample: Vec<String> = layer
+            .notes
+            .iter()
+            .take(6)
+            .map(|n| format!("{}@{}", n.name, n.bar + 1))
+            .collect();
+        println!(
+            "    {}: {}",
+            layer.name.dimmed(),
+            if sample.is_empty() {
+                "—".to_string()
+            } else {
+                sample.join(", ")
+            }
+        );
+    }
+
+    println!(
+        "\n  {}",
+        "Full JSON: use the get_timeline_view MCP tool (project://{id}/timeline)"
+            .dimmed()
+            .replace("{id}", &view.project_id)
     );
     Ok(())
 }
@@ -1621,6 +1708,15 @@ mod tests {
         match cli.command {
             Commands::Analyze { path } => assert_eq!(path, "my_song"),
             _ => panic!("expected Commands::Analyze"),
+        }
+    }
+
+    #[test]
+    fn parse_timeline_command() {
+        let cli = Cli::try_parse_from(["ss", "timeline", "my_song"]).unwrap();
+        match cli.command {
+            Commands::Timeline { path } => assert_eq!(path, "my_song"),
+            _ => panic!("expected Commands::Timeline"),
         }
     }
 

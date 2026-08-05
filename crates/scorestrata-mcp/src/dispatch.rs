@@ -24,7 +24,7 @@ use crate::tools::{
     ExplainMetricParams, GenerateConfigParams, GetAuditSummaryParams, GetCommandTraceParams,
     GetEvalReportParams, GetFailureReportParams, GetLessonsParams, GetMetricEvidenceParams,
     GetNextTaskParams, GetPolicyProfileParams, GetProjectSummaryParams, GetRenderJobParams,
-    GetRenderManifestParams, GetRepairTemplatesParams, GetRootCausesParams,
+    GetRenderManifestParams, GetRepairTemplatesParams, GetRootCausesParams, GetTimelineViewParams,
     GetValidationReportParams, HarmonizeMelodyParams, IncreaseSegmentDensityParams,
     IsolateLayerParams, NormalizeLoudnessTargetParams, PlacePatternInSegmentParams,
     PlanArrangementParams, QuantizeLayerParams, RecordLessonParams, ReduceMaskingParams,
@@ -363,6 +363,14 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 params,
                 IsolateLayerParams,
                 crate::tools::isolate_layer
+            )
+        }
+        "get_timeline_view" => {
+            route!(
+                tool_name,
+                params,
+                GetTimelineViewParams,
+                crate::tools::get_timeline_view
             )
         }
         "solo_segment" => {
