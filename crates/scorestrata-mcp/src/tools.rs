@@ -5843,6 +5843,30 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
                 format!("{:.1}", result.analysis.integrated_lufs),
             );
 
+            // §2 (audio plan) — the post-generation spectral audit rides on the
+            // receipt as the mix's debug log: spectral centroid, aliasing
+            // proxy, and genre-fingerprint deviation tell the agent loop how
+            // the mix actually sounds, not just how loud it is.
+            let spectral_audit = scorestrata_audio::audit::audit_mono(
+                &result.mono_samples,
+                result.sample_rate,
+                Some(&project.config.genre),
+            );
+            score_delta.insert(
+                "audio.spectral_centroid_hz".to_string(),
+                format!("{:.0}", spectral_audit.spectral_centroid_hz),
+            );
+            score_delta.insert(
+                "audio.aliasing_ratio".to_string(),
+                format!("{:.3}", spectral_audit.aliasing_ratio),
+            );
+            if let Some(dev) = spectral_audit.genre_fingerprint_deviation {
+                score_delta.insert(
+                    "audio.genre_fingerprint_deviation".to_string(),
+                    format!("{:.3}", dev),
+                );
+            }
+
             // §17.2 — every render produces a manifest. The receipt always
             // carries the reproducibility fingerprint; when a manifest store
             // payload is supplied, the full receipt is recorded into it so the
@@ -5944,10 +5968,10 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
                     params.mode
                 ),
                 score_delta,
-                evidence_uris: vec![format!(
-                    "project://{}/render/{}",
-                    params.project_id, params.mode
-                )],
+                evidence_uris: vec![
+                    format!("project://{}/render/{}", params.project_id, params.mode),
+                    format!("project://{}/render/audit", params.project_id),
+                ],
                 focus_uris: vec![],
                 next_actions,
                 cost: ToolCost {

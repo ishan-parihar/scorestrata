@@ -68,6 +68,11 @@ enum Commands {
         #[arg(short, long, default_value = "master")]
         mode: String,
     },
+    /// Post-generation spectral audit of a rendered WAV (debug log for music)
+    Analyze {
+        /// Project path
+        path: String,
+    },
     /// Export a project to MIDI
     ExportMidi {
         /// Project path
@@ -215,6 +220,7 @@ fn main() -> Result<()> {
         Commands::Compile { path } => handle_compile(&path)?,
         Commands::Validate { path, scope } => handle_validate(&path, &scope)?,
         Commands::Render { path, mode } => handle_render(&path, &mode)?,
+        Commands::Analyze { path } => handle_analyze(&path)?,
         Commands::ExportMidi { path, output } => handle_export_midi(&path, output.as_deref())?,
         Commands::Capabilities => handle_capabilities()?,
         Commands::Trace {
@@ -786,6 +792,130 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
     println!(
         "  Output:            {}",
         wav_path.display().to_string().green()
+    );
+    Ok(())
+}
+
+/// Post-generation spectral audit — the "debug log" for rendered music.
+///
+/// Reads the rendered master WAV, computes an STFT-based spectral report
+/// (peak/RMS/DC/clipping, centroid, rolloff, aliasing proxy, band energies)
+/// and, when a genre fingerprint exists, the genre deviation. Writes a text
+/// log plus spectrogram/waveform PNGs into `<project>/render/audit/`.
+fn handle_analyze(path: &str) -> Result<()> {
+    use scorestrata_audio::audit::write_audit_files;
+    use scorestrata_audio::wav::read_wav_file;
+
+    println!("{}", format!("Analyzing: {path}").yellow());
+
+    let project_path = Path::new(path);
+    let project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+
+    // Prefer the rendered master; fall back to the first WAV in render/.
+    let render_dir = project_path.join("render");
+    let master_path = render_dir.join("master.wav");
+    let wav_path = if master_path.exists() {
+        master_path
+    } else {
+        let mut wavs: Vec<PathBuf> = std::fs::read_dir(&render_dir)
+            .context("No render directory — run `ss render` first")?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "wav"))
+            .collect();
+        wavs.sort();
+        wavs.into_iter()
+            .next()
+            .context("No WAV found in render/ — run `ss render` first")?
+    };
+
+    let (left, right, sample_rate) =
+        read_wav_file(&wav_path).context("Failed to read rendered WAV")?;
+    let len = left.len().min(right.len());
+    let mono: Vec<f32> = (0..len).map(|i| (left[i] + right[i]) * 0.5).collect();
+    let genre = Some(project.config.genre.as_str());
+
+    // Single STFT pass: `write_audit_files` runs `audit_mono` internally, so
+    // the printed report below is the same report written to the log file.
+    let audit_dir = render_dir.join("audit");
+    let artifact = write_audit_files(&mono, sample_rate, genre, &audit_dir, "master")
+        .context("Audit file generation failed")?;
+    let report = &artifact.report;
+
+    println!(
+        "  WAV:               {}",
+        wav_path.display().to_string().cyan()
+    );
+    println!("  Genre:             {}", project.config.genre);
+    println!(
+        "  Peak:              {:.2} dBFS{}",
+        report.peak_dbfs,
+        if report.clipped_sample_count == 0 {
+            "  (no clipping)".green().to_string()
+        } else {
+            format!(
+                "  WARN: {} hard-clipped samples",
+                report.clipped_sample_count
+            )
+            .red()
+            .to_string()
+        }
+    );
+    println!("  RMS:               {:.1} dB", report.rms_db);
+    println!(
+        "  DC offset:         {:+.5}{}",
+        report.dc_offset,
+        if report.dc_offset.abs() < 0.01 {
+            "  OK".green().to_string()
+        } else {
+            "  WARN: nonzero DC".red().to_string()
+        }
+    );
+    println!("  Centroid:          {:.0} Hz", report.spectral_centroid_hz);
+    println!("  Rolloff (85%):     {:.0} Hz", report.spectral_rolloff_hz);
+    println!(
+        "  Aliasing >16 kHz:  {:.1}%{}",
+        report.aliasing_ratio * 100.0,
+        if report.aliasing_ratio > 0.05 {
+            "  WARN: bright/aliased".red().to_string()
+        } else {
+            "  OK".green().to_string()
+        }
+    );
+    for band in &report.band_energy {
+        println!(
+            "    {:8} {:5.0}–{:5.0} Hz: {:.1}%",
+            band.label,
+            band.low_hz,
+            band.high_hz,
+            band.share * 100.0
+        );
+    }
+    if let Some(dev) = report.genre_fingerprint_deviation {
+        println!(
+            "  Genre deviation:   {:.3}{}",
+            dev,
+            if dev < 0.25 {
+                "  (matches genre profile)".green().to_string()
+            } else if dev < 0.5 {
+                "  (moderate drift)".yellow().to_string()
+            } else {
+                "  (far from genre profile)".red().to_string()
+            }
+        );
+    }
+    println!(
+        "  Audit log:         {}",
+        artifact.text_path.display().to_string().green()
+    );
+    println!(
+        "  Spectrogram:       {}",
+        artifact.spectrogram_path.display().to_string().green()
+    );
+    println!(
+        "  Waveform:          {}",
+        artifact.waveform_path.display().to_string().green()
     );
     Ok(())
 }
@@ -1482,6 +1612,15 @@ mod tests {
         match cli.command {
             Commands::Render { mode, .. } => assert_eq!(mode, "stems"),
             _ => panic!("expected Commands::Render"),
+        }
+    }
+
+    #[test]
+    fn parse_analyze_command() {
+        let cli = Cli::try_parse_from(["ss", "analyze", "my_song"]).unwrap();
+        match cli.command {
+            Commands::Analyze { path } => assert_eq!(path, "my_song"),
+            _ => panic!("expected Commands::Analyze"),
         }
     }
 

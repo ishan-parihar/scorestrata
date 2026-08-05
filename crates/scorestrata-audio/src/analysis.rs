@@ -202,6 +202,109 @@ fn calculate_stereo_correlation(left: &[f32], right: &[f32]) -> f32 {
     }
 }
 
+/// Frequency-band edges (Hz) shared by the audit module and genre
+/// fingerprints: sub, bass, low-mid, mid, hi-mid, air.
+pub const AUDIT_BAND_EDGES_HZ: [f32; 7] = [0.0, 100.0, 250.0, 500.0, 2000.0, 6000.0, 16000.0];
+
+/// Human-readable labels for the six audit bands.
+#[must_use]
+pub fn band_labels() -> [&'static str; 6] {
+    ["sub", "bass", "lo-mid", "mid", "hi-mid", "air"]
+}
+
+/// Expected spectral fingerprint of a genre (§5 of the audio plan).
+///
+/// Encodes the target band-energy distribution, spectral centroid, and
+/// aliasing ceiling per genre so the audit gate can report deviation
+/// (diagnostic `GENRE_FINGERPRINT_DRIFT`) and the agent loop can repair
+/// *toward* genre.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GenreFingerprint {
+    /// Genre key this fingerprint describes.
+    pub genre: &'static str,
+    /// Expected share of energy in the six [`AUDIT_BAND_EDGES_HZ`] bands.
+    pub band_energy_expected: [f32; 6],
+    /// Expected spectral centroid in Hz.
+    pub centroid_expected_hz: f32,
+    /// Maximum acceptable energy share above 16 kHz (aliasing proxy).
+    pub aliasing_max: f32,
+}
+
+impl GenreFingerprint {
+    /// The fingerprint for a genre key, if one is defined.
+    ///
+    /// Matching is case-insensitive and substring-based (e.g. `techno` and
+    /// `melodic_techno` both resolve to the techno fingerprint).
+    #[must_use]
+    pub fn for_genre(genre: &str) -> Option<&'static GenreFingerprint> {
+        let lower = genre.to_lowercase();
+        if lower.contains("house") {
+            Some(&HOUSE_FINGERPRINT)
+        } else if lower.contains("ambient") || lower.contains("drone") {
+            Some(&AMBIENT_FINGERPRINT)
+        } else if lower.contains("techno") {
+            Some(&TECHNO_FINGERPRINT)
+        } else {
+            None
+        }
+    }
+
+    /// L1 deviation of an observed spectrum from this fingerprint.
+    ///
+    /// Returns 0.0 for an exact match and approaches 1.0 as the spectrum
+    /// diverges. Band shape (mean absolute band-energy difference, halved to
+    /// stay in 0..1) is weighted 0.6, centroid mismatch 0.3, and aliasing
+    /// overshoot 0.1. A deviation above [`DRIFT_THRESHOLD`] is reported as
+    /// `GENRE_FINGERPRINT_DRIFT` by the audit gate.
+    #[must_use]
+    pub fn deviation(&self, band_energy: &[f32; 6], centroid_hz: f32, aliasing_ratio: f32) -> f32 {
+        let band_dev = band_energy
+            .iter()
+            .zip(self.band_energy_expected.iter())
+            .map(|(actual, expected)| (actual - expected).abs())
+            .sum::<f32>()
+            / 2.0;
+        let centroid_dev = if self.centroid_expected_hz > 0.0 {
+            ((centroid_hz - self.centroid_expected_hz).abs() / self.centroid_expected_hz).min(1.0)
+        } else {
+            0.0
+        };
+        let alias_dev = if aliasing_ratio > self.aliasing_max {
+            ((aliasing_ratio - self.aliasing_max) / 0.5).min(1.0)
+        } else {
+            0.0
+        };
+        band_dev.mul_add(0.6, centroid_dev.mul_add(0.3, alias_dev * 0.1))
+    }
+}
+
+/// Deviation above this value triggers `GENRE_FINGERPRINT_DRIFT`.
+pub const DRIFT_THRESHOLD: f32 = 0.30;
+
+/// Techno: drums-dominant, bright — air and high-mid weighted.
+const TECHNO_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "melodic_techno",
+    band_energy_expected: [0.12, 0.09, 0.08, 0.24, 0.16, 0.31],
+    centroid_expected_hz: 6000.0,
+    aliasing_max: 0.30,
+};
+
+/// House: balanced and mid-heavy.
+const HOUSE_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "house",
+    band_energy_expected: [0.11, 0.13, 0.14, 0.22, 0.14, 0.26],
+    centroid_expected_hz: 5000.0,
+    aliasing_max: 0.25,
+};
+
+/// Ambient: pad-heavy low end, low centroid, minimal aliasing.
+const AMBIENT_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "ambient",
+    band_energy_expected: [0.27, 0.24, 0.18, 0.22, 0.05, 0.04],
+    centroid_expected_hz: 2000.0,
+    aliasing_max: 0.12,
+};
+
 /// Apply a linear gain (from a dB value) to a buffer in place.
 ///
 /// Used by `normalize_loudness_target` to move a render toward a target

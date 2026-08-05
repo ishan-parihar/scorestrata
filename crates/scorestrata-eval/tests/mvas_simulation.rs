@@ -3383,3 +3383,129 @@ fn lead_layer(project: &scorestrata_core::domain::Project) -> &scorestrata_core:
         .find(|l| l.name == "Lead")
         .expect("chorus has a Lead layer")
 }
+
+/// §2 (audio plan) — the `ss analyze` flow end-to-end: render to WAV, then
+/// read the file back and produce the post-generation spectral audit (text
+/// log + spectrogram/waveform PNGs + genre fingerprint deviation). This is
+/// the "debug log for generated music" that makes mix issues visible.
+#[test]
+fn audio_plan_ss_analyze_flow_produces_audit_artifacts() {
+    // Build a genre-typed project through the real pipeline.
+    let config = scorestrata_mcp::config_gen::generate_config(
+        "analyze_e2e",
+        "Melodic techno at 124 BPM in C minor, 8 bars",
+    );
+    let plan = scorestrata_compiler::plan::plan_project(&config);
+    let mut project = scorestrata_testkit::minimal_project();
+    project.config = config.clone();
+    project.arrangement = plan.arrangement;
+    project.patterns = plan.patterns;
+
+    // Render to WAV bytes (same path the CLI `ss render` takes).
+    let timeline = scorestrata_compiler::compile_project(&project).expect("project compiles");
+    let mut layer_names = std::collections::HashMap::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            layer_names.insert(layer.id.to_string(), layer.name.clone());
+        }
+    }
+    let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
+                let layer_name = layer_names
+                    .get(&e.layer_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| e.layer_id.to_string());
+                Some(scorestrata_audio::render::RenderNote {
+                    pitch: pitch.0,
+                    start_tick: e.tick.0,
+                    duration_ticks: 480,
+                    velocity: velocity.as_f32(),
+                    layer_name,
+                })
+            }
+            _ => None,
+        })
+        .collect();
+    let voices = scorestrata_audio::render::build_voices(&{
+        let mut inst = Vec::new();
+        for segment in &project.arrangement.segments {
+            for layer in &segment.layers {
+                if !inst.iter().any(|(n, _)| *n == layer.name.as_str()) {
+                    inst.push((layer.name.as_str(), layer.instrument.as_str()));
+                }
+            }
+        }
+        inst
+    });
+    let result = scorestrata_audio::render::render_notes_with_config(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &voices,
+        &scorestrata_audio::render::RenderConfig {
+            stereo: true,
+            limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
+        },
+    )
+    .expect("render succeeds");
+    assert!(!result.wav_bytes.is_empty());
+
+    // The `ss analyze` path: write master.wav, read it back, audit it.
+    let dir = std::env::temp_dir().join(format!("scorestrata_analyze_e2e_{}", project.id));
+    let render_dir = dir.join("render");
+    let wav_path = render_dir.join("master.wav");
+    std::fs::create_dir_all(&render_dir).expect("temp render dir");
+    std::fs::write(&wav_path, &result.wav_bytes).expect("write master.wav");
+
+    let (left, right, sample_rate) =
+        scorestrata_audio::wav::read_wav_file(&wav_path).expect("read back master.wav");
+    assert_eq!(sample_rate, scorestrata_audio::render::DEFAULT_SAMPLE_RATE);
+    let genre = Some(project.config.genre.as_str());
+    let report = scorestrata_audio::audit::audit_stereo(&left, &right, sample_rate, genre);
+
+    // The audit report is a meaningful debug log: not silent, no clipping
+    // (the limiter ceiling is -1.0 dBTP), a plausible spectral centroid, and
+    // a genre deviation that is a well-formed 0..1 score.
+    assert!(!report.silence_detected, "render is not silent");
+    assert_eq!(report.clipped_sample_count, 0, "no hard clipping");
+    assert!(
+        report.spectral_centroid_hz > 100.0,
+        "centroid above sub range"
+    );
+    assert_eq!(report.genre.as_deref(), Some("melodic_techno"));
+    let dev = report
+        .genre_fingerprint_deviation
+        .expect("genre fingerprint exists for melodic_techno");
+    assert!((0.0..=1.0).contains(&dev), "deviation in [0,1], got {dev}");
+    assert_eq!(report.band_energy.len(), 6, "six spectral bands");
+
+    // The debug-log artifacts land on disk: text log + two PNGs.
+    let audit_dir = render_dir.join("audit");
+    let artifact = scorestrata_audio::audit::write_audit_files(
+        &result.mono_samples,
+        result.sample_rate,
+        genre,
+        &audit_dir,
+        "master",
+    )
+    .expect("audit files written");
+    assert!(artifact.text_path.exists());
+    assert!(artifact.spectrogram_path.exists());
+    assert!(artifact.waveform_path.exists());
+    let log = std::fs::read_to_string(&artifact.text_path).expect("read audit log");
+    assert!(
+        log.contains("centroid"),
+        "text log names the spectral centroid"
+    );
+    let png = std::fs::read(&artifact.spectrogram_path).expect("read spectrogram PNG");
+    assert_eq!(
+        &png[..8],
+        b"\x89PNG\r\n\x1a\n",
+        "spectrogram is a valid PNG"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
