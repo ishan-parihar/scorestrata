@@ -113,6 +113,38 @@ impl TimelineIR {
             .collect()
     }
 
+    /// Group the CC automation events into lanes: `(layer_id, controller,
+    /// [(tick, value 0–1)])` sorted by tick (G4).
+    ///
+    /// The audio renderer consumes these lanes to sweep filters/levels;
+    /// conversion sites map `layer_id` → layer name and build
+    /// `RenderAutomation` from the result.
+    #[must_use]
+    pub fn control_change_lanes(&self) -> Vec<(LayerId, u8, Vec<(u64, f32)>)> {
+        let mut lanes: Vec<(LayerId, u8, Vec<(u64, f32)>)> = Vec::new();
+        for e in &self.events {
+            let EventKind::ControlChange { controller, value } = e.kind else {
+                continue;
+            };
+            let entry = lanes
+                .iter_mut()
+                .find(|(l, c, _)| *l == e.layer_id && *c == controller);
+            match entry {
+                Some((_, _, points)) => points.push((e.tick.0, f32::from(value) / 127.0)),
+                None => lanes.push((
+                    e.layer_id,
+                    controller,
+                    vec![(e.tick.0, f32::from(value) / 127.0)],
+                )),
+            }
+        }
+        for (_, _, points) in &mut lanes {
+            points.sort_by_key(|(t, _)| *t);
+        }
+        lanes.sort_by_key(|(l, c, _)| (l.to_string(), *c));
+        lanes
+    }
+
     /// Compute a content hash of this timeline.
     #[must_use]
     pub fn content_hash(&self) -> String {

@@ -679,6 +679,11 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
     }
     let voices = scorestrata_audio::render::build_voices(&layer_instruments);
 
+    // G4 — automation lanes (filter sweeps, volume rides) from the timeline's
+    // CC events, so rendered audio reflects the agent's automation.
+    let automation =
+        scorestrata_mcp::tools::automation_lanes_from_timeline(&timeline, &layer_names);
+
     use scorestrata_compiler::timeline::EventKind;
     let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
         .events
@@ -710,11 +715,12 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
             stereo: true,
             limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
         };
-        let (stems, master) = scorestrata_audio::render::render_stems_with_config(
+        let (stems, master) = scorestrata_audio::render::render_stems_with_automation(
             &notes,
             timeline.bpm,
             scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
             &voices,
+            &automation,
             &config,
         )
         .context("Stems render failed")?;
@@ -764,11 +770,12 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
         stereo: true,
         limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
     };
-    let result = scorestrata_audio::render::render_notes_with_config(
+    let result = scorestrata_audio::render::render_notes_with_automation(
         &notes,
         timeline.bpm,
         scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
         &voices,
+        &automation,
         &config,
     )
     .context("Render failed")?;

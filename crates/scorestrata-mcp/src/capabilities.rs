@@ -442,6 +442,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "debug",
         ),
         (
+            "write_automation",
+            "mutating",
+            false,
+            "write",
+            "low",
+            "composition",
+        ),
+        (
             "set_layer_register",
             "mutating",
             false,

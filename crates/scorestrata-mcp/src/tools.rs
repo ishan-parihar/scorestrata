@@ -2297,6 +2297,192 @@ pub fn set_layer_register(params: &SetLayerRegisterParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `write_automation` tool (G4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WriteAutomationParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID containing the layer.
+    pub segment_id: String,
+    /// Layer ID to automate.
+    pub layer_id: String,
+    /// Parameter to automate (`cutoff`, `volume`, `pan`, `send`).
+    pub param: String,
+    /// Automation points: `[{ "tick": 0, "value": 0.2 }, …]` (value 0–1).
+    pub points: Vec<scorestrata_core::domain::AutomationPointJson>,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Write an automation lane on a layer (G4).
+///
+/// Appends a new lane or replaces an existing lane for the same parameter on
+/// the target layer. The compiler turns the lane into `ControlChange` events
+/// in the timeline, and the audio renderer sweeps the filter/volume so the
+/// automation is audible — the "build-up opens up" action.
+#[must_use]
+pub fn write_automation(params: &WriteAutomationParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "write_automation".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot write automation on layer '{}': no project payload provided",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("write_automation", "project", &e),
+        };
+    let param = match params.param.as_str() {
+        "cutoff" => scorestrata_core::domain::AutomationParam::Cutoff,
+        "volume" => scorestrata_core::domain::AutomationParam::Volume,
+        "pan" => scorestrata_core::domain::AutomationParam::Pan,
+        "send" => scorestrata_core::domain::AutomationParam::Send,
+        other => {
+            return ToolReceipt {
+                tool: "write_automation".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!(
+                    "Unsupported automation param '{other}' (expected cutoff|volume|pan|send)"
+                ),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec![],
+                cost: ToolCost::default(),
+                warnings: vec!["Unknown automation param".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    };
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "write_automation".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(layer) = segment
+        .layers
+        .iter_mut()
+        .find(|l| l.id.to_string() == params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "write_automation".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in segment '{}'",
+                params.layer_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown layer ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut points: Vec<scorestrata_core::domain::AutomationPoint> = params
+        .points
+        .iter()
+        .map(|p| scorestrata_core::domain::AutomationPoint {
+            tick: scorestrata_core::domain::Tick::new(p.tick),
+            value: p.value.clamp(0.0, 1.0),
+        })
+        .collect();
+    points.sort_by_key(|p| p.tick.0);
+    // Replace an existing lane for the same param, or append a new one.
+    if let Some(existing) = layer.automation.iter_mut().find(|a| a.param == param) {
+        existing.points = points;
+    } else {
+        layer.automation.push(scorestrata_core::domain::Automation {
+            layer_id: layer.id,
+            param,
+            points,
+        });
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "layers.automation_lanes".to_string(),
+        layer.automation.len().to_string(),
+    );
+    score_delta.insert(
+        "layers.automation_points".to_string(),
+        params.points.len().to_string(),
+    );
+    ToolReceipt {
+        tool: "write_automation".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Layer '{}' {} automation lane with {} points (compiler emits CC {}, renderer sweeps)",
+            params.layer_id,
+            param_str(&param),
+            params.points.len(),
+            param.cc_number()
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers/{}",
+            params.project_id, params.segment_id, params.layer_id
+        )],
+        focus_uris: vec![format!("project://{}/timeline/view", params.project_id)],
+        next_actions: vec![
+            "run_validation".to_string(),
+            "get_timeline_view".to_string(),
+            "render_project".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Human-readable name for an automation param.
+fn param_str(param: &scorestrata_core::domain::AutomationParam) -> String {
+    match param {
+        scorestrata_core::domain::AutomationParam::Cutoff => "cutoff".to_string(),
+        scorestrata_core::domain::AutomationParam::Volume => "volume".to_string(),
+        scorestrata_core::domain::AutomationParam::Pan => "pan".to_string(),
+        scorestrata_core::domain::AutomationParam::Send => "send".to_string(),
+    }
+}
+
 /// Parameters for `repeat_pattern_in_segment` tool (G3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepeatPatternInSegmentParams {
@@ -6204,13 +6390,40 @@ pub(crate) fn render_timeline_to_analysis(
         .collect();
 
     let voices = scorestrata_audio::render::build_voices(&layer_instruments);
-    scorestrata_audio::render::render_notes(
+    let automation = automation_lanes_from_timeline(timeline, &layer_names);
+    scorestrata_audio::render::render_notes_with_automation(
         &notes,
         timeline.bpm,
         scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
         &voices,
+        &automation,
+        &scorestrata_audio::render::RenderConfig::default(),
     )
     .map_err(|e| e.to_string())
+}
+
+/// Build [`RenderAutomation`] lanes from a timeline's CC events (G4).
+///
+/// Shared by the L4 render path and the CLI so automation reaches the audio
+/// engine identically everywhere.
+pub fn automation_lanes_from_timeline(
+    timeline: &scorestrata_compiler::TimelineIR,
+    layer_names: &std::collections::HashMap<String, String>,
+) -> Vec<scorestrata_audio::render::RenderAutomation> {
+    timeline
+        .control_change_lanes()
+        .into_iter()
+        .map(
+            |(layer_id, controller, points)| scorestrata_audio::render::RenderAutomation {
+                layer_name: layer_names
+                    .get(&layer_id.to_string())
+                    .cloned()
+                    .unwrap_or_else(|| layer_id.to_string()),
+                controller,
+                points,
+            },
+        )
+        .collect()
 }
 
 /// Compile and render a whole project to its Level-4 audio analysis.
@@ -7171,6 +7384,7 @@ mod tests {
                     instrument: "synth".to_string(),
                     pattern_instances: Vec::new(),
                     register: None,
+                    automation: vec![],
                 })
                 .collect(),
         }
@@ -8175,6 +8389,41 @@ mod tests {
     }
 
     #[test]
+    fn timeline_view_shows_automation_lanes() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let segment = &mut project.arrangement.segments[0];
+        let layer = &mut segment.layers[1]; // Bass
+        layer.automation.push(scorestrata_core::domain::Automation {
+            layer_id: layer.id,
+            param: scorestrata_core::domain::AutomationParam::Cutoff,
+            points: vec![
+                scorestrata_core::domain::AutomationPoint {
+                    tick: scorestrata_core::domain::Tick::new(0),
+                    value: 0.2,
+                },
+                scorestrata_core::domain::AutomationPoint {
+                    tick: scorestrata_core::domain::Tick::new(1920),
+                    value: 1.0,
+                },
+            ],
+        });
+        let view = crate::resources::build_timeline_view(&project);
+        let bass = view
+            .layers
+            .iter()
+            .find(|l| l.name == "Bass")
+            .expect("bass lane present");
+        assert_eq!(bass.automation.len(), 1, "cutoff lane surfaced in view");
+        assert_eq!(bass.automation[0].param, "cutoff");
+        assert_eq!(bass.automation[0].controller, 74);
+        assert_eq!(bass.automation[0].points.len(), 2);
+        assert!(
+            view.layers.iter().all(|l| l.automation.len() <= 4),
+            "no stray lanes elsewhere"
+        );
+    }
+
+    #[test]
     fn get_timeline_view_without_payload_fails_transparently() {
         let params = GetTimelineViewParams {
             project_id: "proj_1".to_string(),
@@ -8221,6 +8470,55 @@ mod tests {
             receipt.evidence_uris[0].contains("/layers/"),
             "cites the constrained layer"
         );
+    }
+
+    #[test]
+    fn write_automation_adds_cutoff_lane_to_layer() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let layer_id = project.arrangement.segments[0].layers[1].id.to_string(); // Bass
+        let params = WriteAutomationParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            layer_id: layer_id.clone(),
+            param: "cutoff".to_string(),
+            points: vec![
+                scorestrata_core::domain::AutomationPointJson {
+                    tick: 0,
+                    value: 0.2,
+                },
+                scorestrata_core::domain::AutomationPointJson {
+                    tick: 1920,
+                    value: 1.0,
+                },
+            ],
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = write_automation(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "automation write succeeds: {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("cutoff"));
+        assert!(receipt.summary.contains("2 points"));
+        assert!(receipt.summary.contains("CC 74"));
+        assert!(receipt.score_delta.contains_key("layers.automation_lanes"));
+    }
+
+    #[test]
+    fn write_automation_rejects_unknown_param() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = WriteAutomationParams {
+            project_id: project.id.to_string(),
+            segment_id: project.arrangement.segments[0].id.to_string(),
+            layer_id: project.arrangement.segments[0].layers[0].id.to_string(),
+            param: "reverb_weirdness".to_string(),
+            points: vec![],
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = write_automation(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("Unsupported automation param"));
     }
 
     #[test]

@@ -374,6 +374,14 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::get_timeline_view
             )
         }
+        "write_automation" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::WriteAutomationParams,
+                crate::tools::write_automation
+            )
+        }
         "set_layer_register" => {
             route!(
                 tool_name,

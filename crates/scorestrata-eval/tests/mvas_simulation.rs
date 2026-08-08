@@ -3289,6 +3289,7 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
             velocity_multiplier: 1.0,
         }],
         register: None,
+        automation: vec![],
     };
 
     // Build an 8-bar project with two segments: a sparse verse (drums only)
@@ -3315,6 +3316,7 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
                 velocity_multiplier: 1.0,
             }],
             register: None,
+            automation: vec![],
         }],
     };
 
@@ -3337,6 +3339,7 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
                     velocity_multiplier: 1.0,
                 }],
                 register: None,
+                automation: vec![],
             },
             // Pad fills the harmonic space; three chorus layers vs one verse
             // layer gives the ≥0.15 energy delta the transition check wants.
@@ -3352,6 +3355,7 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
                     velocity_multiplier: 1.0,
                 }],
                 register: None,
+                automation: vec![],
             },
             layer,
         ],

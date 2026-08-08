@@ -31,6 +31,7 @@ pub fn check_timeline(project: &Project) -> Vec<Diagnostic> {
     diagnostics.extend(check_required_segment_fill(project));
     diagnostics.extend(check_overlapping_notes(project));
     diagnostics.extend(check_automation_range(project));
+    diagnostics.extend(check_layer_automation(project));
     diagnostics.extend(check_absolute_timing(project));
     diagnostics
 }
@@ -151,6 +152,74 @@ fn check_overlapping_notes(project: &Project) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// Check 4a — layer automation lanes (G4) must stay within 0.0–1.0 and have
+/// at least one point (an empty lane is dead weight the agent should remove).
+fn check_layer_automation(project: &Project) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            for lane in &layer.automation {
+                if lane.points.is_empty() {
+                    diagnostics.push(Diagnostic {
+                        id: DiagnosticId::new(),
+                        code: "TIMELINE_AUTOMATION_EMPTY_LANE".to_string(),
+                        metric: "timeline.automation_range".to_string(),
+                        severity: Severity::Warning,
+                        scope: MetricScope {
+                            segment_id: Some(segment.id),
+                            layer_id: Some(layer.id),
+                            bar_range: None,
+                        },
+                        evidence_uris: vec![format!(
+                            "project://{}/segments/{}/layers/{}",
+                            project.id, segment.id, layer.id
+                        )],
+                        message: format!(
+                            "Automation lane {:?} on layer '{}' has no points (empty lane)",
+                            lane.param, layer.name
+                        ),
+                        root_causes: vec!["automation lane has no points".to_string()],
+                        suggested_patches: vec![],
+                        expected_delta: None,
+                        confidence: 1.0,
+                    });
+                    continue;
+                }
+                for point in &lane.points {
+                    if !(0.0..=1.0).contains(&point.value) {
+                        diagnostics.push(Diagnostic {
+                            id: DiagnosticId::new(),
+                            code: "TIMELINE_AUTOMATION_OUT_OF_RANGE".to_string(),
+                            metric: "timeline.automation_range".to_string(),
+                            severity: Severity::Error,
+                            scope: MetricScope {
+                                segment_id: Some(segment.id),
+                                layer_id: Some(layer.id),
+                                bar_range: None,
+                            },
+                            evidence_uris: vec![format!(
+                                "project://{}/segments/{}/layers/{}",
+                                project.id, segment.id, layer.id
+                            )],
+                            message: format!(
+                                "Automation {:?} point on layer '{}' is {:.2} (expected 0.0–1.0)",
+                                lane.param, layer.name, point.value
+                            ),
+                            root_causes: vec![
+                                "automation value outside its valid range".to_string(),
+                            ],
+                            suggested_patches: vec![],
+                            expected_delta: None,
+                            confidence: 1.0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    diagnostics
+}
+
 /// Check 4 — energy automation must stay within its 0.0–1.0 range.
 fn check_automation_range(project: &Project) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -237,6 +306,61 @@ mod tests {
             "clean fixture should pass timeline: {:?}",
             codes(&check_timeline(&project))
         );
+    }
+
+    #[test]
+    fn layer_automation_out_of_range_is_flagged() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let layer = &mut project.arrangement.segments[0].layers[0];
+        layer.automation.push(scorestrata_core::domain::Automation {
+            layer_id: layer.id,
+            param: scorestrata_core::domain::AutomationParam::Cutoff,
+            points: vec![scorestrata_core::domain::AutomationPoint {
+                tick: Tick::new(0),
+                value: 1.5, // out of range
+            }],
+        });
+
+        let diagnostics = check_timeline(&project);
+        assert!(codes(&diagnostics).contains(&"TIMELINE_AUTOMATION_OUT_OF_RANGE"));
+    }
+
+    #[test]
+    fn empty_automation_lane_is_flagged_as_warning() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let layer = &mut project.arrangement.segments[0].layers[0];
+        layer.automation.push(scorestrata_core::domain::Automation {
+            layer_id: layer.id,
+            param: scorestrata_core::domain::AutomationParam::Volume,
+            points: vec![],
+        });
+
+        let diagnostics = check_timeline(&project);
+        assert!(codes(&diagnostics).contains(&"TIMELINE_AUTOMATION_EMPTY_LANE"));
+    }
+
+    #[test]
+    fn valid_automation_lane_passes() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let layer = &mut project.arrangement.segments[0].layers[0];
+        layer.automation.push(scorestrata_core::domain::Automation {
+            layer_id: layer.id,
+            param: scorestrata_core::domain::AutomationParam::Cutoff,
+            points: vec![
+                scorestrata_core::domain::AutomationPoint {
+                    tick: Tick::new(0),
+                    value: 0.2,
+                },
+                scorestrata_core::domain::AutomationPoint {
+                    tick: Tick::new(480),
+                    value: 1.0,
+                },
+            ],
+        });
+
+        let diagnostics = check_timeline(&project);
+        assert!(!codes(&diagnostics).contains(&"TIMELINE_AUTOMATION_OUT_OF_RANGE"));
+        assert!(!codes(&diagnostics).contains(&"TIMELINE_AUTOMATION_EMPTY_LANE"));
     }
 
     #[test]

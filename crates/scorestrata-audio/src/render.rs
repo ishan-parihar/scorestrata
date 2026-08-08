@@ -88,6 +88,50 @@ pub struct RenderNote {
     pub layer_name: String,
 }
 
+/// A CC automation lane feeding the renderer (G4).
+///
+/// Mirrors the domain `Automation` entity but keyed by the MIDI CC number
+/// (cutoff=74, volume=7, pan=10, send=91) so the audio engine stays
+/// timeline-agnostic: conversion sites translate `ControlChange` events into
+/// these lanes before rendering.
+#[derive(Debug, Clone)]
+pub struct RenderAutomation {
+    /// Layer name this lane drives.
+    pub layer_name: String,
+    /// MIDI CC controller number.
+    pub controller: u8,
+    /// Interpolation points: (tick, value 0.0–1.0), sorted by tick.
+    pub points: Vec<(u64, f32)>,
+}
+
+impl RenderAutomation {
+    /// Interpolated value at `tick` (linear between points, clamped to the
+    /// curve ends), or `None` if the lane has no points.
+    #[must_use]
+    pub fn value_at(&self, tick: u64) -> Option<f32> {
+        if self.points.is_empty() {
+            return None;
+        }
+        let first = self.points[0];
+        if tick <= first.0 {
+            return Some(first.1);
+        }
+        let last = self.points[self.points.len() - 1];
+        if tick >= last.0 {
+            return Some(last.1);
+        }
+        for pair in self.points.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if tick >= a.0 && tick <= b.0 {
+                let span = (b.0 - a.0).max(1) as f32;
+                let frac = (tick - a.0) as f32 / span;
+                return Some(a.1 + (b.1 - a.1) * frac);
+            }
+        }
+        Some(last.1)
+    }
+}
+
 /// The result of an offline render.
 #[derive(Debug, Clone)]
 pub struct RenderResult {
@@ -177,6 +221,27 @@ pub fn render_notes_with_config(
     voices: &[RenderVoice],
     config: &RenderConfig,
 ) -> Result<RenderResult, ScorestrataError> {
+    render_notes_with_automation(notes, bpm, sample_rate, voices, &[], config)
+}
+
+/// Render notes with CC automation lanes (G4) under an explicit config.
+///
+/// Automation sweeps are applied per-layer at each note's start tick:
+///
+/// - CC 74 (cutoff): overrides the voice's filter cutoff (0.0 → darkest,
+///   1.0 → fully open) so build-ups audibly open up.
+/// - CC 7 (volume): scales the note buffer so levels move over time.
+///
+/// All interpolation is linear and deterministic; rendering with the same
+/// inputs yields byte-identical output (per §17 DSP determinism).
+pub fn render_notes_with_automation(
+    notes: &[RenderNote],
+    bpm: u32,
+    sample_rate: u32,
+    voices: &[RenderVoice],
+    automation: &[RenderAutomation],
+    config: &RenderConfig,
+) -> Result<RenderResult, ScorestrataError> {
     if sample_rate == 0 {
         return Err(ScorestrataError::RenderError {
             message: "sample rate must be non-zero".to_string(),
@@ -210,8 +275,19 @@ pub fn render_notes_with_config(
     let mut mixer = Mixer::new();
 
     for layer_name in &layer_order {
-        let buffer =
-            render_layer_buffer(notes, layer_name, voices, bpm, sample_rate, total_samples);
+        let layer_automation: Vec<&RenderAutomation> = automation
+            .iter()
+            .filter(|a| a.layer_name == *layer_name)
+            .collect();
+        let buffer = render_layer_buffer(
+            notes,
+            layer_name,
+            voices,
+            bpm,
+            sample_rate,
+            total_samples,
+            &layer_automation,
+        );
         mixer.add_channel(MixerChannel {
             name: layer_name.clone(),
             gain: layer_gain(layer_name),
@@ -315,6 +391,21 @@ pub fn render_stems_with_config(
     voices: &[RenderVoice],
     config: &RenderConfig,
 ) -> Result<(Vec<Stem>, RenderResult), ScorestrataError> {
+    render_stems_with_automation(notes, bpm, sample_rate, voices, &[], config)
+}
+
+/// Render stems with CC automation lanes (G4) under an explicit config.
+///
+/// Per-layer automation is applied identically to the master render so stems
+/// and master stay in agreement.
+pub fn render_stems_with_automation(
+    notes: &[RenderNote],
+    bpm: u32,
+    sample_rate: u32,
+    voices: &[RenderVoice],
+    automation: &[RenderAutomation],
+    config: &RenderConfig,
+) -> Result<(Vec<Stem>, RenderResult), ScorestrataError> {
     if sample_rate == 0 {
         return Err(ScorestrataError::RenderError {
             message: "sample rate must be non-zero".to_string(),
@@ -348,8 +439,19 @@ pub fn render_stems_with_config(
     let mut mixer = Mixer::new();
 
     for layer_name in &layer_order {
-        let mut buffer =
-            render_layer_buffer(notes, layer_name, voices, bpm, sample_rate, total_samples);
+        let layer_automation: Vec<&RenderAutomation> = automation
+            .iter()
+            .filter(|a| a.layer_name == *layer_name)
+            .collect();
+        let mut buffer = render_layer_buffer(
+            notes,
+            layer_name,
+            voices,
+            bpm,
+            sample_rate,
+            total_samples,
+            &layer_automation,
+        );
 
         // Stem artifact (mono WAV per layer). Per-layer overlapping notes can
         // sum past full scale, so each stem is peak-limited before encoding —
@@ -445,11 +547,17 @@ fn render_layer_buffer(
     bpm: u32,
     sample_rate: u32,
     total_samples: u64,
+    automation: &[&RenderAutomation],
 ) -> Vec<f32> {
     let mut buffer = vec![0.0f32; total_samples as usize];
     let voice = voices.iter().find(|v| v.layer_name == layer_name);
     let params = voice.map_or_else(SynthParams::default, |v| v.params.clone());
     let is_percussion = voice.is_some_and(|v| v.is_percussion);
+
+    // G4 — resolve this layer's automation lanes once: cutoff (CC 74) and
+    // volume (CC 7). Values are interpolated per note at its start tick.
+    let cutoff_lane = automation.iter().find(|a| a.controller == 74);
+    let volume_lane = automation.iter().find(|a| a.controller == 7);
 
     for note in notes.iter().filter(|n| n.layer_name == layer_name) {
         let start = tick_to_sample(note.start_tick, bpm, sample_rate) as usize;
@@ -460,6 +568,22 @@ fn render_layer_buffer(
         let release = (params.release.max(0.0) * sample_rate as f32) as usize;
         let end = (start + dur + release).min(buffer.len());
         let mut note_buffer = vec![0.0f32; end - start];
+
+        // G4 — automation at this note's start tick: cutoff opens/closes the
+        // filter, volume scales the rendered body. Both are deterministic
+        // linear interpolations of the layer's lanes.
+        let mut note_params = params.clone();
+        if let Some(lane) = cutoff_lane {
+            if let Some(value) = lane.value_at(note.start_tick) {
+                // 0.0 → darkest (0.05), 1.0 → fully open (1.0).
+                note_params.filter_cutoff = 0.05 + value.clamp(0.0, 1.0) * 0.95;
+            }
+        }
+        let volume = volume_lane
+            .and_then(|lane| lane.value_at(note.start_tick))
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+
         if is_percussion {
             if let Some(kind) = drum_kind_for_pitch(note.pitch) {
                 // Real drum synthesis (kick pitch-sweep, snare/hay noise).
@@ -467,7 +591,7 @@ fn render_layer_buffer(
             } else {
                 let freq = midi_to_frequency(note.pitch);
                 render_note(
-                    &params,
+                    &note_params,
                     freq,
                     note.velocity,
                     sample_rate as f32,
@@ -478,13 +602,18 @@ fn render_layer_buffer(
         } else {
             let freq = midi_to_frequency(note.pitch);
             render_note(
-                &params,
+                &note_params,
                 freq,
                 note.velocity,
                 sample_rate as f32,
                 dur.min(note_buffer.len()),
                 &mut note_buffer,
             );
+        }
+        if volume < 1.0 {
+            for sample in &mut note_buffer {
+                *sample *= volume;
+            }
         }
         for (i, sample) in note_buffer.iter().enumerate() {
             buffer[start + i] += sample;
@@ -740,6 +869,80 @@ mod tests {
         assert!(matches!(waveform_for_instrument("bass"), Waveform::Saw));
         assert!(matches!(waveform_for_instrument("lead"), Waveform::Square));
         assert!(matches!(waveform_for_instrument("pad"), Waveform::Triangle));
+    }
+
+    #[test]
+    fn volume_automation_silences_layer() {
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        let config = RenderConfig::default();
+        // Volume lane pinned to 0 → the layer must render silent.
+        let muted = vec![RenderAutomation {
+            layer_name: "lead".to_string(),
+            controller: 7,
+            points: vec![(0, 0.0), (u64::from(PPQ), 0.0)],
+        }];
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let full = render_notes_with_automation(&notes, 120, 48_000, &[], &[], &config).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let silent =
+            render_notes_with_automation(&notes, 120, 48_000, &[], &muted, &config).unwrap();
+        let full_rms = rms(&full.mono_samples);
+        let silent_rms = rms(&silent.mono_samples);
+        assert!(full_rms > 0.01, "unmuted layer is audible: {full_rms}");
+        assert!(
+            silent_rms < 0.001,
+            "volume-0 lane silences the layer: {silent_rms}"
+        );
+    }
+
+    #[test]
+    fn cutoff_automation_changes_spectral_content() {
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        let config = RenderConfig::default();
+        let dark = vec![RenderAutomation {
+            layer_name: "lead".to_string(),
+            controller: 74,
+            points: vec![(0, 0.0), (u64::from(PPQ), 0.0)],
+        }];
+        let open = vec![RenderAutomation {
+            layer_name: "lead".to_string(),
+            controller: 74,
+            points: vec![(0, 1.0), (u64::from(PPQ), 1.0)],
+        }];
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let dark_r =
+            render_notes_with_automation(&notes, 120, 48_000, &[], &dark, &config).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let open_r =
+            render_notes_with_automation(&notes, 120, 48_000, &[], &open, &config).unwrap();
+        // Same pitch/velocity, different cutoff → different spectral energy
+        // (RMS of an unfiltered saw is larger than a heavily filtered one).
+        let dark_rms = rms(&dark_r.mono_samples);
+        let open_rms = rms(&open_r.mono_samples);
+        assert!(
+            (dark_rms - open_rms).abs() > 0.005,
+            "cutoff sweep changes output (dark {dark_rms} vs open {open_rms})"
+        );
+    }
+
+    fn rms(samples: &[f32]) -> f32 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        let sum: f32 = samples.iter().map(|s| s * s).sum();
+        (sum / samples.len() as f32).sqrt()
     }
 
     #[test]

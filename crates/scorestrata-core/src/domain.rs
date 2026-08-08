@@ -291,6 +291,10 @@ pub struct Layer {
     /// 3–5, lead 5–7, …). `None` = no constraint (legacy layers).
     #[serde(default)]
     pub register: Option<Register>,
+    /// Automation lanes (G4) — per-param curves (cutoff, volume, pan, …)
+    /// that make the layer move instead of sitting static.
+    #[serde(default)]
+    pub automation: Vec<Automation>,
 }
 
 /// An octave register — the vertical band a layer occupies on the timeline.
@@ -305,6 +309,103 @@ pub struct Register {
     pub min_octave: i8,
     /// Highest octave (inclusive).
     pub max_octave: i8,
+}
+
+/// The parameter an automation lane drives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AutomationParam {
+    /// Filter cutoff sweep (MIDI CC 74) — the classic build-up "open up".
+    Cutoff,
+    /// Track volume (MIDI CC 7).
+    Volume,
+    /// Stereo pan (MIDI CC 10).
+    Pan,
+    /// Effect send level (reverb/delay bus, MIDI CC 91/93).
+    Send,
+}
+
+impl AutomationParam {
+    /// The MIDI CC controller number used to encode this lane in the timeline.
+    #[must_use]
+    pub const fn cc_number(self) -> u8 {
+        match self {
+            Self::Cutoff => 74,
+            Self::Volume => 7,
+            Self::Pan => 10,
+            Self::Send => 91,
+        }
+    }
+}
+
+/// A single automation point: a value at a tick.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AutomationPoint {
+    /// Absolute tick position.
+    pub tick: Tick,
+    /// Parameter value, normalized 0.0–1.0.
+    pub value: f32,
+}
+
+/// Wire-format automation point used by the MCP tools (`{ "tick": 0,
+/// "value": 0.2 }`) so agents don't have to construct the `Tick` newtype.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AutomationPointJson {
+    /// Tick position.
+    pub tick: u64,
+    /// Parameter value, normalized 0.0–1.0.
+    pub value: f32,
+}
+
+/// An automation lane — a per-layer, per-parameter curve (§8.1).
+///
+/// Points are linearly interpolated by the compiler when emitting
+/// `ControlChange` events into the timeline, and by the audio renderer when
+/// sweeping filters/levels, mirroring how a producer draws automation in a
+/// DAW arrange view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Automation {
+    /// Layer this lane drives.
+    pub layer_id: LayerId,
+    /// Parameter being automated.
+    pub param: AutomationParam,
+    /// The curve, ordered by tick.
+    pub points: Vec<AutomationPoint>,
+}
+
+impl Automation {
+    /// Interpolated value at `tick` (linear between points, clamped to the
+    /// first/last point outside the curve).
+    #[must_use]
+    pub fn value_at(&self, tick: Tick) -> f32 {
+        let tick = tick.0;
+        if self.points.is_empty() {
+            return 0.0;
+        }
+        let first = self.points[0];
+        if tick <= first.tick.0 {
+            return first.value;
+        }
+        let last = self.points[self.points.len() - 1];
+        if tick >= last.tick.0 {
+            return last.value;
+        }
+        // Linear interpolation between the bracketing points.
+        for pair in self.points.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if tick >= a.tick.0 && tick <= b.tick.0 {
+                let span = (b.tick.0 - a.tick.0).max(1);
+                let frac = (tick - a.tick.0) as f32 / span as f32;
+                return a.value + (b.value - a.value) * frac;
+            }
+        }
+        last.value
+    }
+
+    /// The MIDI CC value (0–127) at `tick`, for timeline emission.
+    #[must_use]
+    pub fn cc_value_at(&self, tick: Tick) -> u8 {
+        (self.value_at(tick).clamp(0.0, 1.0) * 127.0).round() as u8
+    }
 }
 
 impl Register {

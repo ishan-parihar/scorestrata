@@ -521,6 +521,18 @@ pub struct TimelineNote {
     pub velocity: u8,
 }
 
+/// An automation lane shown in the timeline view (G4) — the parameter curve
+/// a layer rides, exactly like the automation clip rows in a DAW arrange view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutomationLaneView {
+    /// Parameter name (`cutoff`, `volume`, `pan`, `send`).
+    pub param: String,
+    /// MIDI CC controller used in the timeline.
+    pub controller: u8,
+    /// Curve points: `(tick, value 0–1)`.
+    pub points: Vec<(u64, f32)>,
+}
+
 /// A layer lane in the timeline view — one instrument's notes over time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineLayer {
@@ -540,6 +552,9 @@ pub struct TimelineLayer {
     pub note_count: u32,
     /// Note rows (capped for payload size).
     pub notes: Vec<TimelineNote>,
+    /// Automation lanes (G4) — per-param curves riding on this layer.
+    #[serde(default)]
+    pub automation: Vec<AutomationLaneView>,
 }
 
 /// The layered timeline view — the agent's "arrange view".
@@ -634,6 +649,21 @@ pub fn build_timeline_view(project: &scorestrata_core::domain::Project) -> Timel
                         (lo.min(oct), hi.max(oct))
                     });
                 let note_count = notes.len() as u32;
+                let automation: Vec<AutomationLaneView> = layer
+                    .automation
+                    .iter()
+                    .map(|lane| AutomationLaneView {
+                        param: match lane.param {
+                            scorestrata_core::domain::AutomationParam::Cutoff => "cutoff",
+                            scorestrata_core::domain::AutomationParam::Volume => "volume",
+                            scorestrata_core::domain::AutomationParam::Pan => "pan",
+                            scorestrata_core::domain::AutomationParam::Send => "send",
+                        }
+                        .to_string(),
+                        controller: lane.param.cc_number(),
+                        points: lane.points.iter().map(|p| (p.tick.0, p.value)).collect(),
+                    })
+                    .collect();
                 lanes.push(TimelineLayer {
                     layer_id: layer.id.to_string(),
                     name: layer.name.clone(),
@@ -643,6 +673,7 @@ pub fn build_timeline_view(project: &scorestrata_core::domain::Project) -> Timel
                     max_octave,
                     note_count,
                     notes: notes.into_iter().take(MAX_NOTES_PER_LAYER).collect(),
+                    automation,
                 });
             }
         }

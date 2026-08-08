@@ -76,6 +76,27 @@ pub fn compile_project(project: &Project) -> Result<TimelineIR, ScorestrataError
             * u64::from(project.config.time_signature.numerator);
 
         for layer in &segment.layers {
+            // G4 — emit automation lanes as ControlChange events (segment-relative
+            // ticks, matching pattern-instance placement). Each lane is linearly
+            // interpolated by the audio renderer when sweeping the parameter.
+            for lane in &layer.automation {
+                for point in &lane.points {
+                    let abs_tick = segment_start_tick + point.tick.0;
+                    events.push(TimelineEvent {
+                        id: next_event_id,
+                        tick: scorestrata_core::domain::Tick::new(abs_tick),
+                        kind: EventKind::ControlChange {
+                            controller: lane.param.cc_number(),
+                            value: lane.cc_value_at(point.tick),
+                        },
+                        track_id: track_id_for_layer(&layer.id),
+                        segment_id: segment.id,
+                        layer_id: layer.id,
+                        pattern_id: None,
+                    });
+                    next_event_id += 1;
+                }
+            }
             for instance in &layer.pattern_instances {
                 let pattern = project
                     .patterns
@@ -317,6 +338,7 @@ mod tests {
                 velocity_multiplier: 1.0,
             }],
             register: None,
+            automation: vec![],
         };
 
         Project {
@@ -391,6 +413,47 @@ mod tests {
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let timeline = compile_project(&project).unwrap();
         assert!(timeline.events.windows(2).all(|w| w[0].tick <= w[1].tick));
+    }
+
+    #[test]
+    fn automation_lanes_emit_control_change_events() {
+        let mut project = build_project();
+        let layer = &mut project.arrangement.segments[0].layers[0];
+        layer.automation.push(scorestrata_core::domain::Automation {
+            layer_id: layer.id,
+            param: scorestrata_core::domain::AutomationParam::Cutoff,
+            points: vec![
+                scorestrata_core::domain::AutomationPoint {
+                    tick: Tick::new(0),
+                    value: 0.2,
+                },
+                scorestrata_core::domain::AutomationPoint {
+                    tick: Tick::new(480),
+                    value: 1.0,
+                },
+            ],
+        });
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let timeline = compile_project(&project).unwrap();
+        let ccs: Vec<&TimelineEvent> = timeline
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::ControlChange { .. }))
+            .collect();
+        assert_eq!(ccs.len(), 2, "one CC per automation point");
+        for cc in &ccs {
+            let EventKind::ControlChange { controller, value } = cc.kind else {
+                unreachable!();
+            };
+            assert_eq!(controller, 74, "cutoff maps to CC 74");
+            assert!(value <= 127);
+        }
+        // The lane is exposed for renderers via the grouped helper.
+        let lanes = timeline.control_change_lanes();
+        assert_eq!(lanes.len(), 1);
+        let (_, controller, points) = &lanes[0];
+        assert_eq!(*controller, 74);
+        assert_eq!(points.len(), 2);
     }
 
     #[test]
