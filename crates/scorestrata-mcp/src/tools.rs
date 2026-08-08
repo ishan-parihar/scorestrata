@@ -185,6 +185,66 @@ pub fn run_validation_with_project(
     project: &scorestrata_core::domain::Project,
     level: u8,
 ) -> ToolReceipt {
+    // §22.2 — scoped validation. When the caller requests a specific scope
+    // (config, arrangement, segment, layer, transition, mix, harmony,
+    // rhythm, diff), run only that plane via the validator's scope
+    // orchestrator instead of the level-gated full pipeline — this is the
+    // "keep loops fast" contract, and it finally honors the previously
+    // ignored `scope` param. `full` (the default) keeps the level-gated
+    // behavior below.
+    if let Some(scope) = scorestrata_validator::scope::ValidationScope::parse(&params.scope) {
+        if scope != scorestrata_validator::scope::ValidationScope::Full {
+            let mut diagnostics = Vec::new();
+            if matches!(
+                scope,
+                scorestrata_validator::scope::ValidationScope::Segment(_)
+            ) && !params.segment_ids.is_empty()
+            {
+                // Honor the explicitly-requested segment ids: validate only
+                // those segments instead of every segment in the project
+                // (the `Segment(default)` fallback below means "all").
+                for id in &params.segment_ids {
+                    if let Ok(segment_id) = id.parse() {
+                        diagnostics.extend(scorestrata_validator::scope::validate_symbolic(
+                            project,
+                            scorestrata_validator::scope::ValidationScope::Segment(segment_id),
+                        ));
+                    }
+                }
+            } else {
+                diagnostics = scorestrata_validator::scope::validate_symbolic(project, scope);
+            }
+            if scope == scorestrata_validator::scope::ValidationScope::Mix {
+                match render_project_to_analysis(project) {
+                    Ok(result) => {
+                        diagnostics.extend(
+                            scorestrata_validator::audio_check::generate_audio_diagnostics(
+                                &result.analysis,
+                            ),
+                        );
+                    }
+                    Err(e) => diagnostics.push(audio_render_failed_diagnostic(e)),
+                }
+            }
+            if scope == scorestrata_validator::scope::ValidationScope::Diff {
+                // Over the wire there is no compile-cache path, so the diff
+                // scope uses the explicitly-requested segment ids as the
+                // changed set (the CLI `ss validate --scope diff` is the
+                // canonical cache-driven path). Malformed ids are dropped
+                // rather than silently coerced to the default id.
+                let changed: Vec<scorestrata_core::ids::SegmentId> = params
+                    .segment_ids
+                    .iter()
+                    .filter_map(|id| id.parse().ok())
+                    .collect();
+                diagnostics.extend(scorestrata_validator::scope::validate_diff(
+                    project, &changed,
+                ));
+            }
+            return finish_validation_receipt(params, level, diagnostics);
+        }
+    }
+
     let mut diagnostics = collect_symbolic_diagnostics(params, &project.arrangement.segments);
 
     if level >= 3 {
@@ -8249,6 +8309,99 @@ mod tests {
         ];
         let receipt = run_validation(&default_params(), &segments, 2);
         assert!(receipt.summary.contains("overall score"));
+    }
+
+    #[test]
+    fn run_validation_with_project_honors_config_scope() {
+        // §22.2 — a `config` scope must emit only CONFIG_* diagnostics, even
+        // at a level that would normally run the brief plane.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        project.config.bpm = 320; // out of range
+        let mut params = default_params();
+        params.scope = "config".to_string();
+        let receipt = run_validation_with_project(&params, &project, 5);
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "CONFIG_BPM_OUT_OF_RANGE"),
+            "config scope surfaces config diagnostics: {}",
+            receipt.summary
+        );
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .all(|d| d.code.starts_with("CONFIG_")),
+            "config scope emits only CONFIG_* checks"
+        );
+    }
+
+    #[test]
+    fn run_validation_with_project_honors_layer_scope() {
+        // §22.2 — a `layer` scope validates layer declarations + registers
+        // without running the full pipeline.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let mut params = default_params();
+        params.scope = "layer".to_string();
+        // Empty out every layer's instances: layers become silent.
+        for segment in &mut project.arrangement.segments {
+            for layer in &mut segment.layers {
+                layer.pattern_instances = Vec::new();
+                layer.automation = vec![];
+            }
+        }
+        let receipt = run_validation_with_project(&params, &project, 2);
+        assert!(
+            receipt.diagnostics.iter().any(|d| d.code == "LAYER_SILENT"),
+            "layer scope surfaces layer diagnostics: {}",
+            receipt.summary
+        );
+    }
+
+    #[test]
+    fn run_validation_with_project_mix_scope_emits_audio_or_render_failure() {
+        // §22.2 — the `mix` scope renders the project and runs the audio
+        // plane. A project with no patterns renders silence, which is legal
+        // audio; assert the receipt completes with a mix-appropriate outcome
+        // (either audio diagnostics or a render-failure diagnostic).
+        let project = scorestrata_testkit::melodic_techno_project();
+        let mut params = default_params();
+        params.scope = "mix".to_string();
+        let receipt = run_validation_with_project(&params, &project, 2);
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code.starts_with("AUDIO_")),
+            "mix scope runs the audio plane: {}",
+            receipt.summary
+        );
+    }
+
+    #[test]
+    fn run_validation_with_project_diff_scope_uses_requested_segment_ids() {
+        // §22.2 — over the wire, the `diff` scope validates only the
+        // explicitly-requested changed segments (the CLI is the canonical
+        // cache-driven path). A changed segment id pointing at an empty
+        // segment must surface SEGMENT_EMPTY.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let changed_id = project.arrangement.segments[0].id;
+        let mut params = default_params();
+        params.scope = "diff".to_string();
+        params.segment_ids = vec![changed_id.to_string()];
+        // Make the changed segment empty so the diff check has something to
+        // find.
+        project.arrangement.segments[0].layers = Vec::new();
+        let receipt = run_validation_with_project(&params, &project, 2);
+        assert!(
+            receipt
+                .diagnostics
+                .iter()
+                .any(|d| d.code == "SEGMENT_EMPTY"),
+            "diff scope validates the changed segment: {}",
+            receipt.summary
+        );
     }
 
     #[test]

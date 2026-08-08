@@ -232,6 +232,27 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-VALIDATION-SCOPED".to_string(),
+        title: "§22.2 scoped validation — config/layer/mix/diff planes".to_string(),
+        phase: "2".to_string(),
+        tasks: vec!["VALIDATOR-004".to_string()],
+        code: vec![
+            "scorestrata_validator::scope".to_string(),
+            "scorestrata_validator::config_check".to_string(),
+            "scorestrata_validator::layer_check".to_string(),
+        ],
+        tests: vec![
+            "scope::tests".to_string(),
+            "config_check::tests".to_string(),
+            "layer_check::tests".to_string(),
+        ],
+        mcp_tools: vec!["run_validation".to_string()],
+        cli_commands: vec!["ss validate --scope".to_string()],
+        docs: vec!["architecture.md §22.2".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-COMPILER-INCREMENTAL".to_string(),
         title: "§7.3 incremental compilation + §7.2 pass observability".to_string(),
         phase: "1".to_string(),

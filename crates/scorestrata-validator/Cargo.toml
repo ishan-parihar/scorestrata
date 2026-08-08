@@ -18,6 +18,7 @@ uuid.workspace = true
 proptest.workspace = true
 insta.workspace = true
 serde_json.workspace = true
+chrono.workspace = true
 scorestrata-testkit = { path = "../scorestrata-testkit" }
 
 [lints]

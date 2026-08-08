@@ -60,7 +60,8 @@ enum Commands {
     Validate {
         /// Project path
         path: String,
-        /// Validation scope
+        /// Validation scope (§22.2): config, arrangement, segment, layer,
+        /// transition, mix, harmony, rhythm, full, diff
         #[arg(short, long, default_value = "full")]
         scope: String,
     },
@@ -586,63 +587,97 @@ fn handle_validate(path: &str, scope: &str) -> Result<()> {
     let project = scorestrata_storage::bundle::load_project(project_path)
         .context("Failed to load project — run `ss new <name>` first")?;
 
-    let mut diagnostics: Vec<scorestrata_core::diagnostic::Diagnostic> = Vec::new();
+    // §22.2 — scoped validation: config, arrangement, segment, layer,
+    // transition, mix, harmony, rhythm, full, diff. The scope orchestrator
+    // in the validator crate owns the symbolic planes; `mix` (audio) and
+    // `diff` (compile-cache driven) are completed here where the audio
+    // engine and the incremental cache are available.
+    let parsed_scope = scorestrata_validator::scope::ValidationScope::parse(scope)
+        .context("Unknown validation scope — see `ss validate --help` for the §22.2 scope list")?;
 
-    // Segment structure checks (Level 2 symbolic).
-    if matches!(scope, "full" | "segment" | "arrangement") {
-        for segment in &project.arrangement.segments {
-            if let Some(d) = scorestrata_validator::segment_check::check_segment_has_layers(segment)
-            {
-                diagnostics.push(d);
-            }
-            if let Some(d) =
-                scorestrata_validator::segment_check::check_segment_bar_count(segment, 4, 64)
-            {
-                diagnostics.push(d);
-            }
-        }
-    }
+    let mut diagnostics: Vec<scorestrata_core::diagnostic::Diagnostic> =
+        scorestrata_validator::scope::validate_symbolic(&project, parsed_scope);
 
-    // Transition checks between adjacent segments.
-    if matches!(scope, "full" | "transition") && project.arrangement.segments.len() >= 2 {
-        let transition_diags = scorestrata_validator::transition_check::check_all_transitions(
-            &project.arrangement.segments,
-            0.15,
-        );
-        diagnostics.extend(transition_diags);
-    }
-
-    // Scale compliance per pattern (if patterns exist).
-    if matches!(scope, "full" | "harmony") && !project.patterns.is_empty() {
-        if let Some(key) = scorestrata_theory::key::Key::parse(&project.config.key) {
-            let default_segment = scorestrata_core::ids::SegmentId::default();
-            let default_layer = scorestrata_core::ids::LayerId::default();
-            for pattern in &project.patterns {
-                let result = scorestrata_validator::scale_check::check_scale_compliance(
-                    pattern,
-                    &key,
-                    default_segment,
-                    default_layer,
+    // `mix` scope — the audio plane: render the project and convert the
+    // Level-4 analysis (LUFS, true peak, clipping, spectral balance) into
+    // AUDIO_* diagnostics. This is the same path run_validation uses at
+    // level 4, exposed as a standalone fast scope.
+    if matches!(
+        parsed_scope,
+        scorestrata_validator::scope::ValidationScope::Mix
+    ) {
+        match scorestrata_mcp::tools::render_project_to_analysis(&project) {
+            Ok(result) => {
+                diagnostics.extend(
+                    scorestrata_validator::audio_check::generate_audio_diagnostics(
+                        &result.analysis,
+                    ),
                 );
-                diagnostics.extend(result.diagnostics);
+            }
+            Err(err) => {
+                diagnostics.push(scorestrata_core::diagnostic::Diagnostic {
+                    id: scorestrata_core::ids::DiagnosticId::new(),
+                    code: "AUDIO_RENDER_FAILED".to_string(),
+                    metric: "audio.render".to_string(),
+                    severity: scorestrata_core::error::Severity::Error,
+                    message: format!("Mix-scope audio render failed: {err}"),
+                    scope: scorestrata_core::diagnostic::MetricScope::default(),
+                    evidence_uris: vec!["project://audio/render".to_string()],
+                    root_causes: vec!["project could not be compiled or rendered".to_string()],
+                    suggested_patches: vec![],
+                    expected_delta: None,
+                    confidence: 1.0,
+                });
             }
         }
     }
 
-    // Drum density check.
-    if matches!(scope, "full" | "rhythm") {
-        let default_segment = scorestrata_core::ids::SegmentId::default();
-        let default_layer = scorestrata_core::ids::LayerId::default();
+    // `diff` scope — validate only what changed (§7.3): load the incremental
+    // compile cache, compute the changed segment ids, and run the segment +
+    // layer planes against just those segments. With a warm cache this is a
+    // no-op when nothing changed — the fast agent loop.
+    if matches!(
+        parsed_scope,
+        scorestrata_validator::scope::ValidationScope::Diff
+    ) {
+        let cache = scorestrata_compiler::incremental::CompilationCache::load_from(
+            &project_path.join("cache/compile_cache.json"),
+        );
+        match cache.changed_segments(&project) {
+            Ok(changed) => {
+                if changed.is_empty() {
+                    println!(
+                        "  Diff scope: no segments changed since the last incremental compile"
+                    );
+                } else {
+                    println!(
+                        "  Diff scope: validating {} changed segment(s): {}",
+                        changed.len(),
+                        changed
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                diagnostics.extend(scorestrata_validator::scope::validate_diff(
+                    &project, &changed,
+                ));
+            }
+            Err(err) => anyhow::bail!("Diff scope failed to resolve changed segments: {err}"),
+        }
+    }
+
+    // Rhythm density notes (printed for `full`/`rhythm` scopes, mirroring
+    // the pre-scope-orchestrator behavior): low-density patterns are an
+    // informational signal, not a gate failure.
+    if matches!(
+        parsed_scope,
+        scorestrata_validator::scope::ValidationScope::Full
+            | scorestrata_validator::scope::ValidationScope::Rhythm
+    ) {
         for pattern in &project.patterns {
             let density = scorestrata_validator::density::rhythmic_density(pattern);
-            if let Some(d) = scorestrata_validator::density::check_drum_density(
-                pattern,
-                density,
-                default_segment,
-                default_layer,
-            ) {
-                diagnostics.push(d);
-            }
             if density < 0.2 {
                 println!(
                     "  Note: pattern '{}' has low rhythmic density ({:.2})",
@@ -1867,6 +1902,19 @@ mod tests {
                 assert_eq!(scope, "segment");
             }
             _ => panic!("expected Commands::Validate"),
+        }
+    }
+
+    #[test]
+    fn parse_validate_command_every_scoped_scope() {
+        // §22.2 — all eight spec scopes must parse through the CLI.
+        for scope in scorestrata_validator::scope::ValidationScope::all() {
+            let cli = Cli::try_parse_from(["ss", "validate", "my_song", "--scope", scope])
+                .unwrap_or_else(|e| panic!("scope {scope} should parse: {e}"));
+            match cli.command {
+                Commands::Validate { scope: parsed, .. } => assert_eq!(parsed, *scope),
+                _ => panic!("expected Commands::Validate"),
+            }
         }
     }
 

@@ -8,11 +8,14 @@
 pub mod audio_check;
 pub mod brief_check;
 pub mod chord_check;
+pub mod config_check;
 pub mod density;
+pub mod layer_check;
 pub mod register_check;
 pub mod regression_check;
 pub mod report;
 pub mod scale_check;
+pub mod scope;
 pub mod segment_check;
 pub mod timeline_check;
 pub mod transition_check;

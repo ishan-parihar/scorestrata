@@ -168,6 +168,34 @@ impl CompilationCache {
         self.segments.clear();
     }
 
+    /// Which segments changed since the cache was last compiled (§22.2
+    /// `diff` scope).
+    ///
+    /// A segment is "changed" if it has no cache entry yet, or its current
+    /// dependency hash differs from the cached one. This lets the validator
+    /// run the `diff` scope — validate only what changed — which pairs with
+    /// [`incremental_compile`] to make agent edit loops fast.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the arrangement is invalid or a referenced
+    /// pattern is missing (same failure modes as a full compile).
+    pub fn changed_segments(&self, project: &Project) -> Result<Vec<SegmentId>, ScorestrataError> {
+        let expanded = expand_arrangement(&project.arrangement)?;
+        let mut changed = Vec::new();
+        for expanded_segment in &expanded {
+            let deps = segment_dependencies(project, expanded_segment)?;
+            let stale = self
+                .segments
+                .get(&expanded_segment.segment.id)
+                .is_none_or(|entry| entry.dependency_hash != deps.combined);
+            if stale {
+                changed.push(expanded_segment.segment.id);
+            }
+        }
+        Ok(changed)
+    }
+
     /// Persist the cache to a JSON file.
     ///
     /// # Errors
@@ -607,6 +635,33 @@ mod tests {
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let full = compile_project(&project).unwrap();
         assert_eq!(result.timeline.content_hash(), full.content_hash());
+    }
+
+    #[test]
+    fn changed_segments_detects_edits_for_diff_scope() {
+        let mut project = build_project();
+        let mut cache = CompilationCache::new();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        incremental_compile(&project, &mut cache).unwrap();
+
+        // Nothing changed: diff scope has nothing to validate.
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let before = cache.changed_segments(&project).unwrap();
+        assert!(before.is_empty(), "no edits means no changed segments");
+
+        // Edit the pattern: the referencing segment becomes changed.
+        let segment_id = project.arrangement.segments[0].id;
+        project.patterns[0].notes.push(Note {
+            id: NoteId::new(),
+            pitch: MidiNote::new(70),
+            start: Tick::new(1440),
+            duration: Duration::quarter(),
+            velocity: Velocity::new(85),
+            tied: false,
+        });
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let after = cache.changed_segments(&project).unwrap();
+        assert_eq!(after, vec![segment_id]);
     }
 
     #[test]
