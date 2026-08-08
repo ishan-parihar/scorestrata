@@ -2473,6 +2473,430 @@ pub fn write_automation(params: &WriteAutomationParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `set_track_fx` tool (G5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetTrackFxParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID containing the layer.
+    pub segment_id: String,
+    /// Layer ID whose insert chain to set.
+    pub layer_id: String,
+    /// Serialized [`FxChain`](scorestrata_core::domain::FxChain).
+    pub fx: serde_json::Value,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Set a layer's insert FX chain (G5).
+///
+/// "High-pass the pads at 120 Hz, scoop 350 Hz −2 dB, sidechain to kick,
+/// send 0.3 to reverb" — the renderer applies the chain (HPF → EQ →
+/// compressor → sends) to the layer's stem.
+#[must_use]
+pub fn set_track_fx(params: &SetTrackFxParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_track_fx".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set FX on layer '{}': no project payload provided",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_track_fx", "project", &e),
+        };
+    let fx = match serde_json::from_value::<scorestrata_core::domain::FxChain>(params.fx.clone()) {
+        Ok(f) => f,
+        Err(e) => return deserialize_error_receipt("set_track_fx", "fx", &e),
+    };
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "set_track_fx".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(layer) = segment
+        .layers
+        .iter_mut()
+        .find(|l| l.id.to_string() == params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "set_track_fx".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in segment '{}'",
+                params.layer_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown layer ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    layer.fx = Some(fx.clone());
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("layers.fx".to_string(), fx_summary(&fx));
+    ToolReceipt {
+        tool: "set_track_fx".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Layer '{}' FX chain set ({}); renderer applies HPF→EQ→comp→sends",
+            params.layer_id,
+            fx_summary(&fx)
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers/{}",
+            params.project_id, params.segment_id, params.layer_id
+        )],
+        focus_uris: vec![format!("project://{}/timeline/view", params.project_id)],
+        next_actions: vec!["run_validation".to_string(), "render_project".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `set_track_mix` tool (G5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetTrackMixParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Segment ID containing the layer.
+    pub segment_id: String,
+    /// Layer ID whose mix faders to set.
+    pub layer_id: String,
+    /// Gain override in dB; `None` = keep static staging.
+    #[serde(default)]
+    pub gain_db: Option<f32>,
+    /// Pan override (−1.0…1.0); `None` = keep static panning.
+    #[serde(default)]
+    pub pan: Option<f32>,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Set a layer's mixer faders (G5) — the mixer-fader action.
+#[must_use]
+pub fn set_track_mix(params: &SetTrackMixParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_track_mix".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set mix on layer '{}': no project payload provided",
+                params.layer_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_track_mix", "project", &e),
+        };
+    let Some(segment) = project
+        .arrangement
+        .segments
+        .iter_mut()
+        .find(|s| s.id.to_string() == params.segment_id)
+    else {
+        return ToolReceipt {
+            tool: "set_track_mix".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Segment '{}' not found", params.segment_id),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown segment ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(layer) = segment
+        .layers
+        .iter_mut()
+        .find(|l| l.id.to_string() == params.layer_id)
+    else {
+        return ToolReceipt {
+            tool: "set_track_mix".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer '{}' not found in segment '{}'",
+                params.layer_id, params.segment_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec![],
+            cost: ToolCost::default(),
+            warnings: vec!["Unknown layer ID".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    layer.mix_gain_db = params.gain_db;
+    layer.mix_pan = params.pan;
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "layers.mix".to_string(),
+        format!("gain_db={:?} pan={:?}", params.gain_db, params.pan),
+    );
+    ToolReceipt {
+        tool: "set_track_mix".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Layer '{}' mix set (gain_db={:?}, pan={:?})",
+            params.layer_id, params.gain_db, params.pan
+        ),
+        score_delta,
+        evidence_uris: vec![format!(
+            "project://{}/segments/{}/layers/{}",
+            params.project_id, params.segment_id, params.layer_id
+        )],
+        focus_uris: vec![format!("project://{}/timeline/view", params.project_id)],
+        next_actions: vec!["render_project".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `apply_genre_mix_preset` tool (G5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyGenreMixPresetParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Genre whose production-ready mix defaults to apply.
+    pub genre: String,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Apply a one-shot production-ready mix preset for a genre (G5).
+///
+/// Sets per-instrument HPF / EQ / sidechain / sends defaults from the genre
+/// table so an agent goes from loop → production-ready mix in one call, then
+/// refines with `set_track_fx` / `set_track_mix`.
+#[must_use]
+pub fn apply_genre_mix_preset(params: &ApplyGenreMixPresetParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "apply_genre_mix_preset".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot apply {} mix preset: no project payload provided",
+                params.genre
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("apply_genre_mix_preset", "project", &e),
+        };
+    let mut applied = 0usize;
+    for segment in &mut project.arrangement.segments {
+        for layer in &mut segment.layers {
+            let Some(chain) = genre_mix_chain(&params.genre, &layer.instrument) else {
+                continue;
+            };
+            layer.fx = Some(chain);
+            applied += 1;
+        }
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("layers.fx_preset".to_string(), applied.to_string());
+    ToolReceipt {
+        tool: "apply_genre_mix_preset".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Applied {} mix preset to {applied} layers (HPF/EQ/sidechain/sends per instrument)",
+            params.genre
+        ),
+        score_delta,
+        evidence_uris: vec![format!("project://{}/tracks", params.project_id)],
+        focus_uris: vec![format!("project://{}/timeline/view", params.project_id)],
+        next_actions: vec![
+            "render_project".to_string(),
+            "set_track_fx".to_string(),
+            "set_track_mix".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Human-readable summary of an [`FxChain`] for receipts.
+fn fx_summary(fx: &scorestrata_core::domain::FxChain) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(hz) = fx.high_pass_hz {
+        parts.push(format!("hpf {hz:.0} Hz"));
+    }
+    if !fx.eq.is_empty() {
+        parts.push(format!("eq {} bands", fx.eq.len()));
+    }
+    if fx.compressor.is_some() {
+        parts.push("comp".to_string());
+    }
+    if fx.sidechain_from_kick {
+        parts.push("sidechain".to_string());
+    }
+    if fx.sends.reverb > 0.0 {
+        parts.push(format!("reverb {:.2}", fx.sends.reverb));
+    }
+    if fx.sends.delay > 0.0 {
+        parts.push(format!("delay {:.2}", fx.sends.delay));
+    }
+    if parts.is_empty() {
+        "clean".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+/// Genre mix defaults: per-instrument insert chains for a genre.
+///
+/// Mirrors a producer's starting session: kick clean + sub, bass HPF'd + EQ
+/// scooped + sidechained to the kick, pads HPF'd with air, hats cleaned.
+fn genre_mix_chain(genre: &str, instrument: &str) -> Option<scorestrata_core::domain::FxChain> {
+    use scorestrata_core::domain::{CompressorCfg, FreqBand, FxChain, SendLevels};
+    let g = genre.to_lowercase();
+    let i = instrument.to_lowercase();
+    let sidechain = matches!(
+        g.as_str(),
+        "techno" | "house" | "melodic_techno" | "dark_techno"
+    );
+    let chain = match i.as_str() {
+        "drum_sampler" | "drums" | "kick" => FxChain {
+            high_pass_hz: Some(30.0),
+            compressor: Some(CompressorCfg {
+                threshold_db: -12.0,
+                ratio: 3.0,
+                attack_ms: 2.0,
+                release_ms: 80.0,
+                makeup_db: 4.0,
+            }),
+            ..Default::default()
+        },
+        "bass_synth" | "bass" => FxChain {
+            high_pass_hz: Some(40.0),
+            eq: vec![FreqBand {
+                freq_hz: 200.0,
+                gain_db: -2.0,
+                q: 1.0,
+            }],
+            sidechain_from_kick: sidechain,
+            ..Default::default()
+        },
+        "pad_synth" | "pad" | "chord" => FxChain {
+            high_pass_hz: Some(120.0),
+            eq: vec![FreqBand {
+                freq_hz: 350.0,
+                gain_db: -2.0,
+                q: 1.0,
+            }],
+            sends: SendLevels {
+                reverb: 0.3,
+                delay: 0.0,
+            },
+            ..Default::default()
+        },
+        "lead_synth" | "lead" | "bell" => FxChain {
+            high_pass_hz: Some(150.0),
+            eq: vec![FreqBand {
+                freq_hz: 2500.0,
+                gain_db: 2.0,
+                q: 1.2,
+            }],
+            sends: SendLevels {
+                reverb: 0.15,
+                delay: 0.2,
+            },
+            ..Default::default()
+        },
+        "hat" | "percussion" | "clap" | "snare" => FxChain {
+            high_pass_hz: Some(500.0),
+            ..Default::default()
+        },
+        _ => return None,
+    };
+    Some(chain)
+}
+
 /// Human-readable name for an automation param.
 fn param_str(param: &scorestrata_core::domain::AutomationParam) -> String {
     match param {
@@ -6391,12 +6815,14 @@ pub(crate) fn render_timeline_to_analysis(
 
     let voices = scorestrata_audio::render::build_voices(&layer_instruments);
     let automation = automation_lanes_from_timeline(timeline, &layer_names);
-    scorestrata_audio::render::render_notes_with_automation(
+    let fx = render_fx_from_project(project);
+    scorestrata_audio::render::render_notes_full(
         &notes,
         timeline.bpm,
         scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
         &voices,
         &automation,
+        &fx,
         &scorestrata_audio::render::RenderConfig::default(),
     )
     .map_err(|e| e.to_string())
@@ -6424,6 +6850,31 @@ pub fn automation_lanes_from_timeline(
             },
         )
         .collect()
+}
+
+/// Build per-layer FX / mix overrides (G5) from a project's layers.
+///
+/// Shared by the L4 render path and the CLI so per-track FX reaches the
+/// audio engine identically everywhere. Layers with no FX and no mix
+/// override are omitted (the renderer then uses its static staging).
+pub fn render_fx_from_project(
+    project: &scorestrata_core::domain::Project,
+) -> Vec<scorestrata_audio::render::RenderFx> {
+    let mut fx: Vec<scorestrata_audio::render::RenderFx> = Vec::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            if layer.fx.is_none() && layer.mix_gain_db.is_none() && layer.mix_pan.is_none() {
+                continue;
+            }
+            fx.push(scorestrata_audio::render::RenderFx {
+                layer_name: layer.name.clone(),
+                fx: layer.fx.clone().unwrap_or_default(),
+                mix_gain_db: layer.mix_gain_db,
+                mix_pan: layer.mix_pan,
+            });
+        }
+    }
+    fx
 }
 
 /// Compile and render a whole project to its Level-4 audio analysis.
@@ -7385,6 +7836,9 @@ mod tests {
                     pattern_instances: Vec::new(),
                     register: None,
                     automation: vec![],
+                    fx: None,
+                    mix_gain_db: None,
+                    mix_pan: None,
                 })
                 .collect(),
         }
@@ -8407,6 +8861,11 @@ mod tests {
                 },
             ],
         });
+        layer.fx = Some(scorestrata_core::domain::FxChain {
+            high_pass_hz: Some(40.0),
+            sidechain_from_kick: true,
+            ..Default::default()
+        });
         let view = crate::resources::build_timeline_view(&project);
         let bass = view
             .layers
@@ -8421,6 +8880,10 @@ mod tests {
             view.layers.iter().all(|l| l.automation.len() <= 4),
             "no stray lanes elsewhere"
         );
+        // G5 — the FX chain is visible in the arrange view.
+        let fx = bass.fx.as_deref().expect("bass FX surfaced");
+        assert!(fx.contains("hpf 40Hz"), "HPF shown: {fx}");
+        assert!(fx.contains("sidechain"), "sidechain shown: {fx}");
     }
 
     #[test]
@@ -8519,6 +8982,96 @@ mod tests {
         let receipt = write_automation(&params);
         assert!(matches!(receipt.status, ToolStatus::Failed));
         assert!(receipt.summary.contains("Unsupported automation param"));
+    }
+
+    #[test]
+    fn set_track_fx_applies_chain_to_layer() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let layer_id = project.arrangement.segments[0].layers[1].id.to_string(); // Bass
+        let fx = scorestrata_core::domain::FxChain {
+            high_pass_hz: Some(40.0),
+            eq: vec![scorestrata_core::domain::FreqBand {
+                freq_hz: 200.0,
+                gain_db: -2.0,
+                q: 1.0,
+            }],
+            sidechain_from_kick: true,
+            ..Default::default()
+        };
+        let params = SetTrackFxParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            layer_id: layer_id.clone(),
+            fx: serde_json::to_value(&fx).unwrap_or_default(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = set_track_fx(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "fx set succeeds: {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("hpf 40 Hz"));
+        assert!(receipt.summary.contains("sidechain"));
+        assert!(receipt.score_delta.contains_key("layers.fx"));
+    }
+
+    #[test]
+    fn set_track_mix_writes_faders() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let segment_id = project.arrangement.segments[0].id.to_string();
+        let layer_id = project.arrangement.segments[0].layers[1].id.to_string(); // Bass
+        let params = SetTrackMixParams {
+            project_id: project.id.to_string(),
+            segment_id: segment_id.clone(),
+            layer_id: layer_id.clone(),
+            gain_db: Some(-6.0),
+            pan: Some(0.2),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = set_track_mix(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "mix set succeeds: {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("-6"));
+        assert!(receipt.summary.contains("0.2"));
+        assert!(receipt.score_delta.contains_key("layers.mix"));
+    }
+
+    #[test]
+    fn apply_genre_mix_preset_chains_instruments() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = ApplyGenreMixPresetParams {
+            project_id: project.id.to_string(),
+            genre: "melodic_techno".to_string(),
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = apply_genre_mix_preset(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "preset applies: {receipt:#?}"
+        );
+        assert!(
+            receipt
+                .summary
+                .contains("Applied melodic_techno mix preset")
+        );
+        let count = receipt.score_delta.get("layers.fx_preset").cloned();
+        let n: u32 = count.and_then(|c| c.parse().ok()).unwrap_or(0);
+        // Drums, bass (and any lead) layers all get chains — must be ≥ 2.
+        assert!(n >= 2, "drum + bass layers get chains, got {n}");
+        // The genre helper itself gives the bass a kick-sidechain.
+        let bass_chain = genre_mix_chain("melodic_techno", "bass_synth");
+        assert!(
+            bass_chain.is_some_and(|c| c.sidechain_from_kick),
+            "bass ducks the kick in the techno preset"
+        );
+        let pad_chain = genre_mix_chain("melodic_techno", "pad_synth");
+        assert!(
+            pad_chain.is_some_and(|c| c.sends.reverb > 0.0),
+            "pads get a reverb send"
+        );
     }
 
     #[test]

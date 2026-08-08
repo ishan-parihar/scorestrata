@@ -157,6 +157,10 @@ mod tests {
                     instrument: "synth".to_string(),
                     pattern_instances: Vec::new(),
                     register: None,
+                    automation: vec![],
+                    fx: None,
+                    mix_gain_db: None,
+                    mix_pan: None,
                 })
                 .collect(),
         }

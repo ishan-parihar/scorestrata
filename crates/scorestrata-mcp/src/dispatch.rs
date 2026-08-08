@@ -382,6 +382,30 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::write_automation
             )
         }
+        "set_track_fx" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::SetTrackFxParams,
+                crate::tools::set_track_fx
+            )
+        }
+        "set_track_mix" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::SetTrackMixParams,
+                crate::tools::set_track_mix
+            )
+        }
+        "apply_genre_mix_preset" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::ApplyGenreMixPresetParams,
+                crate::tools::apply_genre_mix_preset
+            )
+        }
         "set_layer_register" => {
             route!(
                 tool_name,

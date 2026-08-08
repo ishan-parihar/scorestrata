@@ -915,6 +915,10 @@ fn make_layer(
         instrument: instrument.to_string(),
         pattern_instances,
         register,
+        automation: vec![],
+        fx: None,
+        mix_gain_db: None,
+        mix_pan: None,
     }
 }
 

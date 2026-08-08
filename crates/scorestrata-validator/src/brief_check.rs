@@ -500,6 +500,10 @@ mod tests {
                         instrument: "synth".to_string(),
                         pattern_instances: vec![],
                         register: None,
+                        automation: vec![],
+                        fx: None,
+                        mix_gain_db: None,
+                        mix_pan: None,
                     }],
                 },
                 Segment {
@@ -514,6 +518,10 @@ mod tests {
                         instrument: "synth".to_string(),
                         pattern_instances: vec![],
                         register: None,
+                        automation: vec![],
+                        fx: None,
+                        mix_gain_db: None,
+                        mix_pan: None,
                     }],
                 },
                 Segment {

@@ -130,6 +130,10 @@ mod tests {
                 velocity_multiplier: 1.0,
             }],
             register: Some(Register::new(5, 7)),
+            automation: vec![],
+            fx: None,
+            mix_gain_db: None,
+            mix_pan: None,
         }];
         project
     }
@@ -185,6 +189,10 @@ mod tests {
                 velocity_multiplier: 1.0,
             }],
             register: Some(Register::new(5, 7)),
+            automation: vec![],
+            fx: None,
+            mix_gain_db: None,
+            mix_pan: None,
         }];
         let diagnostics = check_layer_registers(&project);
         assert!(

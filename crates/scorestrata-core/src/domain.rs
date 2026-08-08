@@ -295,6 +295,17 @@ pub struct Layer {
     /// that make the layer move instead of sitting static.
     #[serde(default)]
     pub automation: Vec<Automation>,
+    /// Insert FX chain (G5) — HPF, EQ, compressor, sidechain, sends.
+    /// `None` = clean insert (static mix gain/pan only).
+    #[serde(default)]
+    pub fx: Option<FxChain>,
+    /// Per-layer mix gain override in dB (G5, mixer-fader action).
+    /// `None` = the engine's static per-instrument gain staging.
+    #[serde(default)]
+    pub mix_gain_db: Option<f32>,
+    /// Per-layer mix pan override (−1.0…1.0). `None` = static panning.
+    #[serde(default)]
+    pub mix_pan: Option<f32>,
 }
 
 /// An octave register — the vertical band a layer occupies on the timeline.
@@ -354,6 +365,97 @@ pub struct AutomationPointJson {
     pub tick: u64,
     /// Parameter value, normalized 0.0–1.0.
     pub value: f32,
+}
+
+/// A peaking EQ band (RBJ bell filter) in an [`FxChain`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FreqBand {
+    /// Center frequency in Hz.
+    pub freq_hz: f32,
+    /// Gain in dB (−12…+12).
+    pub gain_db: f32,
+    /// Filter Q (bandwidth).
+    pub q: f32,
+}
+
+/// Feed-forward compressor configuration (§7.2 of the production plan).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CompressorCfg {
+    /// Threshold in dBFS (e.g. −18).
+    pub threshold_db: f32,
+    /// Compression ratio (e.g. 3.0).
+    pub ratio: f32,
+    /// Attack time in ms.
+    pub attack_ms: f32,
+    /// Release time in ms.
+    pub release_ms: f32,
+    /// Make-up gain in dB.
+    pub makeup_db: f32,
+}
+
+impl Default for CompressorCfg {
+    fn default() -> Self {
+        Self {
+            threshold_db: -18.0,
+            ratio: 3.0,
+            attack_ms: 5.0,
+            release_ms: 120.0,
+            makeup_db: 6.0,
+        }
+    }
+}
+
+/// Effect send levels (0.0–1.0) for the reverb/delay buses (§7.1).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SendLevels {
+    /// Reverb send amount.
+    pub reverb: f32,
+    /// Delay send amount.
+    pub delay: f32,
+}
+
+impl Default for SendLevels {
+    fn default() -> Self {
+        Self {
+            reverb: 0.0,
+            delay: 0.0,
+        }
+    }
+}
+
+/// A per-track insert FX chain (§8.1, production-plan §7.1) — the
+/// "production" in production-grade: high-pass, EQ scoops, compression,
+/// sidechain ducking, and reverb/delay sends.
+///
+/// Deterministic, sample-rate-aware DSP lives in `scorestrata_audio::fx`;
+/// this is the serializable configuration the tools write and the renderer
+/// reads. `None` FX on a layer = clean insert (only the static mix gain/pan).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FxChain {
+    /// High-pass cutoff in Hz (e.g. 30 / 100 / 120); `None` = no HPF.
+    pub high_pass_hz: Option<f32>,
+    /// Peaking EQ bands (low-mid scoop, presence, air shelf).
+    pub eq: Vec<FreqBand>,
+    /// Optional feed-forward compressor.
+    pub compressor: Option<CompressorCfg>,
+    /// Duck this layer against the kick's envelope (electronic-music staple).
+    pub sidechain_from_kick: bool,
+    /// Reverb / delay send amounts (0.0–1.0).
+    pub sends: SendLevels,
+}
+
+impl Default for FxChain {
+    fn default() -> Self {
+        Self {
+            high_pass_hz: None,
+            eq: Vec::new(),
+            compressor: None,
+            sidechain_from_kick: false,
+            sends: SendLevels::default(),
+        }
+    }
 }
 
 /// An automation lane — a per-layer, per-parameter curve (§8.1).

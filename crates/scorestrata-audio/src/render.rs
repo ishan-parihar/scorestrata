@@ -88,6 +88,23 @@ pub struct RenderNote {
     pub layer_name: String,
 }
 
+/// A per-layer insert FX + mix override feeding the renderer (G5).
+///
+/// Conversion sites read the project's `Layer.fx` / `mix_gain_db` /
+/// `mix_pan` and translate them into these, so the audio engine stays
+/// timeline- and project-agnostic.
+#[derive(Debug, Clone)]
+pub struct RenderFx {
+    /// Layer name this applies to.
+    pub layer_name: String,
+    /// Insert FX chain (HPF → EQ → compressor → sends).
+    pub fx: scorestrata_core::domain::FxChain,
+    /// Mix gain override in dB; `None` = static gain staging.
+    pub mix_gain_db: Option<f32>,
+    /// Mix pan override; `None` = static panning.
+    pub mix_pan: Option<f32>,
+}
+
 /// A CC automation lane feeding the renderer (G4).
 ///
 /// Mirrors the domain `Automation` entity but keyed by the MIDI CC number
@@ -242,6 +259,23 @@ pub fn render_notes_with_automation(
     automation: &[RenderAutomation],
     config: &RenderConfig,
 ) -> Result<RenderResult, ScorestrataError> {
+    render_notes_full(notes, bpm, sample_rate, voices, automation, &[], config)
+}
+
+/// Render notes with automation lanes **and** per-layer FX / mix (G5).
+///
+/// Per-layer insert chains (HPF/EQ/compressor/sends) and gain/pan overrides
+/// are applied deterministically after each layer buffer is synthesized,
+/// then mixed with the static gain staging unless overridden.
+pub fn render_notes_full(
+    notes: &[RenderNote],
+    bpm: u32,
+    sample_rate: u32,
+    voices: &[RenderVoice],
+    automation: &[RenderAutomation],
+    fx: &[RenderFx],
+    config: &RenderConfig,
+) -> Result<RenderResult, ScorestrataError> {
     if sample_rate == 0 {
         return Err(ScorestrataError::RenderError {
             message: "sample rate must be non-zero".to_string(),
@@ -279,7 +313,8 @@ pub fn render_notes_with_automation(
             .iter()
             .filter(|a| a.layer_name == *layer_name)
             .collect();
-        let buffer = render_layer_buffer(
+        let layer_fx = fx.iter().find(|f| f.layer_name == *layer_name);
+        let mut buffer = render_layer_buffer(
             notes,
             layer_name,
             voices,
@@ -288,14 +323,21 @@ pub fn render_notes_with_automation(
             total_samples,
             &layer_automation,
         );
+        // G5 — insert FX chain (HPF → EQ → compressor → reverb/delay sends).
+        if let Some(rfx) = layer_fx {
+            crate::fx::apply_fx_chain(&mut buffer, &rfx.fx, sample_rate);
+            crate::fx::apply_sends(&mut buffer, &rfx.fx.sends, sample_rate);
+        }
+        let gain = layer_fx
+            .and_then(|f| f.mix_gain_db)
+            .map_or_else(|| layer_gain(layer_name), db_to_linear);
+        let pan = layer_fx
+            .and_then(|f| f.mix_pan)
+            .unwrap_or_else(|| layer_pan(layer_name));
         mixer.add_channel(MixerChannel {
             name: layer_name.clone(),
-            gain: layer_gain(layer_name),
-            pan: if config.stereo {
-                layer_pan(layer_name)
-            } else {
-                0.0
-            },
+            gain,
+            pan: if config.stereo { pan } else { 0.0 },
             muted: false,
             data: buffer,
         });
@@ -406,6 +448,19 @@ pub fn render_stems_with_automation(
     automation: &[RenderAutomation],
     config: &RenderConfig,
 ) -> Result<(Vec<Stem>, RenderResult), ScorestrataError> {
+    render_stems_full(notes, bpm, sample_rate, voices, automation, &[], config)
+}
+
+/// Render stems with automation **and** per-layer FX / mix (G5).
+pub fn render_stems_full(
+    notes: &[RenderNote],
+    bpm: u32,
+    sample_rate: u32,
+    voices: &[RenderVoice],
+    automation: &[RenderAutomation],
+    fx: &[RenderFx],
+    config: &RenderConfig,
+) -> Result<(Vec<Stem>, RenderResult), ScorestrataError> {
     if sample_rate == 0 {
         return Err(ScorestrataError::RenderError {
             message: "sample rate must be non-zero".to_string(),
@@ -443,6 +498,7 @@ pub fn render_stems_with_automation(
             .iter()
             .filter(|a| a.layer_name == *layer_name)
             .collect();
+        let layer_fx = fx.iter().find(|f| f.layer_name == *layer_name);
         let mut buffer = render_layer_buffer(
             notes,
             layer_name,
@@ -452,6 +508,12 @@ pub fn render_stems_with_automation(
             total_samples,
             &layer_automation,
         );
+        // G5 — insert FX chain, mirroring the master render so stems and
+        // master stay in agreement.
+        if let Some(rfx) = layer_fx {
+            crate::fx::apply_fx_chain(&mut buffer, &rfx.fx, sample_rate);
+            crate::fx::apply_sends(&mut buffer, &rfx.fx.sends, sample_rate);
+        }
 
         // Stem artifact (mono WAV per layer). Per-layer overlapping notes can
         // sum past full scale, so each stem is peak-limited before encoding —
@@ -472,14 +534,16 @@ pub fn render_stems_with_automation(
             analysis: stem_analysis,
         });
 
+        let gain = layer_fx
+            .and_then(|f| f.mix_gain_db)
+            .map_or_else(|| layer_gain(layer_name), db_to_linear);
+        let pan = layer_fx
+            .and_then(|f| f.mix_pan)
+            .unwrap_or_else(|| layer_pan(layer_name));
         mixer.add_channel(MixerChannel {
             name: layer_name.clone(),
-            gain: layer_gain(layer_name),
-            pan: if config.stereo {
-                layer_pan(layer_name)
-            } else {
-                0.0
-            },
+            gain,
+            pan: if config.stereo { pan } else { 0.0 },
             muted: false,
             data: buffer,
         });
@@ -748,6 +812,12 @@ pub fn build_voices(layers: &[(&str, &str)]) -> Vec<RenderVoice> {
         .collect()
 }
 
+/// Convert a gain in dB to a linear amplitude multiplier.
+#[must_use]
+pub fn db_to_linear(db: f32) -> f32 {
+    10.0f32.powf(db / 20.0)
+}
+
 /// Deterministic per-layer mix gain (gain staging).
 ///
 /// Drums sit forward, bass supports, and melodic layers sit slightly behind
@@ -943,6 +1013,52 @@ mod tests {
         }
         let sum: f32 = samples.iter().map(|s| s * s).sum();
         (sum / samples.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn per_track_fx_alters_spectrum_and_mix() {
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ) * 2,
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        let config = RenderConfig::default();
+        // Clean render: static staging gain.
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let clean = render_notes_full(&notes, 120, 48_000, &[], &[], &[], &config).unwrap();
+        // FX render: 200 Hz HPF + 6 dB high shelf-ish boost + reverb send.
+        let fx = vec![RenderFx {
+            layer_name: "lead".to_string(),
+            fx: scorestrata_core::domain::FxChain {
+                high_pass_hz: Some(200.0),
+                eq: vec![scorestrata_core::domain::FreqBand {
+                    freq_hz: 2000.0,
+                    gain_db: 6.0,
+                    q: 1.0,
+                }],
+                compressor: None,
+                sidechain_from_kick: false,
+                sends: scorestrata_core::domain::SendLevels {
+                    reverb: 0.3,
+                    delay: 0.0,
+                },
+            },
+            mix_gain_db: Some(-6.0),
+            mix_pan: None,
+        }];
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let fx_r = render_notes_full(&notes, 120, 48_000, &[], &[], &fx, &config).unwrap();
+        // The mix override (-6 dB) changes the level provably.
+        let clean_rms = rms(&clean.mono_samples);
+        let fx_rms = rms(&fx_r.mono_samples);
+        assert!(
+            fx_rms < clean_rms * 0.8,
+            "−6 dB mix override reduces level: {fx_rms} vs {clean_rms}"
+        );
+        // And the FX changes the output bytes (HPF + EQ + reverb tail).
+        assert_ne!(clean.checksum, fx_r.checksum, "FX alters the render");
     }
 
     #[test]

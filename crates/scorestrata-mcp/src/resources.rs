@@ -555,6 +555,9 @@ pub struct TimelineLayer {
     /// Automation lanes (G4) — per-param curves riding on this layer.
     #[serde(default)]
     pub automation: Vec<AutomationLaneView>,
+    /// Insert FX chain summary (G5) — HPF / EQ bands / comp / sidechain / sends.
+    #[serde(default)]
+    pub fx: Option<String>,
 }
 
 /// The layered timeline view — the agent's "arrange view".
@@ -664,6 +667,28 @@ pub fn build_timeline_view(project: &scorestrata_core::domain::Project) -> Timel
                         points: lane.points.iter().map(|p| (p.tick.0, p.value)).collect(),
                     })
                     .collect();
+                let fx_summary = layer.fx.as_ref().map(|fx| {
+                    let mut parts: Vec<String> = Vec::new();
+                    if let Some(hz) = fx.high_pass_hz {
+                        parts.push(format!("hpf {hz:.0}Hz"));
+                    }
+                    if !fx.eq.is_empty() {
+                        parts.push(format!("eq{}", fx.eq.len()));
+                    }
+                    if fx.compressor.is_some() {
+                        parts.push("comp".to_string());
+                    }
+                    if fx.sidechain_from_kick {
+                        parts.push("sidechain".to_string());
+                    }
+                    if fx.sends.reverb > 0.0 {
+                        parts.push(format!("rvb{:.1}", fx.sends.reverb));
+                    }
+                    if fx.sends.delay > 0.0 {
+                        parts.push(format!("dly{:.1}", fx.sends.delay));
+                    }
+                    parts.join(",")
+                });
                 lanes.push(TimelineLayer {
                     layer_id: layer.id.to_string(),
                     name: layer.name.clone(),
@@ -674,6 +699,7 @@ pub fn build_timeline_view(project: &scorestrata_core::domain::Project) -> Timel
                     note_count,
                     notes: notes.into_iter().take(MAX_NOTES_PER_LAYER).collect(),
                     automation,
+                    fx: fx_summary,
                 });
             }
         }

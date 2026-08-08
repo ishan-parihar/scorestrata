@@ -449,6 +449,16 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "low",
             "composition",
         ),
+        ("set_track_fx", "mutating", false, "write", "low", "mix"),
+        ("set_track_mix", "mutating", false, "write", "low", "mix"),
+        (
+            "apply_genre_mix_preset",
+            "mutating",
+            false,
+            "write",
+            "low",
+            "mix",
+        ),
         (
             "set_layer_register",
             "mutating",

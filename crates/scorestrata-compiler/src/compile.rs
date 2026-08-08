@@ -339,6 +339,9 @@ mod tests {
             }],
             register: None,
             automation: vec![],
+            fx: None,
+            mix_gain_db: None,
+            mix_pan: None,
         };
 
         Project {

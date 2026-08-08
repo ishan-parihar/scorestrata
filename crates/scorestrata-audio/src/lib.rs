@@ -19,6 +19,7 @@
 pub mod analysis;
 pub mod audit;
 pub mod error;
+pub mod fx;
 pub mod mastering;
 pub mod mixer;
 pub mod render;

@@ -32,6 +32,7 @@ pub fn check_timeline(project: &Project) -> Vec<Diagnostic> {
     diagnostics.extend(check_overlapping_notes(project));
     diagnostics.extend(check_automation_range(project));
     diagnostics.extend(check_layer_automation(project));
+    diagnostics.extend(check_layer_fx(project));
     diagnostics.extend(check_absolute_timing(project));
     diagnostics
 }
@@ -220,6 +221,112 @@ fn check_layer_automation(project: &Project) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// Check 4b — FX chain send levels (G5) must stay within 0.0–1.0 and HPF
+/// cutoffs must be non-negative (sane insert chains).
+fn check_layer_fx(project: &Project) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            let Some(fx) = &layer.fx else {
+                continue;
+            };
+            let mut bad_sends = false;
+            let mut bad_hpf = false;
+            if fx.sends.reverb < 0.0
+                || fx.sends.reverb > 1.0
+                || fx.sends.delay < 0.0
+                || fx.sends.delay > 1.0
+            {
+                bad_sends = true;
+            }
+            if fx
+                .high_pass_hz
+                .is_some_and(|hz| hz < 0.0 || !hz.is_finite())
+            {
+                bad_hpf = true;
+            }
+            for band in &fx.eq {
+                if band.gain_db.abs() > 24.0 || band.freq_hz <= 0.0 {
+                    diagnostics.push(Diagnostic {
+                        id: DiagnosticId::new(),
+                        code: "TIMELINE_FX_EQ_OUT_OF_RANGE".to_string(),
+                        metric: "timeline.fx_eq".to_string(),
+                        severity: Severity::Warning,
+                        scope: MetricScope {
+                            segment_id: Some(segment.id),
+                            layer_id: Some(layer.id),
+                            bar_range: None,
+                        },
+                        evidence_uris: vec![format!(
+                            "project://{}/segments/{}/layers/{}",
+                            project.id, segment.id, layer.id
+                        )],
+                        message: format!(
+                            "Layer '{}' EQ band {:.0} Hz has gain {:.1} dB (sane range ±24 dB)",
+                            layer.name, band.freq_hz, band.gain_db
+                        ),
+                        root_causes: vec!["EQ band outside the sane ±24 dB range".to_string()],
+                        suggested_patches: vec![],
+                        expected_delta: None,
+                        confidence: 1.0,
+                    });
+                }
+            }
+            if bad_sends {
+                diagnostics.push(Diagnostic {
+                    id: DiagnosticId::new(),
+                    code: "TIMELINE_FX_SENDS_OUT_OF_RANGE".to_string(),
+                    metric: "timeline.fx_sends".to_string(),
+                    severity: Severity::Error,
+                    scope: MetricScope {
+                        segment_id: Some(segment.id),
+                        layer_id: Some(layer.id),
+                        bar_range: None,
+                    },
+                    evidence_uris: vec![format!(
+                        "project://{}/segments/{}/layers/{}",
+                        project.id, segment.id, layer.id
+                    )],
+                    message: format!(
+                        "Layer '{}' send levels reverb={} delay={} (expected 0.0–1.0)",
+                        layer.name, fx.sends.reverb, fx.sends.delay
+                    ),
+                    root_causes: vec!["send level outside its valid range".to_string()],
+                    suggested_patches: vec![],
+                    expected_delta: None,
+                    confidence: 1.0,
+                });
+            }
+            if bad_hpf {
+                diagnostics.push(Diagnostic {
+                    id: DiagnosticId::new(),
+                    code: "TIMELINE_FX_HPF_OUT_OF_RANGE".to_string(),
+                    metric: "timeline.fx_hpf".to_string(),
+                    severity: Severity::Error,
+                    scope: MetricScope {
+                        segment_id: Some(segment.id),
+                        layer_id: Some(layer.id),
+                        bar_range: None,
+                    },
+                    evidence_uris: vec![format!(
+                        "project://{}/segments/{}/layers/{}",
+                        project.id, segment.id, layer.id
+                    )],
+                    message: format!(
+                        "Layer '{}' HPF cutoff {:?} is invalid (needs ≥ 0 Hz)",
+                        layer.name, fx.high_pass_hz
+                    ),
+                    root_causes: vec!["HPF cutoff out of range".to_string()],
+                    suggested_patches: vec![],
+                    expected_delta: None,
+                    confidence: 1.0,
+                });
+            }
+        }
+    }
+    diagnostics
+}
+
 /// Check 4 — energy automation must stay within its 0.0–1.0 range.
 fn check_automation_range(project: &Project) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -306,6 +413,44 @@ mod tests {
             "clean fixture should pass timeline: {:?}",
             codes(&check_timeline(&project))
         );
+    }
+
+    #[test]
+    fn fx_sends_out_of_range_are_flagged() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let layer = &mut project.arrangement.segments[0].layers[0];
+        layer.fx = Some(scorestrata_core::domain::FxChain {
+            sends: scorestrata_core::domain::SendLevels {
+                reverb: 1.7,
+                delay: 0.0,
+            },
+            ..Default::default()
+        });
+        let diagnostics = check_timeline(&project);
+        assert!(codes(&diagnostics).contains(&"TIMELINE_FX_SENDS_OUT_OF_RANGE"));
+    }
+
+    #[test]
+    fn sane_fx_chain_passes() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let layer = &mut project.arrangement.segments[0].layers[0];
+        layer.fx = Some(scorestrata_core::domain::FxChain {
+            high_pass_hz: Some(40.0),
+            eq: vec![scorestrata_core::domain::FreqBand {
+                freq_hz: 200.0,
+                gain_db: -2.0,
+                q: 1.0,
+            }],
+            sends: scorestrata_core::domain::SendLevels {
+                reverb: 0.2,
+                delay: 0.0,
+            },
+            ..Default::default()
+        });
+        let diagnostics = check_timeline(&project);
+        assert!(!codes(&diagnostics).contains(&"TIMELINE_FX_SENDS_OUT_OF_RANGE"));
+        assert!(!codes(&diagnostics).contains(&"TIMELINE_FX_HPF_OUT_OF_RANGE"));
+        assert!(!codes(&diagnostics).contains(&"TIMELINE_FX_EQ_OUT_OF_RANGE"));
     }
 
     #[test]

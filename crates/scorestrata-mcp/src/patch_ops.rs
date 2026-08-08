@@ -320,12 +320,14 @@ fn apply_normalize_loudness(params: &ApplyPatchParams, project: &mut Project) ->
         .collect();
 
     let automation = crate::tools::automation_lanes_from_timeline(&timeline, &layer_names);
-    let before = match scorestrata_audio::render::render_notes_with_automation(
+    let fx = crate::tools::render_fx_from_project(project);
+    let before = match scorestrata_audio::render::render_notes_full(
         &notes,
         timeline.bpm,
         scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
         &voices,
         &automation,
+        &fx,
         &scorestrata_audio::render::RenderConfig::default(),
     ) {
         Ok(r) => r,
@@ -502,6 +504,9 @@ fn apply_add_segment_layer(params: &ApplyPatchParams, project: &mut Project) -> 
         pattern_instances: Vec::new(),
         register: None,
         automation: vec![],
+        fx: None,
+        mix_gain_db: None,
+        mix_pan: None,
     });
 
     let mut score_delta = BTreeMap::new();
@@ -718,6 +723,9 @@ mod tests {
             }],
             register: None,
             automation: vec![],
+            fx: None,
+            mix_gain_db: None,
+            mix_pan: None,
         };
 
         Project {

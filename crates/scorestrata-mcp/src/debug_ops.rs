@@ -821,6 +821,10 @@ mod tests {
             instrument: "pad_synth".to_string(),
             pattern_instances: vec![],
             register: None,
+            automation: vec![],
+            fx: None,
+            mix_gain_db: None,
+            mix_pan: None,
         });
         let diff = compute_snapshot_diff(&project_a, &project_b);
         assert!(

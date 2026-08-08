@@ -3290,6 +3290,9 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
         }],
         register: None,
         automation: vec![],
+        fx: None,
+        mix_gain_db: None,
+        mix_pan: None,
     };
 
     // Build an 8-bar project with two segments: a sparse verse (drums only)
@@ -3317,6 +3320,9 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
             }],
             register: None,
             automation: vec![],
+            fx: None,
+            mix_gain_db: None,
+            mix_pan: None,
         }],
     };
 
@@ -3340,6 +3346,9 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
                 }],
                 register: None,
                 automation: vec![],
+                fx: None,
+                mix_gain_db: None,
+                mix_pan: None,
             },
             // Pad fills the harmonic space; three chorus layers vs one verse
             // layer gives the ≥0.15 energy delta the transition check wants.
@@ -3356,6 +3365,9 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
                 }],
                 register: None,
                 automation: vec![],
+                fx: None,
+                mix_gain_db: None,
+                mix_pan: None,
             },
             layer,
         ],
