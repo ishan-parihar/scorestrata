@@ -8,6 +8,7 @@
 pub mod arrangement;
 pub mod compile;
 pub mod diagnostics;
+pub mod incremental;
 pub mod midi_export;
 pub mod passes;
 pub mod plan;

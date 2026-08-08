@@ -232,6 +232,19 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-COMPILER-INCREMENTAL".to_string(),
+        title: "§7.3 incremental compilation + §7.2 pass observability".to_string(),
+        phase: "1".to_string(),
+        tasks: vec!["COMPILER-003".to_string()],
+        code: vec!["scorestrata_compiler::incremental".to_string()],
+        tests: vec!["incremental::tests".to_string()],
+        mcp_tools: vec![],
+        cli_commands: vec!["ss compile --incremental".to_string()],
+        docs: vec!["architecture.md §7.2, §7.3".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-VALIDATOR-SYMBOLIC".to_string(),
         title: "Symbolic validation (scale, segment, transition, density)".to_string(),
         phase: "2".to_string(),

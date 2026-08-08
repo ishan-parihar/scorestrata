@@ -32,8 +32,155 @@ const fn drum_pitch_for_velocity(velocity: u8) -> u8 {
     }
 }
 
-use crate::arrangement::expand_arrangement;
+use crate::arrangement::{ExpandedSegment, expand_arrangement};
 use crate::timeline::{EventKind, TimelineEvent, TimelineIR};
+
+/// Generate the timeline events for a single expanded segment.
+///
+/// Events carry **local** sequential ids (0..n in generation order). The
+/// orchestrators — [`compile_project`] and the §7.3 incremental path —
+/// renumber them into global ids afterwards, so both emit byte-identical
+/// timelines for the same project.
+pub(crate) fn compile_segment_events(
+    project: &Project,
+    expanded_segment: &ExpandedSegment,
+) -> Result<Vec<TimelineEvent>, ScorestrataError> {
+    let segment = &expanded_segment.segment;
+    // Segment start in ticks: bars * PPQ * beats-per-bar
+    let segment_start_tick = u64::from(expanded_segment.start_bar)
+        * u64::from(scorestrata_core::domain::PPQ)
+        * u64::from(project.config.time_signature.numerator);
+
+    let mut events: Vec<TimelineEvent> = Vec::new();
+    let mut next_event_id: u64 = 0;
+
+    for layer in &segment.layers {
+        // G4 — emit automation lanes as ControlChange events (segment-relative
+        // ticks, matching pattern-instance placement). Each lane is linearly
+        // interpolated by the audio renderer when sweeping the parameter.
+        for lane in &layer.automation {
+            for point in &lane.points {
+                let abs_tick = segment_start_tick + point.tick.0;
+                events.push(TimelineEvent {
+                    id: next_event_id,
+                    tick: scorestrata_core::domain::Tick::new(abs_tick),
+                    kind: EventKind::ControlChange {
+                        controller: lane.param.cc_number(),
+                        value: lane.cc_value_at(point.tick),
+                    },
+                    track_id: track_id_for_layer(&layer.id),
+                    segment_id: segment.id,
+                    layer_id: layer.id,
+                    pattern_id: None,
+                });
+                next_event_id += 1;
+            }
+        }
+        for instance in &layer.pattern_instances {
+            let pattern = project
+                .patterns
+                .iter()
+                .find(|p| p.id == instance.pattern_id)
+                .ok_or_else(|| ScorestrataError::MissingEntity {
+                    entity_type: "pattern".to_string(),
+                    entity_id: instance.pattern_id.to_string(),
+                })?;
+
+            let instance_start = u64::from(instance.start_tick.0);
+            let transpose = i64::from(instance.transpose);
+
+            // Note-based patterns (melody, bass, pads).
+            for note in &pattern.notes {
+                let abs_tick = segment_start_tick + instance_start + note.start.0;
+                // Note pitch 0-127 plus bounded transpose stays in i64 range;
+                // the clamp makes the narrowing cast provably lossless.
+                let mut pitch = (i64::from(note.pitch.0) + transpose).clamp(0, 127) as u8;
+                // G2 — enforce the layer's declared octave register: notes
+                // outside it are clamped into the band so a transposed
+                // pattern can never spill into a neighboring layer's
+                // register (the production-grade octave discipline).
+                if let Some(register) = &layer.register {
+                    pitch = register
+                        .clamp_note(scorestrata_core::domain::MidiNote::new(pitch))
+                        .0;
+                }
+
+                let track_id = track_id_for_layer(&layer.id);
+                events.push(TimelineEvent {
+                    id: next_event_id,
+                    tick: scorestrata_core::domain::Tick::new(abs_tick),
+                    kind: EventKind::NoteOn {
+                        pitch: scorestrata_core::domain::MidiNote::new(pitch),
+                        velocity: note.velocity,
+                    },
+                    track_id,
+                    segment_id: segment.id,
+                    layer_id: layer.id,
+                    pattern_id: Some(pattern.id),
+                });
+                next_event_id += 1;
+
+                events.push(TimelineEvent {
+                    id: next_event_id,
+                    tick: scorestrata_core::domain::Tick::new(abs_tick + note.duration.0),
+                    kind: EventKind::NoteOff {
+                        pitch: scorestrata_core::domain::MidiNote::new(pitch),
+                    },
+                    track_id,
+                    segment_id: segment.id,
+                    layer_id: layer.id,
+                    pattern_id: Some(pattern.id),
+                });
+                next_event_id += 1;
+            }
+
+            // Step-sequencer patterns (drums): each active step becomes
+            // a 16th-note hit. The GM drum pitch is inferred from the
+            // step velocity tier set by the planner (kick=110, snare=100,
+            // hat=85); steps without a tier map to a closed hat.
+            if !pattern.steps.is_empty() {
+                let sixteenth = u64::from(scorestrata_core::domain::PPQ) / 4;
+                for step in &pattern.steps {
+                    if !step.active {
+                        continue;
+                    }
+                    let abs_tick =
+                        segment_start_tick + instance_start + u64::from(step.index) * sixteenth;
+                    let pitch = drum_pitch_for_velocity(step.velocity.0);
+                    let track_id = track_id_for_layer(&layer.id);
+                    events.push(TimelineEvent {
+                        id: next_event_id,
+                        tick: scorestrata_core::domain::Tick::new(abs_tick),
+                        kind: EventKind::NoteOn {
+                            pitch: scorestrata_core::domain::MidiNote::new(pitch),
+                            velocity: step.velocity,
+                        },
+                        track_id,
+                        segment_id: segment.id,
+                        layer_id: layer.id,
+                        pattern_id: Some(pattern.id),
+                    });
+                    next_event_id += 1;
+
+                    events.push(TimelineEvent {
+                        id: next_event_id,
+                        tick: scorestrata_core::domain::Tick::new(abs_tick + sixteenth),
+                        kind: EventKind::NoteOff {
+                            pitch: scorestrata_core::domain::MidiNote::new(pitch),
+                        },
+                        track_id,
+                        segment_id: segment.id,
+                        layer_id: layer.id,
+                        pattern_id: Some(pattern.id),
+                    });
+                    next_event_id += 1;
+                }
+            }
+        }
+    }
+
+    Ok(events)
+}
 
 /// Compile a project into a deterministic timeline IR.
 ///
@@ -65,140 +212,19 @@ pub fn compile_project(project: &Project) -> Result<TimelineIR, ScorestrataError
 
     let expanded = expand_arrangement(&project.arrangement)?;
 
+    // Compile each segment independently, then renumber into global ids in
+    // traversal order. The §7.3 incremental path reuses this exact helper,
+    // so a cached compile is byte-identical to a full one.
     let mut events: Vec<TimelineEvent> = Vec::new();
     let mut next_event_id: u64 = 0;
 
     for expanded_segment in &expanded {
-        let segment = &expanded_segment.segment;
-        // Segment start in ticks: bars * PPQ * beats-per-bar
-        let segment_start_tick = u64::from(expanded_segment.start_bar)
-            * u64::from(scorestrata_core::domain::PPQ)
-            * u64::from(project.config.time_signature.numerator);
-
-        for layer in &segment.layers {
-            // G4 — emit automation lanes as ControlChange events (segment-relative
-            // ticks, matching pattern-instance placement). Each lane is linearly
-            // interpolated by the audio renderer when sweeping the parameter.
-            for lane in &layer.automation {
-                for point in &lane.points {
-                    let abs_tick = segment_start_tick + point.tick.0;
-                    events.push(TimelineEvent {
-                        id: next_event_id,
-                        tick: scorestrata_core::domain::Tick::new(abs_tick),
-                        kind: EventKind::ControlChange {
-                            controller: lane.param.cc_number(),
-                            value: lane.cc_value_at(point.tick),
-                        },
-                        track_id: track_id_for_layer(&layer.id),
-                        segment_id: segment.id,
-                        layer_id: layer.id,
-                        pattern_id: None,
-                    });
-                    next_event_id += 1;
-                }
-            }
-            for instance in &layer.pattern_instances {
-                let pattern = project
-                    .patterns
-                    .iter()
-                    .find(|p| p.id == instance.pattern_id)
-                    .ok_or_else(|| ScorestrataError::MissingEntity {
-                        entity_type: "pattern".to_string(),
-                        entity_id: instance.pattern_id.to_string(),
-                    })?;
-
-                let instance_start = u64::from(instance.start_tick.0);
-                let transpose = i64::from(instance.transpose);
-
-                // Note-based patterns (melody, bass, pads).
-                for note in &pattern.notes {
-                    let abs_tick = segment_start_tick + instance_start + note.start.0;
-                    // Note pitch 0-127 plus bounded transpose stays in i64 range;
-                    // the clamp makes the narrowing cast provably lossless.
-                    let mut pitch = (i64::from(note.pitch.0) + transpose).clamp(0, 127) as u8;
-                    // G2 — enforce the layer's declared octave register: notes
-                    // outside it are clamped into the band so a transposed
-                    // pattern can never spill into a neighboring layer's
-                    // register (the production-grade octave discipline).
-                    if let Some(register) = &layer.register {
-                        pitch = register
-                            .clamp_note(scorestrata_core::domain::MidiNote::new(pitch))
-                            .0;
-                    }
-
-                    let track_id = track_id_for_layer(&layer.id);
-                    events.push(TimelineEvent {
-                        id: next_event_id,
-                        tick: scorestrata_core::domain::Tick::new(abs_tick),
-                        kind: EventKind::NoteOn {
-                            pitch: scorestrata_core::domain::MidiNote::new(pitch),
-                            velocity: note.velocity,
-                        },
-                        track_id,
-                        segment_id: segment.id,
-                        layer_id: layer.id,
-                        pattern_id: Some(pattern.id),
-                    });
-                    next_event_id += 1;
-
-                    events.push(TimelineEvent {
-                        id: next_event_id,
-                        tick: scorestrata_core::domain::Tick::new(abs_tick + note.duration.0),
-                        kind: EventKind::NoteOff {
-                            pitch: scorestrata_core::domain::MidiNote::new(pitch),
-                        },
-                        track_id,
-                        segment_id: segment.id,
-                        layer_id: layer.id,
-                        pattern_id: Some(pattern.id),
-                    });
-                    next_event_id += 1;
-                }
-
-                // Step-sequencer patterns (drums): each active step becomes
-                // a 16th-note hit. The GM drum pitch is inferred from the
-                // step velocity tier set by the planner (kick=110, snare=100,
-                // hat=85); steps without a tier map to a closed hat.
-                if !pattern.steps.is_empty() {
-                    let sixteenth = u64::from(scorestrata_core::domain::PPQ) / 4;
-                    for step in &pattern.steps {
-                        if !step.active {
-                            continue;
-                        }
-                        let abs_tick =
-                            segment_start_tick + instance_start + u64::from(step.index) * sixteenth;
-                        let pitch = drum_pitch_for_velocity(step.velocity.0);
-                        let track_id = track_id_for_layer(&layer.id);
-                        events.push(TimelineEvent {
-                            id: next_event_id,
-                            tick: scorestrata_core::domain::Tick::new(abs_tick),
-                            kind: EventKind::NoteOn {
-                                pitch: scorestrata_core::domain::MidiNote::new(pitch),
-                                velocity: step.velocity,
-                            },
-                            track_id,
-                            segment_id: segment.id,
-                            layer_id: layer.id,
-                            pattern_id: Some(pattern.id),
-                        });
-                        next_event_id += 1;
-
-                        events.push(TimelineEvent {
-                            id: next_event_id,
-                            tick: scorestrata_core::domain::Tick::new(abs_tick + sixteenth),
-                            kind: EventKind::NoteOff {
-                                pitch: scorestrata_core::domain::MidiNote::new(pitch),
-                            },
-                            track_id,
-                            segment_id: segment.id,
-                            layer_id: layer.id,
-                            pattern_id: Some(pattern.id),
-                        });
-                        next_event_id += 1;
-                    }
-                }
-            }
+        let mut segment_events = compile_segment_events(project, expanded_segment)?;
+        for event in &mut segment_events {
+            event.id = next_event_id;
+            next_event_id += 1;
         }
+        events.extend(segment_events);
     }
 
     // Deterministic ordering: tick first, then id for stable tie-breaking.

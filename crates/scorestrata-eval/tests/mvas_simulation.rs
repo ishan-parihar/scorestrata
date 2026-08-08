@@ -1588,15 +1588,31 @@ fn mvas_step_22_telemetry_measures_dispatched_calls() {
     assert_eq!(receipt.tool, "get_telemetry");
     assert!(matches!(receipt.status, ToolStatus::Succeeded));
     assert!(receipt.summary.contains("tool call(s)"));
-    assert!(receipt.summary.contains("mvas22_probe_ax2"));
-    assert!(
-        receipt.summary.contains("mvas22_failing_probex1"),
+
+    // The registry itself reflects the exact per-tool counts. Assert against
+    // the full snapshot map, not the summary string: the summary is a
+    // truncated top-N display, and parallel MVAS steps pollute the shared
+    // registry with more tools than fit the cutoff — so a 1-call probe can
+    // fall off the displayed list while still being measured correctly.
+    let snap = scorestrata_mcp::telemetry::snapshot();
+    assert_eq!(
+        snap.tool_calls.get("mvas22_probe_a"),
+        Some(&2),
+        "repeated dispatches are counted: {}",
+        receipt.summary
+    );
+    assert_eq!(
+        snap.tool_calls.get("mvas22_probe_b"),
+        Some(&1),
+        "unique dispatches are counted: {}",
+        receipt.summary
+    );
+    assert_eq!(
+        snap.tool_calls.get("mvas22_failing_probe"),
+        Some(&1),
         "failed dispatches are still measured: {}",
         receipt.summary
     );
-
-    // The registry itself reflects the same counts.
-    let snap = scorestrata_mcp::telemetry::snapshot();
     assert!(snap.total_tool_calls() >= 4);
     assert_eq!(snap.tool_calls.get("mvas22_probe_a"), Some(&2));
     assert_eq!(snap.tool_calls.get("mvas22_failing_probe"), Some(&1));

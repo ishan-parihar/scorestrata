@@ -51,6 +51,10 @@ enum Commands {
     Compile {
         /// Project path
         path: String,
+        /// §7.3 — incremental compile: reuse unchanged segments from the
+        /// persisted compile cache (fast agent loops)
+        #[arg(long)]
+        incremental: bool,
     },
     /// Validate a project
     Validate {
@@ -233,7 +237,7 @@ fn main() -> Result<()> {
         Commands::New { name, brief } => handle_new(&name, brief.as_deref())?,
         Commands::Doctor => handle_doctor()?,
         Commands::Config { action } => handle_config(action)?,
-        Commands::Compile { path } => handle_compile(&path)?,
+        Commands::Compile { path, incremental } => handle_compile(&path, incremental)?,
         Commands::Validate { path, scope } => handle_validate(&path, &scope)?,
         Commands::Render {
             path,
@@ -495,7 +499,7 @@ fn handle_config(action: ConfigAction) -> Result<()> {
     }
     Ok(())
 }
-fn handle_compile(path: &str) -> Result<()> {
+fn handle_compile(path: &str, incremental: bool) -> Result<()> {
     println!("{}", format!("Compiling: {path}").yellow());
 
     let project_path = Path::new(path);
@@ -503,8 +507,20 @@ fn handle_compile(path: &str) -> Result<()> {
         .context("Failed to load project — run `ss new <name>` first")?;
 
     // Phase 1: expand arrangement, instantiate patterns, generate timeline IR.
-    let timeline = scorestrata_compiler::compile_project(&project)
-        .context("Compilation failed — check project status and patterns")?;
+    // §7.3 — incremental mode reuses unchanged segments from the persisted
+    // compile cache, so agent loops recompile only what changed.
+    let cache_path = project_path.join("cache/compile_cache.json");
+    let (timeline, observability) = if incremental {
+        let result = scorestrata_compiler::incremental::compile_with_cache(&project, &cache_path)
+            .context("Compilation failed — check project status and patterns")?;
+        (result.timeline, Some(result.observability))
+    } else {
+        (
+            scorestrata_compiler::compile_project(&project)
+                .context("Compilation failed — check project status and patterns")?,
+            None,
+        )
+    };
 
     println!(
         "  Pass 1: arrangement expansion ({} segments)",
@@ -514,6 +530,21 @@ fn handle_compile(path: &str) -> Result<()> {
         "  Pass 2: pattern instantiation ({} patterns)",
         project.patterns.len()
     );
+    if let Some(obs) = &observability {
+        // §7.2 pass observability — what the incremental compile reused vs
+        // recomputed, and why anything was invalidated.
+        println!(
+            "  §7.3 incremental: {} segments reused, {} recomputed ({} events reused, {} recomputed)",
+            obs.segments_reused, obs.segments_recomputed, obs.events_reused, obs.events_recomputed
+        );
+        for invalidation in &obs.invalidations {
+            println!(
+                "    invalidation: {} — {:?}",
+                invalidation.segment_id, invalidation.reason
+            );
+        }
+        println!("    cache: {}", cache_path.display());
+    }
     println!(
         "  Pass 3: timeline generation ({} events, {} ticks)",
         timeline.event_count(),
@@ -1799,7 +1830,20 @@ mod tests {
     #[test]
     fn parse_compile_command() {
         let cli = Cli::try_parse_from(["ss", "compile", "my_song"]).unwrap();
-        assert!(matches!(cli.command, Commands::Compile { path } if path == "my_song"));
+        assert!(matches!(
+            cli.command,
+            Commands::Compile { path, incremental: false } if path == "my_song"
+        ));
+    }
+
+    #[test]
+    fn parse_compile_command_with_incremental_flag() {
+        // §7.3 — `ss compile --incremental` enables the compile cache.
+        let cli = Cli::try_parse_from(["ss", "compile", "my_song", "--incremental"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Compile { path, incremental: true } if path == "my_song"
+        ));
     }
 
     #[test]
