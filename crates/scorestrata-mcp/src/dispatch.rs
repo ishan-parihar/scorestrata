@@ -406,6 +406,22 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::apply_genre_mix_preset
             )
         }
+        "apply_arrangement_template" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::ApplyArrangementTemplateParams,
+                crate::tools::apply_arrangement_template
+            )
+        }
+        "import_reference_profile" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::ImportReferenceProfileParams,
+                crate::tools::import_reference_profile
+            )
+        }
         "set_layer_register" => {
             route!(
                 tool_name,

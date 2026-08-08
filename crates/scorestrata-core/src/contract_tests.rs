@@ -9,7 +9,7 @@
 
 use crate::domain::{
     Arrangement, Brief, DeliveryTarget, Duration, Layer, MidiNote, Note, Pattern, ProjectConfig,
-    Segment, SegmentRole, Tick, TimeSignature, Velocity,
+    Segment, SegmentRole, SpectralReference, Tick, TimeSignature, Velocity,
 };
 use crate::ids::{LayerId, NoteId, PatternId, SegmentId};
 use crate::schema_registry::validate_instance;
@@ -178,4 +178,75 @@ fn registry_version_is_semver() {
     for part in parts {
         assert!(part.parse::<u32>().is_ok(), "semver components numeric");
     }
+}
+
+#[test]
+fn spectral_reference_deviation_is_zero_on_exact_match() {
+    let reference = SpectralReference {
+        track_name: "ref".to_string(),
+        genre: "techno".to_string(),
+        band_energy_expected: [0.15, 0.25, 0.2, 0.2, 0.1, 0.1],
+        centroid_expected_hz: 2400.0,
+        aliasing_max: 0.02,
+        loudness_target_lufs: -8.0,
+    };
+    let deviation = reference.deviation(
+        &reference.band_energy_expected,
+        reference.centroid_expected_hz,
+        0.01,
+    );
+    assert!(
+        deviation < 1e-3,
+        "matching spectrum should not deviate, got {deviation}"
+    );
+}
+
+#[test]
+fn spectral_reference_deviation_grows_with_centroid_drift() {
+    let reference = SpectralReference {
+        track_name: "ref".to_string(),
+        genre: "techno".to_string(),
+        band_energy_expected: [0.15, 0.25, 0.2, 0.2, 0.1, 0.1],
+        centroid_expected_hz: 2400.0,
+        aliasing_max: 0.02,
+        loudness_target_lufs: -8.0,
+    };
+    // Far above the expected centroid → meaningful deviation (clamped ≤ 1).
+    let deviation = reference.deviation(
+        &reference.band_energy_expected,
+        4800.0,
+        reference.aliasing_max,
+    );
+    assert!(
+        (0.25..=0.4).contains(&deviation),
+        "half-octave centroid drift should land in the weight band, got {deviation}"
+    );
+}
+
+#[test]
+fn spectral_reference_deviation_penalizes_aliasing_above_limit() {
+    let reference = SpectralReference::default();
+    let aliased = reference.deviation(&reference.band_energy_expected, 0.0, 0.8);
+    let clean = reference.deviation(&reference.band_energy_expected, 0.0, 0.1);
+    assert!(
+        aliased > clean,
+        "aliasing above the max must add deviation: {aliased} vs {clean}"
+    );
+}
+
+#[test]
+fn segment_role_from_template_role_maps_all_archetypes() {
+    assert_eq!(SegmentRole::from_template_role("intro"), SegmentRole::Intro);
+    assert_eq!(SegmentRole::from_template_role("build"), SegmentRole::Build);
+    assert_eq!(SegmentRole::from_template_role("drop"), SegmentRole::Chorus);
+    assert_eq!(
+        SegmentRole::from_template_role("breakdown"),
+        SegmentRole::Breakdown
+    );
+    assert_eq!(SegmentRole::from_template_role("outro"), SegmentRole::Outro);
+    assert_eq!(SegmentRole::from_template_role("verse"), SegmentRole::Verse);
+    assert_eq!(
+        SegmentRole::from_template_role("unknown_thing"),
+        SegmentRole::Custom
+    );
 }

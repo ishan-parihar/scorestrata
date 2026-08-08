@@ -460,6 +460,22 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "mix",
         ),
         (
+            "apply_arrangement_template",
+            "mutating",
+            false,
+            "write",
+            "low",
+            "arrangement",
+        ),
+        (
+            "import_reference_profile",
+            "mutating",
+            false,
+            "write",
+            "low",
+            "render",
+        ),
+        (
             "set_layer_register",
             "mutating",
             false,

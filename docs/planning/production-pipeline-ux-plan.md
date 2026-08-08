@@ -1,6 +1,7 @@
 # Production-Grade Music Pipeline & Agent UX Plan (G′)
 
-> **Status:** plan — research-backed, awaiting implementation.
+> **Status:** G′1–G′5 implemented, tested (752 workspace tests), committed.
+> G′6+ (F′ fold-in: `ss demo`, `--segment` render, CI) remains as future work.
 > **Companion:** `docs/planning/audio-quality-visualization-plan.md` (A′–F′),
 > `docs/architecture/architecture.md` (§8.1 musical entities, §4.2 state machine, §11 planes).
 

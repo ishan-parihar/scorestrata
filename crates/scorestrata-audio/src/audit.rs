@@ -76,6 +76,20 @@ pub struct AuditReport {
     pub genre_fingerprint_deviation: Option<f32>,
 }
 
+impl AuditReport {
+    /// The six band-energy shares as a fixed array (the shape the
+    /// [`SpectralReference`](scorestrata_core::domain::SpectralReference) and
+    /// [`GenreFingerprint`] deviation metrics consume).
+    #[must_use]
+    pub fn band_shares(&self) -> [f32; 6] {
+        let mut bands = [0.0f32; 6];
+        for (slot, band) in bands.iter_mut().zip(&self.band_energy) {
+            *slot = band.share;
+        }
+        bands
+    }
+}
+
 /// Audited artifact (report plus rendered debug logs).
 #[derive(Debug, Clone)]
 pub struct AuditArtifact {

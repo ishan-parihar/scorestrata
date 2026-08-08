@@ -585,6 +585,67 @@ pub struct TimelineView {
     pub layers: Vec<TimelineLayer>,
 }
 
+/// A section archetype in an arrangement template (G6) — the DAW convention
+/// of composing in section shapes (intro → build → drop → breakdown → outro)
+/// with production-grade bar counts and an energy arc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionTemplate {
+    /// Section role name (`intro`, `build`, `drop`, `breakdown`, `outro`).
+    pub role: String,
+    /// Bar count for this section.
+    pub bars: u32,
+    /// Energy target (0.0–1.0) — rises through the build, peaks at the drop,
+    /// drops in the breakdown, and lands on the outro.
+    pub energy: f32,
+    /// Layers expected active in this section (instrument hints the planner
+    /// uses to fill it).
+    pub layers: Vec<String>,
+}
+
+/// The per-genre arrangement template (G6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArrangementTemplate {
+    /// Genre this template targets.
+    pub genre: String,
+    /// Section archetypes in order.
+    pub sections: Vec<SectionTemplate>,
+}
+
+/// The arrangement template for a genre, or the default when unknown.
+///
+/// Mirrors the §1.2 reference-track research: intro 16–32, build 8–16, drop
+/// 16–32, breakdown 8–16, outro 8–16 — with the energy arc rising through the
+/// build, peaking at the drop, and settling on the outro.
+#[must_use]
+pub fn arrangement_template_for(genre: &str) -> ArrangementTemplate {
+    let g = genre.to_lowercase();
+    let (intro, build, drop, breakdown, outro) = if g.contains("ambient") {
+        (32u32, 8u32, 16u32, 16u32, 16u32)
+    } else if g.contains("house") {
+        (16u32, 8u32, 16u32, 8u32, 8u32)
+    } else if g.contains("techno") || g.contains("trance") || g.contains("dubstep") {
+        (16u32, 8u32, 32u32, 8u32, 8u32)
+    } else {
+        (16u32, 8u32, 16u32, 8u32, 8u32)
+    };
+    let mk = |role: &str, bars: u32, energy: f32, layers: Vec<&str>| SectionTemplate {
+        role: role.to_string(),
+        bars,
+        energy,
+        layers: layers.into_iter().map(str::to_string).collect(),
+    };
+    ArrangementTemplate {
+        genre: genre.to_string(),
+        sections: vec![
+            mk("intro", intro, 0.35, vec!["Drums", "Bass"]),
+            mk("build", build, 0.6, vec!["Drums", "Bass", "Lead"]),
+            mk("drop", drop, 0.95, vec!["Drums", "Bass", "Lead", "Pad"]),
+            mk("breakdown", breakdown, 0.4, vec!["Pad", "Lead"]),
+            mk("outro", outro, 0.25, vec!["Drums"]),
+        ],
+    }
+}
+
 /// Build the layered timeline view from a real project.
 ///
 /// Pure derivation (no storage): sections come from the arrangement, lanes

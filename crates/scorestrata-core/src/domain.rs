@@ -255,6 +255,26 @@ pub enum SegmentRole {
     Custom,
 }
 
+impl SegmentRole {
+    /// Map an arrangement-template role string (G6) to a segment role.
+    ///
+    /// `drop` maps to [`SegmentRole::Chorus`] (the energy peak), and any
+    /// unknown template role falls back to [`SegmentRole::Custom`].
+    #[must_use]
+    pub fn from_template_role(role: &str) -> Self {
+        match role {
+            "intro" => Self::Intro,
+            "build" => Self::Build,
+            "drop" | "chorus" => Self::Chorus,
+            "breakdown" => Self::Breakdown,
+            "outro" => Self::Outro,
+            "verse" => Self::Verse,
+            "bridge" => Self::Bridge,
+            _ => Self::Custom,
+        }
+    }
+}
+
 /// A section of the arrangement (e.g. intro, verse, chorus).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
@@ -454,6 +474,68 @@ impl Default for FxChain {
             compressor: None,
             sidechain_from_kick: false,
             sends: SendLevels::default(),
+        }
+    }
+}
+
+/// A project's genre reference profile (G7) — the spectral fingerprint of a
+/// reference track the agent is producing *toward*.
+///
+/// Produced by `ss analyze reference.wav` and imported with
+/// `import_reference_profile`; the render gate then measures the deviation
+/// of the project's render from this reference instead of only the built-in
+/// genre average. Fields mirror [`scorestrata_audio::analysis::GenreFingerprint`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpectralReference {
+    /// Name of the reference track the fingerprint came from.
+    pub track_name: String,
+    /// Genre this reference belongs to.
+    pub genre: String,
+    /// Expected energy share in the six audit bands (sub/bass/lo-mid/mid/hi-mid/air).
+    pub band_energy_expected: [f32; 6],
+    /// Expected spectral centroid in Hz.
+    pub centroid_expected_hz: f32,
+    /// Maximum acceptable energy share above 16 kHz (aliasing proxy).
+    pub aliasing_max: f32,
+    /// Loudness target in LUFS (from the reference master).
+    pub loudness_target_lufs: f32,
+}
+
+impl SpectralReference {
+    /// L1 deviation of an observed spectrum from this reference (0 = match,
+    /// approaches 1 = divergent) — the render gate metric (G7).
+    #[must_use]
+    pub fn deviation(&self, band_energy: &[f32; 6], centroid_hz: f32, aliasing_ratio: f32) -> f32 {
+        let band_dev = band_energy
+            .iter()
+            .zip(self.band_energy_expected.iter())
+            .map(|(actual, expected)| (actual - expected).abs())
+            .sum::<f32>()
+            / 2.0;
+        let centroid_dev = if self.centroid_expected_hz > 0.0 {
+            ((centroid_hz - self.centroid_expected_hz).abs() / self.centroid_expected_hz).min(1.0)
+        } else {
+            0.0
+        };
+        let alias_dev = if aliasing_ratio > self.aliasing_max {
+            ((aliasing_ratio - self.aliasing_max) / 0.5).min(1.0)
+        } else {
+            0.0
+        };
+        band_dev.mul_add(0.6, centroid_dev.mul_add(0.3, alias_dev * 0.1))
+    }
+}
+
+impl Default for SpectralReference {
+    fn default() -> Self {
+        Self {
+            track_name: String::new(),
+            genre: String::new(),
+            band_energy_expected: [0.0; 6],
+            centroid_expected_hz: 0.0,
+            aliasing_max: 0.3,
+            loudness_target_lufs: -14.0,
         }
     }
 }
@@ -790,6 +872,10 @@ pub struct Project {
     /// Patterns.
     #[serde(default)]
     pub patterns: Vec<Pattern>,
+    /// Genre reference profile (G7) — the spectral fingerprint the render is
+    /// produced toward, imported from `ss analyze` of a reference track.
+    #[serde(default)]
+    pub spectral_reference: Option<SpectralReference>,
     /// Current status.
     pub status: ProjectStatus,
 }
