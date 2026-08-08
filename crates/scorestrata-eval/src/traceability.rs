@@ -266,6 +266,39 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
     });
 
     matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-PRODUCTION-PIPELINE".to_string(),
+        title: "Production-pipeline DoD — G1–G7 end-to-end simulation".to_string(),
+        phase: "20".to_string(),
+        tasks: vec!["PROD-001".to_string()],
+        code: vec![
+            "scorestrata_mcp::tools::get_timeline_view".to_string(),
+            "scorestrata_mcp::tools::set_layer_register".to_string(),
+            "scorestrata_mcp::tools::repeat_pattern_in_segment".to_string(),
+            "scorestrata_mcp::tools::write_automation".to_string(),
+            "scorestrata_mcp::tools::set_track_fx".to_string(),
+            "scorestrata_mcp::tools::apply_genre_mix_preset".to_string(),
+            "scorestrata_mcp::tools::apply_arrangement_template".to_string(),
+            "scorestrata_compiler::timeline::control_change_lanes".to_string(),
+        ],
+        tests: vec![
+            "production_pipeline_simulation".to_string(),
+            "mvas_simulation".to_string(),
+        ],
+        mcp_tools: vec![
+            "get_timeline_view".to_string(),
+            "set_layer_register".to_string(),
+            "repeat_pattern_in_segment".to_string(),
+            "write_automation".to_string(),
+            "set_track_fx".to_string(),
+            "apply_genre_mix_preset".to_string(),
+            "apply_arrangement_template".to_string(),
+        ],
+        cli_commands: vec!["ss timeline".to_string()],
+        docs: vec!["production-pipeline-ux-plan.md §3–§10, §13 DoD".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-VALIDATOR-SYMBOLIC".to_string(),
         title: "Symbolic validation (scale, segment, transition, density)".to_string(),
         phase: "2".to_string(),
