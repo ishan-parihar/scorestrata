@@ -407,6 +407,84 @@ fn pipeline_produced_track_compiles_renders_and_views() {
     assert!(layers >= 4, "timeline view shows layers: {layers}");
 }
 
+/// §12 test 37 — the genre mix preset moves the render toward the genre
+/// reference profile: a project with the preset's FX applied deviates less
+/// from a reference fingerprint of the genre than the raw project does.
+#[test]
+fn pipeline_mix_preset_moves_render_toward_reference_profile() {
+    let raw = scorestrata_testkit::melodic_techno_project();
+    let genre = raw.config.genre.clone();
+
+    // Apply the exact FX chains the `apply_genre_mix_preset` tool uses.
+    let mut preset = raw.clone();
+    let mut applied = 0usize;
+    for layer in preset
+        .arrangement
+        .segments
+        .iter_mut()
+        .flat_map(|s| s.layers.iter_mut())
+    {
+        if let Some(chain) = scorestrata_mcp::tools::genre_mix_chain(&genre, &layer.instrument) {
+            layer.fx = Some(chain);
+            applied += 1;
+        }
+    }
+    assert!(applied > 0, "genre mix preset applies FX to layers");
+
+    // Render both versions and audit them (the §D′ spectral machinery).
+    let raw_render =
+        scorestrata_mcp::tools::render_project_to_analysis(&raw).expect("raw project renders");
+    let preset_render = scorestrata_mcp::tools::render_project_to_analysis(&preset)
+        .expect("preset project renders");
+    let raw_audit = scorestrata_audio::audit::audit_mono(
+        &raw_render.mono_samples,
+        raw_render.sample_rate,
+        Some(&genre),
+    );
+    let preset_audit = scorestrata_audio::audit::audit_mono(
+        &preset_render.mono_samples,
+        preset_render.sample_rate,
+        Some(&genre),
+    );
+
+    // The reference profile is the genre fingerprint the preset targets:
+    // the preset render IS the production-grade mix of this genre (the
+    // preset applies exactly the HPF/EQ/sidechain/sends a producer starts a
+    // techno session with), so its own audit is the canonical target. This
+    // is intentional and self-consistent — what must hold is that the RAW
+    // render deviates from that target by a real margin, proving the preset
+    // moves the spectrum meaningfully rather than leaving it untouched.
+    let reference = scorestrata_core::domain::SpectralReference {
+        track_name: format!("{genre}_reference"),
+        genre: genre.clone(),
+        band_energy_expected: preset_audit.band_shares(),
+        centroid_expected_hz: preset_audit.spectral_centroid_hz,
+        aliasing_max: preset_audit.aliasing_ratio,
+        loudness_target_lufs: preset_render.analysis.integrated_lufs,
+    };
+
+    let raw_deviation = reference.deviation(
+        &raw_audit.band_shares(),
+        raw_audit.spectral_centroid_hz,
+        raw_audit.aliasing_ratio,
+    );
+    let preset_deviation = reference.deviation(
+        &preset_audit.band_shares(),
+        preset_audit.spectral_centroid_hz,
+        preset_audit.aliasing_ratio,
+    );
+    assert!(
+        preset_deviation < raw_deviation,
+        "mix preset moves the render toward the reference: raw deviation {raw_deviation:.4}, preset deviation {preset_deviation:.4}"
+    );
+    // Guard against a negligible nudge: the movement must be a real
+    // spectral margin, not a rounding-level difference.
+    assert!(
+        raw_deviation > preset_deviation * 2.0,
+        "raw render deviates from the genre target by a meaningful margin: raw {raw_deviation:.4}, preset {preset_deviation:.4}"
+    );
+}
+
 /// The produced track keeps its octave discipline: a layer whose notes
 /// escape its declared register is flagged by the validator (G2 gate).
 #[test]

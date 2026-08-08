@@ -282,6 +282,7 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
         ],
         tests: vec![
             "production_pipeline_simulation".to_string(),
+            "golden_harness_e2e".to_string(),
             "mvas_simulation".to_string(),
         ],
         mcp_tools: vec![

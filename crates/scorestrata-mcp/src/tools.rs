@@ -3215,7 +3215,12 @@ fn fx_summary(fx: &scorestrata_core::domain::FxChain) -> String {
 ///
 /// Mirrors a producer's starting session: kick clean + sub, bass HPF'd + EQ
 /// scooped + sidechained to the kick, pads HPF'd with air, hats cleaned.
-fn genre_mix_chain(genre: &str, instrument: &str) -> Option<scorestrata_core::domain::FxChain> {
+///
+/// `pub` so the eval harness can build a preset-applied project and prove
+/// the render moves toward the genre reference profile (§12 test 37) — the
+/// exact chain the `apply_genre_mix_preset` tool applies.
+#[must_use]
+pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<scorestrata_core::domain::FxChain> {
     use scorestrata_core::domain::{CompressorCfg, FreqBand, FxChain, SendLevels};
     let g = genre.to_lowercase();
     let i = instrument.to_lowercase();

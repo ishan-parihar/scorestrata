@@ -37,6 +37,36 @@ fn build_planned_project(name: &str, brief: &str) -> scorestrata_core::domain::P
     project
 }
 
+/// The shared 64-bar melodic-techno golden config.
+///
+/// One source of truth for the techno golden's structure and gates so the
+/// three tests that run it (full, regression, register+automation) cannot
+/// drift apart if the golden is ever updated.
+fn golden_techno_config(metrics: std::collections::BTreeMap<String, MetricRange>) -> GoldenConfig {
+    GoldenConfig {
+        name: "melodic_techno_64_bar".to_string(),
+        description: "Golden 64-bar melodic techno structure".to_string(),
+        expected_outputs: ExpectedOutputs {
+            segment_count: 4,
+            total_bars: 64,
+            has_chorus: true,
+            has_breakdown: false,
+            genre_matches_brief: true,
+            mood_matches_brief: true,
+            duration_matches_config: true,
+        },
+        tolerance: 0.01,
+        validation_gates: ValidationGates {
+            max_errors: 0,
+            max_warnings: 3,
+            max_true_peak_dbtp: -0.5,
+            min_lufs: -16.0,
+            max_lufs: -4.0,
+        },
+        expected_metrics: metrics,
+    }
+}
+
 /// Run the level-6 validation pipeline and return the diagnostics receipt,
 /// the validation scorecard, and the render analysis.
 fn validate_golden_project(
@@ -80,40 +110,19 @@ fn golden_melodic_techno_64_bar_passes_full_assertions() {
         .any(|s| s.role == scorestrata_core::domain::SegmentRole::Chorus);
 
     // ── Structural plane (§16.5) ────────────────────────────────────
-    let golden = GoldenConfig {
-        name: "melodic_techno_64_bar".to_string(),
-        description: "Golden 64-bar melodic techno structure".to_string(),
-        expected_outputs: ExpectedOutputs {
-            segment_count: 4,
-            total_bars: 64,
-            has_chorus: true,
-            has_breakdown: false, // planner uses Intro/Verse/Build/Chorus
-            genre_matches_brief: true,
-            mood_matches_brief: true,
-            duration_matches_config: true,
-        },
-        tolerance: 0.01,
-        validation_gates: ValidationGates {
-            max_errors: 0, // fixed engine: no clipping, no true-peak exceed
-            max_warnings: 3,
-            max_true_peak_dbtp: -0.5,
-            min_lufs: -16.0,
-            max_lufs: -4.0,
-        },
-        expected_metrics: std::collections::BTreeMap::from([
-            (
-                "arrangement.transition_strength".to_string(),
-                MetricRange {
-                    min: 0.85,
-                    max: 1.0,
-                },
-            ),
-            (
-                "audio.stereo_correlation".to_string(),
-                MetricRange { min: 0.9, max: 1.0 },
-            ),
-        ]),
-    };
+    let golden = golden_techno_config(std::collections::BTreeMap::from([
+        (
+            "arrangement.transition_strength".to_string(),
+            MetricRange {
+                min: 0.85,
+                max: 1.0,
+            },
+        ),
+        (
+            "audio.stereo_correlation".to_string(),
+            MetricRange { min: 0.9, max: 1.0 },
+        ),
+    ]));
 
     let structural = run_golden_assertions(
         &golden,
@@ -236,28 +245,7 @@ fn golden_detects_validation_regression() {
         segment.layers.clear();
     }
 
-    let golden = GoldenConfig {
-        name: "melodic_techno_64_bar".to_string(),
-        description: "Golden 64-bar melodic techno structure".to_string(),
-        expected_outputs: ExpectedOutputs {
-            segment_count: 4,
-            total_bars: 64,
-            has_chorus: true,
-            has_breakdown: false,
-            genre_matches_brief: true,
-            mood_matches_brief: true,
-            duration_matches_config: true,
-        },
-        tolerance: 0.01,
-        validation_gates: ValidationGates {
-            max_errors: 0,
-            max_warnings: 3,
-            max_true_peak_dbtp: -0.5,
-            min_lufs: -16.0,
-            max_lufs: -4.0,
-        },
-        expected_metrics: std::collections::BTreeMap::new(),
-    };
+    let golden = golden_techno_config(std::collections::BTreeMap::new());
 
     let (receipt, scorecard, render) = validate_golden_project(&project);
     let validation = run_validation_golden_assertions(
@@ -277,6 +265,86 @@ fn golden_detects_validation_regression() {
             .iter()
             .any(|d| d.code == "SEGMENT_EMPTY"),
         "the regression must be the emptied segment"
+    );
+}
+
+/// §12 test 38 — the golden gates stay green when the produced track adds
+/// register discipline (G2) and automation lanes (G4): production-grade
+/// edits must not regress the structural, validation, scoring, or audio
+/// golden gates.
+#[test]
+fn golden_gates_stay_green_with_register_and_automation() {
+    let brief = "Dark melodic techno at 124 BPM in C minor, 64 bars";
+    let mut project = build_planned_project("golden_techno_prod", brief);
+
+    // G2 — register discipline by instrument role (the §1.3 octave map).
+    for layer in project
+        .arrangement
+        .segments
+        .iter_mut()
+        .flat_map(|s| s.layers.iter_mut())
+    {
+        layer.register = Some(match layer.instrument.as_str() {
+            "bass_synth" | "bass" => scorestrata_core::domain::Register::new(1, 3),
+            "lead_synth" | "lead" | "bell_synth" => scorestrata_core::domain::Register::new(5, 7),
+            "pad" | "pads" | "chord" => scorestrata_core::domain::Register::new(3, 5),
+            _ => scorestrata_core::domain::Register::new(1, 7),
+        });
+    }
+
+    // G4 — automation lanes: cutoff sweep on the bass, volume on the lead.
+    if let Some(segment) = project.arrangement.segments.first_mut() {
+        let bass_idx = segment
+            .layers
+            .iter()
+            .position(|l| l.instrument == "bass_synth" || l.instrument == "bass")
+            .expect("bass layer present");
+        let bass_id = segment.layers[bass_idx].id;
+        segment.layers[bass_idx]
+            .automation
+            .push(scorestrata_core::domain::Automation {
+                layer_id: bass_id,
+                param: scorestrata_core::domain::AutomationParam::Cutoff,
+                points: vec![
+                    scorestrata_core::domain::AutomationPoint {
+                        tick: scorestrata_core::domain::Tick::new(0),
+                        value: 0.2,
+                    },
+                    scorestrata_core::domain::AutomationPoint {
+                        tick: scorestrata_core::domain::Tick::new(480 * 32),
+                        value: 0.9,
+                    },
+                ],
+            });
+    }
+
+    // The produced project must compile with ControlChange lanes.
+    let timeline = scorestrata_compiler::compile_project(&project).expect("compiles");
+    assert!(
+        !timeline.control_change_lanes().is_empty(),
+        "automation compiles to CC lanes"
+    );
+
+    let golden = golden_techno_config(std::collections::BTreeMap::from([(
+        "arrangement.transition_strength".to_string(),
+        MetricRange {
+            min: 0.85,
+            max: 1.0,
+        },
+    )]));
+
+    let (receipt, scorecard, render) = validate_golden_project(&project);
+    let validation = run_validation_golden_assertions(
+        &golden,
+        &receipt.diagnostics,
+        &scorecard,
+        Some(render.analysis.true_peak_dbtp),
+        Some(render.analysis.integrated_lufs),
+    );
+    assert!(
+        validation.passed,
+        "golden gates stay green with registers + automation: {:?}",
+        failed_assertions(&validation)
     );
 }
 
