@@ -1,7 +1,8 @@
 # Production-Grade Music Pipeline & Agent UX Plan (G′)
 
-> **Status:** G′1–G′5 implemented, tested (752 workspace tests), committed.
-> G′6+ (F′ fold-in: `ss demo`, `--segment` render, CI) remains as future work.
+> **Status:** G′1–G′5 + F′ fold-in implemented, tested (workspace gate green), committed.
+> F′ = `ss demo` (all phases per genre + §4 validation + listening index),
+> `ss render --segment` isolation, and `.github/workflows/ci.yml`.
 > **Companion:** `docs/planning/audio-quality-visualization-plan.md` (A′–F′),
 > `docs/architecture/architecture.md` (§8.1 musical entities, §4.2 state machine, §11 planes).
 
@@ -339,7 +340,7 @@ Every slice runs the full workspace gate (700+ tests, 0 clippy, fmt) and commits
 | **G′3** | G4 automation lanes (domain → timeline CC → renderer) | cutoff/volume automation audible + validated; tests 35 green |
 | **G′4** | G5 FX chain + mixer (audio/fx.rs: HP/EQ/comp/sidechain/reverb/delay) + mix presets | per-track FX alters spectrum provably; tests 36–37 green |
 | **G′5** | G6 templates + G7 reference calibration + gate integration | arrangement templates produce section shapes; render gate measures vs reference; tests 38 green; full DoD |
-| **F′** (fold-in) | `ss demo`, `--segment` render, CI | full-scope plan DoD |
+| **F′** (fold-in) | `ss demo`, `--segment` render, CI | ✅ `ss demo` exports techno/ambient/house/loop, renders segments+stems+master, validates every artifact (true peak ≤ 0 dBTP), deterministic across runs; `ss render --segment <name>` writes segments/<Name>.wav + §17.2 manifest; `.github/workflows/ci.yml` gates build/test/clippy/fmt |
 
 **Definition of done (this plan):** an agent can go from brief → arranged multi-section
 track with octave-disciplined layers, repeated/mutated patterns, automation, per-track FX,

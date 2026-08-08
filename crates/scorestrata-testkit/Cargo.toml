@@ -9,6 +9,7 @@ license.workspace = true
 scorestrata-core = { path = "../scorestrata-core" }
 scorestrata-theory = { path = "../scorestrata-theory" }
 scorestrata-compiler = { path = "../scorestrata-compiler" }
+scorestrata-storage = { path = "../scorestrata-storage" }
 uuid.workspace = true
 chrono.workspace = true
 

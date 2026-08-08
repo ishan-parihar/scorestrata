@@ -181,7 +181,7 @@ reports deviation → the agent loop can *repair toward* genre (diagnostic `GENR
 | **C′** | F10 genre-differentiated planner + testkit fixtures | `ss demo` techno/house/ambient are **audibly distinct** (structure + fingerprint tests pass) |
 | **D′** | §2 audit module (`rustfft` + `plotters`) + `ss analyze` | `ss analyze` prints audit log + writes PNGs; PNG validity test passes; receipts carry `render.audit` |
 | **E′** | Post-generation gate (existing §4.2 extended with audit metrics) + MVAS step 38 + traceability rows | Every artifact verified on write; step 38 green; full workspace gate green |
-| **F′** | Remaining existing-plan work: `--segment`, `ss demo` command, CI | full-scope plan's Definition of Done |
+| **F′** | Remaining existing-plan work: `--segment`, `ss demo` command, CI | ✅ `ss render --segment` isolates per-phase WAVs + segment manifests; `ss demo` renders all genre fixtures with §4 validation + listening index + deterministic checksums; CI workflow added |
 
 **Definition of done (this plan):** `ss demo` produces techno/house/ambient you can *tell apart by
 ear*, with no distortion/clicks; `ss analyze` gives a per-artifact spectral debug log + PNGs;

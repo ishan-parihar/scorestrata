@@ -473,6 +473,43 @@ fn extract_key(lower: &str) -> Option<String> {
     None
 }
 
+/// Write the built-in genre fixtures as on-disk project bundles (F′).
+///
+/// `ss demo` renders these across all phases. Writes one directory per
+/// fixture under `dir` (techno/ambient/house/loop), each with a project.json
+/// the bundle loader can read.
+///
+/// # Errors
+///
+/// Returns [`std::io::Error`] if a bundle directory cannot be created or a
+/// project JSON written.
+pub fn write_sample_projects(dir: &std::path::Path) -> std::io::Result<()> {
+    use scorestrata_storage::bundle::{init_project_bundle, save_project};
+
+    let fixtures: Vec<(&str, scorestrata_core::domain::Project)> = vec![
+        ("techno", melodic_techno_project()),
+        ("ambient", ambient_project()),
+        ("house", house_project()),
+        ("loop", eight_bar_loop()),
+    ];
+    for (name, project) in fixtures {
+        let project_dir = dir.join(name);
+        init_project_bundle(&project_dir).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("bundle init for '{name}': {e}"),
+            )
+        })?;
+        save_project(&project, &project_dir).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("bundle save for '{name}': {e}"),
+            )
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,6 +571,21 @@ mod tests {
         assert!(drums.steps[4].active); // snare on beat 2
         assert!(drums.steps[8].active); // kick on beat 3
         assert!(drums.steps[12].active); // snare on beat 4
+    }
+
+    #[test]
+    fn write_sample_projects_creates_bundles() {
+        let dir = std::env::temp_dir().join(format!("ss-testkit-sample-{}", uuid::Uuid::new_v4()));
+        write_sample_projects(&dir).expect("writes bundles");
+        for name in ["techno", "ambient", "house", "loop"] {
+            let project =
+                scorestrata_storage::bundle::load_project(&dir.join(name)).expect("loads");
+            assert!(
+                !project.arrangement.segments.is_empty(),
+                "{name} has segments"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

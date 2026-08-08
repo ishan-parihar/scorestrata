@@ -908,6 +908,7 @@ dependencies = [
  "scorestrata-theory",
  "scorestrata-validator",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -1006,6 +1007,7 @@ dependencies = [
  "chrono",
  "scorestrata-compiler",
  "scorestrata-core",
+ "scorestrata-storage",
  "scorestrata-theory",
  "uuid",
 ]

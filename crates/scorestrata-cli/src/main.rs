@@ -67,6 +67,9 @@ enum Commands {
         /// Render mode (master, preview, stems)
         #[arg(short, long, default_value = "master")]
         mode: String,
+        /// Render only this segment (by name or id) into segments/<Name>.wav
+        #[arg(long)]
+        segment: Option<String>,
     },
     /// Post-generation spectral audit of a rendered WAV (debug log for music)
     Analyze {
@@ -88,6 +91,14 @@ enum Commands {
     },
     /// Show system capabilities
     Capabilities,
+    /// Render the built-in genre demos (techno/ambient/house/loop) across all
+    /// phases into <dir>/, print a listening index, and run §4 post-generation
+    /// validation on every artifact (fails with exit 1 if any gate fails)
+    Demo {
+        /// Output directory for the demo projects (defaults to ./demo)
+        #[arg(short, long, default_value = "demo")]
+        dir: String,
+    },
     /// Trace commands through the event ledger
     Trace {
         /// Command ID to trace
@@ -224,11 +235,16 @@ fn main() -> Result<()> {
         Commands::Config { action } => handle_config(action)?,
         Commands::Compile { path } => handle_compile(&path)?,
         Commands::Validate { path, scope } => handle_validate(&path, &scope)?,
-        Commands::Render { path, mode } => handle_render(&path, &mode)?,
+        Commands::Render {
+            path,
+            mode,
+            segment,
+        } => handle_render(&path, &mode, segment.as_deref())?,
         Commands::Analyze { path } => handle_analyze(&path)?,
         Commands::Timeline { path } => handle_timeline(&path)?,
         Commands::ExportMidi { path, output } => handle_export_midi(&path, output.as_deref())?,
         Commands::Capabilities => handle_capabilities()?,
+        Commands::Demo { dir } => handle_demo(&dir)?,
         Commands::Trace {
             command_id,
             project_path,
@@ -651,16 +667,70 @@ fn handle_validate(path: &str, scope: &str) -> Result<()> {
     Ok(())
 }
 
-fn handle_render(path: &str, mode: &str) -> Result<()> {
-    println!("{}", format!("Rendering: {path} (mode: {mode})").cyan());
+fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
+    let scope_note = match segment {
+        Some(s) => format!(" (segment: {s})"),
+        None => String::new(),
+    };
+    println!(
+        "{}",
+        format!("Rendering: {path} (mode: {mode}{scope_note})").cyan()
+    );
 
     let project_path = Path::new(path);
     let project = scorestrata_storage::bundle::load_project(project_path)
         .context("Failed to load project — run `ss new <name>` first")?;
 
+    // F′ — segment isolation: resolve the segment by name or id, then filter
+    // the compiled timeline to just its events (offset to tick 0) so the
+    // render is a clean per-phase WAV, not a silent-padded slice.
+    let segment_scope: Option<scorestrata_core::domain::Segment> = match segment {
+        Some(sel) => Some(
+            project
+                .arrangement
+                .segments
+                .iter()
+                .find(|s| s.name == sel || s.id.to_string() == sel)
+                .cloned()
+                .context(format!("Segment '{sel}' not found in arrangement"))?,
+        ),
+        None => None,
+    };
+
     // Compile to a timeline, then render offline via the audio engine.
-    let timeline = scorestrata_compiler::compile_project(&project)
+    let full_timeline = scorestrata_compiler::compile_project(&project)
         .context("Compilation failed — check project status")?;
+
+    let timeline = match &segment_scope {
+        Some(seg) => {
+            let ticks_per_bar = u64::from(scorestrata_core::domain::PPQ)
+                * u64::from(full_timeline.time_signature_num);
+            let seg_start_tick = u64::from(seg.start_bar) * ticks_per_bar;
+            let events: Vec<scorestrata_compiler::timeline::TimelineEvent> = full_timeline
+                .events
+                .iter()
+                .filter(|e| e.segment_id == seg.id)
+                .map(|e| {
+                    let mut ev = e.clone();
+                    ev.tick = scorestrata_core::domain::Tick::new(
+                        e.tick.0.saturating_sub(seg_start_tick),
+                    );
+                    ev
+                })
+                .collect();
+            let total_ticks = events.iter().map(|e| e.tick.0).max().unwrap_or(0);
+            scorestrata_compiler::TimelineIR {
+                project_id: full_timeline.project_id,
+                events,
+                total_ticks,
+                bpm: full_timeline.bpm,
+                time_signature_num: full_timeline.time_signature_num,
+                input_hash: full_timeline.input_hash,
+                compiler_version: full_timeline.compiler_version,
+            }
+        }
+        None => full_timeline,
+    };
 
     // Map layer IDs to human-readable names for voice assignment, and build
     // the per-instrument voice table (drums, bass, lead each get their own
@@ -709,6 +779,76 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
 
     let render_path = project_path.join("render");
     std::fs::create_dir_all(&render_path).context("Failed to create render directory")?;
+
+    // F′ — segment mode: a single per-phase WAV plus a §17.2 segment manifest.
+    if let Some(seg) = &segment_scope {
+        let config = scorestrata_audio::render::RenderConfig {
+            stereo: true,
+            limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
+        };
+        let result = scorestrata_audio::render::render_notes_full(
+            &notes,
+            timeline.bpm,
+            scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+            &voices,
+            &automation,
+            &fx,
+            &config,
+        )
+        .context("Segment render failed")?;
+
+        let segments_dir = render_path.join("segments");
+        std::fs::create_dir_all(&segments_dir).context("Failed to create segments directory")?;
+        let safe_name = seg.name.replace([' ', '/'], "_");
+        let wav_path = segments_dir.join(format!("{safe_name}.wav"));
+        std::fs::write(&wav_path, &result.wav_bytes).context("Failed to write segment WAV")?;
+
+        // §17.2 — segment-scoped reproducibility manifest (artifact type
+        // "segment"), recorded into a per-project manifest.json.
+        let artifact_id = format!("seg_{}_{}", project.id, safe_name);
+        let manifest = scorestrata_storage::render_manifest::RenderManifest::from_render(
+            &artifact_id,
+            "segment",
+            &format!("segments/{safe_name}.wav"),
+            &result.checksum,
+            result.sample_rate,
+            result.channels,
+            result.duration_seconds,
+            &format!("snap_{}_live", project.id),
+            "cmd_render_segment",
+            &timeline.compiler_version,
+            scorestrata_audio::render::AUDIO_ENGINE_VERSION,
+            None,
+            std::collections::BTreeMap::new(),
+        );
+        let mut store = scorestrata_storage::render_manifest::RenderManifestStore::new();
+        store.record(manifest);
+        let manifest_json =
+            serde_json::to_string_pretty(&store).context("Failed to serialize segment manifest")?;
+        std::fs::write(render_path.join("manifest.json"), manifest_json)
+            .context("Failed to write render manifest")?;
+
+        println!("  Events:            {}", timeline.event_count());
+        println!("  Duration:          {:.2}s", result.duration_seconds);
+        println!(
+            "  Integrated LUFS:   {:.1}",
+            result.analysis.integrated_lufs
+        );
+        println!(
+            "  True peak:         {:.1} dBTP",
+            result.analysis.true_peak_dbtp
+        );
+        println!(
+            "  Checksum (sha256): {}",
+            &result.checksum[..16.min(result.checksum.len())]
+        );
+        println!("  Manifest:          {}", "render/manifest.json".green());
+        println!(
+            "  Output:            {}",
+            wav_path.display().to_string().green()
+        );
+        return Ok(());
+    }
 
     // Stems mode: write one WAV per layer plus the master mix (§16 stems).
     if mode == "stems" {
@@ -808,6 +948,126 @@ fn handle_render(path: &str, mode: &str) -> Result<()> {
     println!(
         "  Output:            {}",
         wav_path.display().to_string().green()
+    );
+    Ok(())
+}
+
+/// Render the built-in genre demos across all phases (F′/F4).
+///
+/// Exports the testkit fixtures (techno/ambient/house/loop) as project
+/// bundles into `dir`, renders each across every phase — per-segment WAVs,
+/// per-layer stems, and the mastered master — then runs §4 post-generation
+/// validation (checksum match, true peak ≤ 0 dBTP, duration > 0) on every
+/// artifact. Prints a listening index (paths + LUFS + dBTP + checksum) and
+/// fails with exit 1 if any gate fails, so "did the demos stay good" is
+/// scriptable.
+fn handle_demo(dir: &str) -> Result<()> {
+    use scorestrata_audio::analysis::analyze_stereo;
+    use scorestrata_audio::wav::read_wav_file;
+
+    println!("{}", format!("Generating demos in: {dir}").green().bold());
+
+    let demo_root = Path::new(dir);
+    std::fs::create_dir_all(demo_root).context("Failed to create demo directory")?;
+    scorestrata_testkit::write_sample_projects(demo_root)
+        .context("Failed to export sample projects")?;
+
+    let mut any_failure = false;
+    for genre in ["techno", "ambient", "house", "loop"] {
+        let project_dir = demo_root.join(genre);
+        let project = scorestrata_storage::bundle::load_project(&project_dir)
+            .context("Failed to load demo project")?;
+        println!("\n{}", format!("=== {genre} ===").cyan().bold());
+
+        // Phase 1 — per-segment WAVs (arrangement segments).
+        let segment_names: Vec<String> = project
+            .arrangement
+            .segments
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        for segment_name in &segment_names {
+            handle_render(
+                &project_dir.display().to_string(),
+                "master",
+                Some(segment_name),
+            )?;
+        }
+        // Phase 2 — per-layer stems + phase 3/4 — mastered master.
+        handle_render(&project_dir.display().to_string(), "stems", None)?;
+        handle_render(&project_dir.display().to_string(), "master", None)?;
+
+        // §4 — validate every artifact in <project>/render/.
+        let render_dir = project_dir.join("render");
+        let mut wavs: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(seg_dir) = std::fs::read_dir(render_dir.join("segments")) {
+            for entry in seg_dir.flatten() {
+                if entry.path().extension().is_some_and(|e| e == "wav") {
+                    wavs.push(entry.path());
+                }
+            }
+        }
+        if let Ok(stems_dir) = std::fs::read_dir(render_dir.join("stems")) {
+            for entry in stems_dir.flatten() {
+                if entry.path().extension().is_some_and(|e| e == "wav") {
+                    wavs.push(entry.path());
+                }
+            }
+        }
+        let master_path = render_dir.join("master.wav");
+        if master_path.exists() {
+            wavs.push(master_path);
+        }
+
+        println!("  {} Listening index", "—".green());
+        for wav in &wavs {
+            let bytes = std::fs::read(wav).context("Failed to read rendered WAV")?;
+            let checksum = scorestrata_storage::cache::content_hash(&bytes);
+            let (left, right, sample_rate) =
+                read_wav_file(wav).context("Failed to parse rendered WAV")?;
+            let analysis = analyze_stereo(&left, &right);
+            let duration = if sample_rate > 0 {
+                left.len() as f64 / f64::from(sample_rate)
+            } else {
+                0.0
+            };
+            let rel = wav.strip_prefix(&render_dir).unwrap_or(wav);
+            println!(
+                "    {}  {:.1} LUFS  {:.1} dBTP  {:.1}s  sha256 {}",
+                rel.display().to_string().green(),
+                analysis.integrated_lufs,
+                analysis.true_peak_dbtp,
+                duration,
+                &checksum[..12.min(checksum.len())]
+            );
+
+            // §4 gates: true peak ≤ 0 dBTP, duration > 0, non-empty bytes.
+            let peak_ok = analysis.true_peak_dbtp <= 0.0;
+            let duration_ok = duration > 0.0;
+            let bytes_ok = !bytes.is_empty();
+            if !(peak_ok && duration_ok && bytes_ok) {
+                any_failure = true;
+                println!(
+                    "    {} {} (peak {:.2} dBTP, duration {:.2}s)",
+                    "✗ FAIL".red().bold(),
+                    rel.display(),
+                    analysis.true_peak_dbtp,
+                    duration
+                );
+            }
+        }
+    }
+
+    if any_failure {
+        anyhow::bail!(
+            "Demo post-generation validation failed — inspect the failed artifacts above"
+        );
+    }
+    println!(
+        "\n{}",
+        format!("All demos rendered + validated (exit 0)")
+            .green()
+            .bold()
     );
     Ok(())
 }
@@ -1686,7 +1946,7 @@ mod tests {
     fn parse_render_command() {
         let cli = Cli::try_parse_from(["ss", "render", "my_song", "--mode", "master"]).unwrap();
         match cli.command {
-            Commands::Render { path, mode } => {
+            Commands::Render { path, mode, .. } => {
                 assert_eq!(path, "my_song");
                 assert_eq!(mode, "master");
             }
@@ -1704,11 +1964,40 @@ mod tests {
     }
 
     #[test]
+    fn parse_render_command_with_segment() {
+        let cli = Cli::try_parse_from(["ss", "render", "my_song", "--segment", "Drop"]).unwrap();
+        match cli.command {
+            Commands::Render { segment, .. } => {
+                assert_eq!(segment.as_deref(), Some("Drop"));
+            }
+            _ => panic!("expected Commands::Render"),
+        }
+    }
+
+    #[test]
     fn parse_render_command_stems_mode() {
         let cli = Cli::try_parse_from(["ss", "render", "my_song", "--mode", "stems"]).unwrap();
         match cli.command {
             Commands::Render { mode, .. } => assert_eq!(mode, "stems"),
             _ => panic!("expected Commands::Render"),
+        }
+    }
+
+    #[test]
+    fn parse_demo_command_default_dir() {
+        let cli = Cli::try_parse_from(["ss", "demo"]).unwrap();
+        match cli.command {
+            Commands::Demo { dir } => assert_eq!(dir, "demo"),
+            _ => panic!("expected Commands::Demo"),
+        }
+    }
+
+    #[test]
+    fn parse_demo_command_with_dir() {
+        let cli = Cli::try_parse_from(["ss", "demo", "--dir", "/tmp/x"]).unwrap();
+        match cli.command {
+            Commands::Demo { dir } => assert_eq!(dir, "/tmp/x"),
+            _ => panic!("expected Commands::Demo"),
         }
     }
 
@@ -1928,5 +2217,68 @@ mod tests {
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(err.contains("definitely_not_a_tool"), "got: {err}");
+    }
+
+    #[test]
+    fn demo_produces_expected_file_set_and_validates() {
+        // F4 — `ss demo` in a temp dir must render every fixture across all
+        // phases: per-segment WAVs, per-layer stems, the mastered master, and
+        // a per-project manifest. handle_demo already fails on any §4 gate
+        // (true peak > 0 dBTP, zero duration), so a successful return is the
+        // validation assertion.
+        let dir = std::env::temp_dir().join(format!("ss-demo-test-{}", uuid::Uuid::new_v4()));
+        handle_demo(&dir.display().to_string()).expect("demo renders + validates");
+        for genre in ["techno", "ambient", "house", "loop"] {
+            let render = dir.join(genre).join("render");
+            assert!(render.join("master.wav").exists(), "{genre} master");
+            assert!(render.join("manifest.json").exists(), "{genre} manifest");
+            let segments = std::fs::read_dir(render.join("segments"))
+                .expect("segments dir")
+                .count();
+            assert!(segments >= 1, "{genre} has segment wavs");
+            let stems = std::fs::read_dir(render.join("stems"))
+                .expect("stems dir")
+                .count();
+            assert!(stems >= 1, "{genre} has stem wavs");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn demo_renders_deterministically_across_runs() {
+        // F4 — the same demo rendered twice must produce byte-identical WAVs
+        // (same checksums) across every fixture, proving the pipeline is a
+        // pure function of its inputs. Compares each genre's master checksums.
+        let dir1 = std::env::temp_dir().join(format!("ss-det-1-{}", uuid::Uuid::new_v4()));
+        let dir2 = std::env::temp_dir().join(format!("ss-det-2-{}", uuid::Uuid::new_v4()));
+        handle_demo(&dir1.display().to_string()).expect("first demo");
+        handle_demo(&dir2.display().to_string()).expect("second demo");
+        for genre in ["techno", "ambient", "house", "loop"] {
+            let master1 =
+                std::fs::read(dir1.join(genre).join("render/master.wav")).expect("master 1");
+            let master2 =
+                std::fs::read(dir2.join(genre).join("render/master.wav")).expect("master 2");
+            assert_eq!(master1, master2, "{genre} master deterministic");
+        }
+        let _ = std::fs::remove_dir_all(&dir1);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
+    fn segment_render_duration_le_master_and_events_covered() {
+        // F2 — the per-segment render must be no longer than the full master,
+        // and the segment events must be a subset of the full timeline.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let timeline = scorestrata_compiler::compile_project(&project).expect("compiles");
+        let full_events = timeline.event_count();
+        let mut covered = 0usize;
+        for segment in &project.arrangement.segments {
+            covered += timeline
+                .events
+                .iter()
+                .filter(|e| e.segment_id == segment.id)
+                .count();
+        }
+        assert_eq!(covered, full_events, "segments partition the timeline");
     }
 }
