@@ -90,6 +90,7 @@ pub fn minimal_project() -> Project {
         },
         tracks: Vec::new(),
         patterns: Vec::new(),
+        spectral_reference: None,
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -175,6 +176,7 @@ pub fn planned_project(name: &str, brief: &str) -> Project {
         arrangement: plan.arrangement,
         tracks: Vec::new(),
         patterns: plan.patterns,
+        spectral_reference: None,
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -378,6 +380,7 @@ pub fn eight_bar_loop() -> Project {
         },
         tracks: Vec::new(),
         patterns: vec![drums, bass, lead],
+        spectral_reference: None,
         status: ProjectStatus::ConfigApproved,
     }
 }

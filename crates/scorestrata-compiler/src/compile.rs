@@ -384,6 +384,7 @@ mod tests {
             },
             tracks: vec![],
             patterns: vec![pattern],
+            spectral_reference: None,
             status: ProjectStatus::ConfigApproved,
         }
     }

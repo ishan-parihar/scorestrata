@@ -296,6 +296,7 @@ fn handle_new(name: &str, brief: Option<&str>) -> Result<()> {
         arrangement: plan.arrangement,
         tracks: Vec::new(),
         patterns: plan.patterns,
+        spectral_reference: None,
         // The config is generated deterministically and schema-valid, so the
         // project starts pipeline-ready (ConfigApproved → ArrangementPlanned…).
         status: ProjectStatus::ConfigApproved,
