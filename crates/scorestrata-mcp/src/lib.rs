@@ -14,6 +14,7 @@ pub mod config_gen;
 pub mod debug_ops;
 pub mod dispatch;
 pub mod patch_ops;
+pub mod production_ops;
 pub mod resources;
 pub mod telemetry;
 pub mod tools;

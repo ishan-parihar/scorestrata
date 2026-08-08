@@ -32,6 +32,59 @@ use scorestrata_validator::transition_check::check_all_transitions;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+// Shared in-place production mutations live in [`production_ops`]; the tools
+// here wrap them in receipts. Re-export the pure helpers so the public
+// `scorestrata_mcp::tools::*` paths (used by the eval harness and tests)
+// keep working.
+pub use crate::production_ops::{fx_summary, genre_mix_chain, param_str, register_for_instrument};
+
+/// The standard receipt warnings for a [`ProductionError`] — the shared
+/// failure vocabulary the G2–G6 tools use so the CLI and the tools report
+/// identical failures.
+fn production_error_warnings(err: &crate::production_ops::ProductionError) -> Vec<String> {
+    match err {
+        crate::production_ops::ProductionError::SegmentNotFound(_) => {
+            vec!["Unknown segment ID".to_string()]
+        }
+        crate::production_ops::ProductionError::LayerNotFound { .. } => {
+            vec!["Unknown layer ID".to_string()]
+        }
+        crate::production_ops::ProductionError::PatternNotFound(_) => vec![],
+        crate::production_ops::ProductionError::UnsupportedParam(_) => {
+            vec!["Unknown automation param".to_string()]
+        }
+        crate::production_ops::ProductionError::InvalidTotalBars => {
+            vec!["Invalid total_bars".to_string()]
+        }
+    }
+}
+
+/// Render a [`ProductionError`](crate::production_ops::ProductionError) as a
+/// failed [`ToolReceipt`].
+///
+/// `warnings` is passed in so each tool preserves its historical receipt
+/// warnings verbatim (`repeat_pattern_in_segment` failed with empty warnings
+/// before the shared-mutator refactor).
+fn production_error_receipt(
+    tool: &str,
+    err: &crate::production_ops::ProductionError,
+    warnings: Vec<String>,
+) -> ToolReceipt {
+    ToolReceipt {
+        tool: tool.to_string(),
+        status: ToolStatus::Failed,
+        summary: err.to_string(),
+        score_delta: BTreeMap::new(),
+        evidence_uris: vec![],
+        focus_uris: vec![],
+        next_actions: vec![],
+        cost: ToolCost::default(),
+        warnings,
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 /// The standard MCP tool result envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolReceipt {
@@ -2328,50 +2381,22 @@ pub fn set_layer_register(params: &SetLayerRegisterParams) -> ToolReceipt {
             Ok(p) => p,
             Err(e) => return deserialize_error_receipt("set_layer_register", "project", &e),
         };
-    let register = scorestrata_core::domain::Register::new(params.min_octave, params.max_octave);
-    let Some(segment) = project
-        .arrangement
-        .segments
-        .iter_mut()
-        .find(|s| s.id.to_string() == params.segment_id)
-    else {
-        return ToolReceipt {
-            tool: "set_layer_register".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!("Segment '{}' not found", params.segment_id),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec!["Unknown segment ID".to_string()],
-            dry_run: false,
-            diagnostics: vec![],
-        };
+    let register = match crate::production_ops::set_layer_register(
+        &mut project,
+        &params.segment_id,
+        &params.layer_id,
+        params.min_octave,
+        params.max_octave,
+    ) {
+        Ok(outcome) => outcome.register,
+        Err(err) => {
+            return production_error_receipt(
+                "set_layer_register",
+                &err,
+                production_error_warnings(&err),
+            );
+        }
     };
-    let Some(layer) = segment
-        .layers
-        .iter_mut()
-        .find(|l| l.id.to_string() == params.layer_id)
-    else {
-        return ToolReceipt {
-            tool: "set_layer_register".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!(
-                "Layer '{}' not found in segment '{}'",
-                params.layer_id, params.segment_id
-            ),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec!["Unknown layer ID".to_string()],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    };
-    layer.register = Some(register);
     let mut score_delta = BTreeMap::new();
     score_delta.insert(
         "layers.register".to_string(),
@@ -2456,94 +2481,27 @@ pub fn write_automation(params: &WriteAutomationParams) -> ToolReceipt {
             Ok(p) => p,
             Err(e) => return deserialize_error_receipt("write_automation", "project", &e),
         };
-    let param = match params.param.as_str() {
-        "cutoff" => scorestrata_core::domain::AutomationParam::Cutoff,
-        "volume" => scorestrata_core::domain::AutomationParam::Volume,
-        "pan" => scorestrata_core::domain::AutomationParam::Pan,
-        "send" => scorestrata_core::domain::AutomationParam::Send,
-        other => {
-            return ToolReceipt {
-                tool: "write_automation".to_string(),
-                status: ToolStatus::Failed,
-                summary: format!(
-                    "Unsupported automation param '{other}' (expected cutoff|volume|pan|send)"
-                ),
-                score_delta: BTreeMap::new(),
-                evidence_uris: vec![],
-                focus_uris: vec![],
-                next_actions: vec![],
-                cost: ToolCost::default(),
-                warnings: vec!["Unknown automation param".to_string()],
-                dry_run: false,
-                diagnostics: vec![],
-            };
+    let outcome = match crate::production_ops::write_automation(
+        &mut project,
+        &params.segment_id,
+        &params.layer_id,
+        &params.param,
+        &params.points,
+    ) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            return production_error_receipt(
+                "write_automation",
+                &err,
+                production_error_warnings(&err),
+            );
         }
     };
-    let Some(segment) = project
-        .arrangement
-        .segments
-        .iter_mut()
-        .find(|s| s.id.to_string() == params.segment_id)
-    else {
-        return ToolReceipt {
-            tool: "write_automation".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!("Segment '{}' not found", params.segment_id),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec!["Unknown segment ID".to_string()],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    };
-    let Some(layer) = segment
-        .layers
-        .iter_mut()
-        .find(|l| l.id.to_string() == params.layer_id)
-    else {
-        return ToolReceipt {
-            tool: "write_automation".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!(
-                "Layer '{}' not found in segment '{}'",
-                params.layer_id, params.segment_id
-            ),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec!["Unknown layer ID".to_string()],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    };
-    let mut points: Vec<scorestrata_core::domain::AutomationPoint> = params
-        .points
-        .iter()
-        .map(|p| scorestrata_core::domain::AutomationPoint {
-            tick: scorestrata_core::domain::Tick::new(p.tick),
-            value: p.value.clamp(0.0, 1.0),
-        })
-        .collect();
-    points.sort_by_key(|p| p.tick.0);
-    // Replace an existing lane for the same param, or append a new one.
-    if let Some(existing) = layer.automation.iter_mut().find(|a| a.param == param) {
-        existing.points = points;
-    } else {
-        layer.automation.push(scorestrata_core::domain::Automation {
-            layer_id: layer.id,
-            param,
-            points,
-        });
-    }
+    let param = outcome.param;
     let mut score_delta = BTreeMap::new();
     score_delta.insert(
         "layers.automation_lanes".to_string(),
-        layer.automation.len().to_string(),
+        outcome.lanes.to_string(),
     );
     score_delta.insert(
         "layers.automation_points".to_string(),
@@ -2633,49 +2591,11 @@ pub fn set_track_fx(params: &SetTrackFxParams) -> ToolReceipt {
         Ok(f) => f,
         Err(e) => return deserialize_error_receipt("set_track_fx", "fx", &e),
     };
-    let Some(segment) = project
-        .arrangement
-        .segments
-        .iter_mut()
-        .find(|s| s.id.to_string() == params.segment_id)
-    else {
-        return ToolReceipt {
-            tool: "set_track_fx".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!("Segment '{}' not found", params.segment_id),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec!["Unknown segment ID".to_string()],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    };
-    let Some(layer) = segment
-        .layers
-        .iter_mut()
-        .find(|l| l.id.to_string() == params.layer_id)
-    else {
-        return ToolReceipt {
-            tool: "set_track_fx".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!(
-                "Layer '{}' not found in segment '{}'",
-                params.layer_id, params.segment_id
-            ),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec!["Unknown layer ID".to_string()],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    };
-    layer.fx = Some(fx.clone());
+    if let Err(err) =
+        crate::production_ops::set_track_fx(&mut project, &params.segment_id, &params.layer_id, &fx)
+    {
+        return production_error_receipt("set_track_fx", &err, production_error_warnings(&err));
+    }
     let mut score_delta = BTreeMap::new();
     score_delta.insert("layers.fx".to_string(), fx_summary(&fx));
     ToolReceipt {
@@ -2752,50 +2672,15 @@ pub fn set_track_mix(params: &SetTrackMixParams) -> ToolReceipt {
             Ok(p) => p,
             Err(e) => return deserialize_error_receipt("set_track_mix", "project", &e),
         };
-    let Some(segment) = project
-        .arrangement
-        .segments
-        .iter_mut()
-        .find(|s| s.id.to_string() == params.segment_id)
-    else {
-        return ToolReceipt {
-            tool: "set_track_mix".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!("Segment '{}' not found", params.segment_id),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec!["Unknown segment ID".to_string()],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    };
-    let Some(layer) = segment
-        .layers
-        .iter_mut()
-        .find(|l| l.id.to_string() == params.layer_id)
-    else {
-        return ToolReceipt {
-            tool: "set_track_mix".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!(
-                "Layer '{}' not found in segment '{}'",
-                params.layer_id, params.segment_id
-            ),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec!["Unknown layer ID".to_string()],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    };
-    layer.mix_gain_db = params.gain_db;
-    layer.mix_pan = params.pan;
+    if let Err(err) = crate::production_ops::set_track_mix(
+        &mut project,
+        &params.segment_id,
+        &params.layer_id,
+        params.gain_db,
+        params.pan,
+    ) {
+        return production_error_receipt("set_track_mix", &err, production_error_warnings(&err));
+    }
     let mut score_delta = BTreeMap::new();
     score_delta.insert(
         "layers.mix".to_string(),
@@ -2870,16 +2755,7 @@ pub fn apply_genre_mix_preset(params: &ApplyGenreMixPresetParams) -> ToolReceipt
             Ok(p) => p,
             Err(e) => return deserialize_error_receipt("apply_genre_mix_preset", "project", &e),
         };
-    let mut applied = 0usize;
-    for segment in &mut project.arrangement.segments {
-        for layer in &mut segment.layers {
-            let Some(chain) = genre_mix_chain(&params.genre, &layer.instrument) else {
-                continue;
-            };
-            layer.fx = Some(chain);
-            applied += 1;
-        }
-    }
+    let applied = crate::production_ops::apply_genre_mix_preset(&mut project, &params.genre);
     let mut score_delta = BTreeMap::new();
     score_delta.insert("layers.fx_preset".to_string(), applied.to_string());
     ToolReceipt {
@@ -2955,111 +2831,20 @@ pub fn apply_arrangement_template(params: &ApplyArrangementTemplateParams) -> To
                 return deserialize_error_receipt("apply_arrangement_template", "project", &e);
             }
         };
-    if params.total_bars == 0 {
-        return ToolReceipt {
-            tool: "apply_arrangement_template".to_string(),
-            status: ToolStatus::Failed,
-            summary: "total_bars must be > 0".to_string(),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec!["Invalid total_bars".to_string()],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    }
-    let template = crate::resources::arrangement_template_for(&params.genre);
-    // Distribute total_bars across the archetype sections proportionally:
-    // floor each section, then hand the leftover to the largest section so
-    // the segments always sum to *exactly* total_bars (the drop stays the
-    // longest — the DAW convention). u64 math avoids overflow on the multiply.
-    let archetype_total: u64 = template.sections.iter().map(|s| u64::from(s.bars)).sum();
-    let total = u64::from(params.total_bars);
-    let n_sections = template.sections.len().max(1) as u64;
-    let mut bars: Vec<u64> = template
-        .sections
-        .iter()
-        .map(|s| {
-            if archetype_total > 0 {
-                (u64::from(s.bars) * total / archetype_total).max(1)
-            } else {
-                (total / n_sections).max(1)
-            }
-        })
-        .collect();
-    let allocated: u64 = bars.iter().sum();
-    let leftover = total.saturating_sub(allocated);
-    // Hand the remainder to the section with the largest archetype share (the
-    // drop), preserving proportions and hitting exactly total_bars.
-    if leftover > 0 {
-        if let Some((idx, _)) = template
-            .sections
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, s)| s.bars)
-        {
-            bars[idx] += leftover;
+    let outcome = match crate::production_ops::apply_arrangement_template(
+        &mut project,
+        &params.genre,
+        params.total_bars,
+    ) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            return production_error_receipt(
+                "apply_arrangement_template",
+                &err,
+                production_error_warnings(&err),
+            );
         }
-    }
-
-    let mut segments: Vec<scorestrata_core::domain::Segment> = Vec::new();
-    let mut energy_curve: Vec<scorestrata_core::domain::EnergyPoint> = Vec::new();
-    let mut start_bar = 0u32;
-    for (section, &section_bars) in template.sections.iter().zip(&bars) {
-        let role = scorestrata_core::domain::SegmentRole::from_template_role(&section.role);
-        // Pre-populate each section with the template's instrument hints as
-        // empty stub layers carrying the production octave-register discipline
-        // (G2), so the planner and agent see exactly which voices a section
-        // needs and in which octave band they belong.
-        let layers = section
-            .layers
-            .iter()
-            .map(|instrument| {
-                let register = register_for_instrument(instrument);
-                scorestrata_core::domain::Layer {
-                    id: scorestrata_core::ids::LayerId::new(),
-                    name: instrument.clone(),
-                    instrument: instrument.clone(),
-                    pattern_instances: Vec::new(),
-                    register,
-                    automation: Vec::new(),
-                    fx: None,
-                    mix_gain_db: None,
-                    mix_pan: None,
-                }
-            })
-            .collect();
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "section_bars is a share of u32 total_bars, so it always fits"
-        )]
-        let section_bars_u32 = section_bars as u32;
-        let segment = scorestrata_core::domain::Segment {
-            id: scorestrata_core::ids::SegmentId::new(),
-            name: section.role.clone(),
-            role,
-            start_bar,
-            bars: section_bars_u32,
-            layers,
-        };
-        energy_curve.push(scorestrata_core::domain::EnergyPoint {
-            segment_id: segment.id,
-            target_energy: section.energy,
-        });
-        segments.push(segment);
-        start_bar += section_bars_u32;
-    }
-    // The distribution above guarantees the sections sum to total_bars; verify
-    // rather than trust the math (defensive — catches future archetype edits).
-    let layout: Vec<String> = segments
-        .iter()
-        .map(|s| format!("{} {}", s.name, s.bars))
-        .collect();
-    project.arrangement.segments = segments;
-    project.arrangement.energy_curve = energy_curve;
-    project.arrangement.total_bars = params.total_bars;
+    };
     let mut score_delta = BTreeMap::new();
     score_delta.insert(
         "arrangement.sections".to_string(),
@@ -3069,16 +2854,16 @@ pub fn apply_arrangement_template(params: &ApplyArrangementTemplateParams) -> To
         "arrangement.bars".to_string(),
         project.arrangement.total_bars.to_string(),
     );
-    score_delta.insert("arrangement.layout".to_string(), layout.join(", "));
+    score_delta.insert("arrangement.layout".to_string(), outcome.layout.join(", "));
     ToolReceipt {
         tool: "apply_arrangement_template".to_string(),
         status: ToolStatus::Succeeded,
         summary: format!(
             "Applied {} template: {} sections across {} bars — {}",
             params.genre,
-            template.sections.len(),
-            params.total_bars,
-            layout.join(" · ")
+            outcome.section_count,
+            outcome.total_bars,
+            outcome.layout.join(" · ")
         ),
         score_delta,
         evidence_uris: vec![format!("project://{}/arrangement", params.project_id)],
@@ -3184,146 +2969,6 @@ pub fn import_reference_profile(params: &ImportReferenceProfileParams) -> ToolRe
 }
 
 /// Human-readable summary of an [`FxChain`] for receipts.
-fn fx_summary(fx: &scorestrata_core::domain::FxChain) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    if let Some(hz) = fx.high_pass_hz {
-        parts.push(format!("hpf {hz:.0} Hz"));
-    }
-    if !fx.eq.is_empty() {
-        parts.push(format!("eq {} bands", fx.eq.len()));
-    }
-    if fx.compressor.is_some() {
-        parts.push("comp".to_string());
-    }
-    if fx.sidechain_from_kick {
-        parts.push("sidechain".to_string());
-    }
-    if fx.sends.reverb > 0.0 {
-        parts.push(format!("reverb {:.2}", fx.sends.reverb));
-    }
-    if fx.sends.delay > 0.0 {
-        parts.push(format!("delay {:.2}", fx.sends.delay));
-    }
-    if parts.is_empty() {
-        "clean".to_string()
-    } else {
-        parts.join(", ")
-    }
-}
-
-/// Genre mix defaults: per-instrument insert chains for a genre.
-///
-/// Mirrors a producer's starting session: kick clean + sub, bass HPF'd + EQ
-/// scooped + sidechained to the kick, pads HPF'd with air, hats cleaned.
-///
-/// `pub` so the eval harness can build a preset-applied project and prove
-/// the render moves toward the genre reference profile (§12 test 37) — the
-/// exact chain the `apply_genre_mix_preset` tool applies.
-#[must_use]
-pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<scorestrata_core::domain::FxChain> {
-    use scorestrata_core::domain::{CompressorCfg, FreqBand, FxChain, SendLevels};
-    let g = genre.to_lowercase();
-    let i = instrument.to_lowercase();
-    let sidechain = matches!(
-        g.as_str(),
-        "techno" | "house" | "melodic_techno" | "dark_techno"
-    );
-    let chain = match i.as_str() {
-        "drum_sampler" | "drums" | "kick" => FxChain {
-            high_pass_hz: Some(30.0),
-            compressor: Some(CompressorCfg {
-                threshold_db: -12.0,
-                ratio: 3.0,
-                attack_ms: 2.0,
-                release_ms: 80.0,
-                makeup_db: 4.0,
-            }),
-            ..Default::default()
-        },
-        "bass_synth" | "bass" => FxChain {
-            high_pass_hz: Some(40.0),
-            eq: vec![FreqBand {
-                freq_hz: 200.0,
-                gain_db: -2.0,
-                q: 1.0,
-            }],
-            sidechain_from_kick: sidechain,
-            ..Default::default()
-        },
-        "pad_synth" | "pad" | "chord" => FxChain {
-            high_pass_hz: Some(120.0),
-            eq: vec![FreqBand {
-                freq_hz: 350.0,
-                gain_db: -2.0,
-                q: 1.0,
-            }],
-            sends: SendLevels {
-                reverb: 0.3,
-                delay: 0.0,
-            },
-            ..Default::default()
-        },
-        "lead_synth" | "lead" | "bell" => FxChain {
-            high_pass_hz: Some(150.0),
-            eq: vec![FreqBand {
-                freq_hz: 2500.0,
-                gain_db: 2.0,
-                q: 1.2,
-            }],
-            sends: SendLevels {
-                reverb: 0.15,
-                delay: 0.2,
-            },
-            ..Default::default()
-        },
-        "hat" | "percussion" | "clap" | "snare" => FxChain {
-            high_pass_hz: Some(500.0),
-            ..Default::default()
-        },
-        _ => return None,
-    };
-    Some(chain)
-}
-
-/// The production octave-register defaults (G2) for an instrument family.
-///
-/// Mirrors the DAW discipline: bass lives in octaves 1–2, chords/pads 3–5,
-/// leads 5–7; drums are unpitched and get no register. Used to pre-seed stub
-/// layers from an arrangement template so the agent sees the register contract
-/// before writing any notes.
-#[must_use]
-fn register_for_instrument(instrument: &str) -> Option<scorestrata_core::domain::Register> {
-    let lower = instrument.to_lowercase();
-    if lower.contains("drum") || lower.contains("perc") || lower.contains("hat") {
-        None
-    } else if lower.contains("bass") || lower.contains("sub") {
-        Some(scorestrata_core::domain::Register::new(1, 2))
-    } else if lower.contains("pad")
-        || lower.contains("chord")
-        || lower.contains("string")
-        || lower.contains("key")
-    {
-        Some(scorestrata_core::domain::Register::new(3, 5))
-    } else if lower.contains("lead")
-        || lower.contains("pluck")
-        || lower.contains("bell")
-        || lower.contains("synth")
-    {
-        Some(scorestrata_core::domain::Register::new(5, 7))
-    } else {
-        Some(scorestrata_core::domain::Register::new(3, 6))
-    }
-}
-
-/// Human-readable name for an automation param.
-fn param_str(param: &scorestrata_core::domain::AutomationParam) -> String {
-    match param {
-        scorestrata_core::domain::AutomationParam::Cutoff => "cutoff".to_string(),
-        scorestrata_core::domain::AutomationParam::Volume => "volume".to_string(),
-        scorestrata_core::domain::AutomationParam::Pan => "pan".to_string(),
-        scorestrata_core::domain::AutomationParam::Send => "send".to_string(),
-    }
-}
 
 /// Parameters for `repeat_pattern_in_segment` tool (G3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3381,106 +3026,29 @@ pub fn repeat_pattern_in_segment(params: &RepeatPatternInSegmentParams) -> ToolR
             Ok(p) => p,
             Err(e) => return deserialize_error_receipt("repeat_pattern_in_segment", "project", &e),
         };
-    // Resolve the pattern once (id + bar length) before mutating the layer,
-    // so we never hold two borrows of the project.
-    let resolved_pattern = project
-        .patterns
-        .iter()
-        .find(|p| p.id.to_string() == params.pattern_id)
-        .cloned();
-    let (resolved_id, pattern_bars) = resolved_pattern
-        .as_ref()
-        .map_or((scorestrata_core::ids::PatternId::new(), 1u32), |p| {
-            (p.id, p.bars.max(1))
-        });
-    if resolved_pattern.is_none() {
-        return ToolReceipt {
-            tool: "repeat_pattern_in_segment".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!("Pattern '{}' not found", params.pattern_id),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec![],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    }
-    let ticks_per_bar = u64::from(scorestrata_core::domain::PPQ)
-        * u64::from(project.arrangement.time_signature.numerator);
-    let step = if params.step_ticks > 0 {
-        params.step_ticks
-    } else {
-        u64::from(pattern_bars) * ticks_per_bar
+    let outcome = match crate::production_ops::repeat_pattern_in_segment(
+        &mut project,
+        &params.segment_id,
+        &params.layer_id,
+        &params.pattern_id,
+        params.count,
+        params.step_ticks,
+        params.transpose_step,
+    ) {
+        Ok(outcome) => outcome,
+        // Historical receipt behavior: the repeat tool failed with empty
+        // warnings — preserved verbatim (see production_error_receipt docs).
+        Err(err) => return production_error_receipt("repeat_pattern_in_segment", &err, vec![]),
     };
-    let count = params.count.clamp(1, 256);
-
-    let Some(segment) = project
-        .arrangement
-        .segments
-        .iter_mut()
-        .find(|s| s.id.to_string() == params.segment_id)
-    else {
-        return ToolReceipt {
-            tool: "repeat_pattern_in_segment".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!("Segment '{}' not found", params.segment_id),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec![],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    };
-    let Some(layer) = segment
-        .layers
-        .iter_mut()
-        .find(|l| l.id.to_string() == params.layer_id)
-    else {
-        return ToolReceipt {
-            tool: "repeat_pattern_in_segment".to_string(),
-            status: ToolStatus::Failed,
-            summary: format!(
-                "Layer '{}' not found in segment '{}'",
-                params.layer_id, params.segment_id
-            ),
-            score_delta: BTreeMap::new(),
-            evidence_uris: vec![],
-            focus_uris: vec![],
-            next_actions: vec![],
-            cost: ToolCost::default(),
-            warnings: vec![],
-            dry_run: false,
-            diagnostics: vec![],
-        };
-    };
-
-    // Replace existing instances of this pattern with the repeat sequence
-    // (the DAW "paint pattern" overwrites the lane's placements).
-    layer
-        .pattern_instances
-        .retain(|i| i.pattern_id.to_string() != params.pattern_id);
-    let mut placed = 0u32;
-    for i in 0..count {
-        layer
-            .pattern_instances
-            .push(scorestrata_core::domain::PatternInstance {
-                id: scorestrata_core::ids::PatternInstanceId::new(),
-                pattern_id: resolved_id,
-                start_tick: scorestrata_core::domain::Tick::new(step * u64::from(i)),
-                transpose: params.transpose_step.saturating_mul(i as i32),
-                velocity_multiplier: 1.0,
-            });
-        placed += 1;
-    }
     let mut score_delta = BTreeMap::new();
-    score_delta.insert("arrangement.instances".to_string(), placed.to_string());
-    score_delta.insert("arrangement.repeat_count".to_string(), count.to_string());
+    score_delta.insert(
+        "arrangement.instances".to_string(),
+        outcome.placed.to_string(),
+    );
+    score_delta.insert(
+        "arrangement.repeat_count".to_string(),
+        outcome.placed.to_string(),
+    );
     score_delta.insert(
         "arrangement.transpose_ramp".to_string(),
         params.transpose_step.to_string(),
@@ -3490,7 +3058,11 @@ pub fn repeat_pattern_in_segment(params: &RepeatPatternInSegmentParams) -> ToolR
         status: ToolStatus::Succeeded,
         summary: format!(
             "Repeated pattern '{}' {}× in layer '{}' (step {} ticks, transpose ramp {}/step)",
-            params.pattern_id, count, params.layer_id, step, params.transpose_step
+            params.pattern_id,
+            outcome.placed,
+            params.layer_id,
+            outcome.step,
+            outcome.transpose_step
         ),
         score_delta,
         evidence_uris: vec![format!(

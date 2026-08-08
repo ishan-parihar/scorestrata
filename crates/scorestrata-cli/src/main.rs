@@ -85,6 +85,47 @@ enum Commands {
     Timeline {
         /// Project path
         path: String,
+        /// Filter to one segment (name or 1-based index)
+        #[arg(long)]
+        segment: Option<String>,
+        /// Filter to one layer (name)
+        #[arg(long)]
+        layer: Option<String>,
+    },
+    /// §11 G2 — set a layer's octave register
+    Layer {
+        /// Project path
+        path: String,
+        #[command(subcommand)]
+        action: LayerAction,
+    },
+    /// §11 G3 — repeat a pattern across a layer's timeline
+    Pattern {
+        /// Project path
+        path: String,
+        #[command(subcommand)]
+        action: PatternAction,
+    },
+    /// §11 G4 — write an automation lane
+    Automation {
+        /// Project path
+        path: String,
+        #[command(subcommand)]
+        action: AutomationAction,
+    },
+    /// §11 G5 — set a layer's insert FX chain or apply a genre mix preset
+    Mix {
+        /// Project path
+        path: String,
+        #[command(subcommand)]
+        action: MixAction,
+    },
+    /// §11 G6 — apply a genre arrangement template
+    Template {
+        /// Project path
+        path: String,
+        #[command(subcommand)]
+        action: TemplateAction,
     },
     /// Export a project to MIDI
     ExportMidi {
@@ -231,6 +272,83 @@ enum PolicyAction {
     },
 }
 
+/// §11 G2 — layer register actions.
+#[derive(Subcommand)]
+enum LayerAction {
+    /// Set the octave band a layer's notes must stay within
+    SetRegister {
+        /// Layer name (see `ss timeline`)
+        layer: String,
+        /// Lowest octave (inclusive)
+        min_octave: i8,
+        /// Highest octave (inclusive)
+        max_octave: i8,
+    },
+}
+
+/// §11 G3 — pattern repetition actions.
+#[derive(Subcommand)]
+enum PatternAction {
+    /// Repeat a pattern across a layer's timeline
+    Repeat {
+        /// Layer name (see `ss timeline`)
+        layer: String,
+        /// Pattern name
+        pattern: String,
+        /// Number of instances to place
+        count: u32,
+        /// Spacing between instances in ticks (defaults to the pattern's bars)
+        #[arg(long)]
+        step: Option<u64>,
+        /// Per-instance transpose ramp in semitones (e.g. +12 = octave lift)
+        #[arg(long)]
+        transpose: Option<i32>,
+    },
+}
+
+/// §11 G4 — automation lane actions.
+#[derive(Subcommand)]
+enum AutomationAction {
+    /// Write an automation lane on a layer
+    Write {
+        /// Layer name (see `ss timeline`)
+        layer: String,
+        /// Parameter: cutoff | volume | pan | send
+        param: String,
+        /// JSON points array, e.g. `[{"tick":0,"value":0.2},{"tick":1920,"value":1.0}]`
+        points: String,
+    },
+}
+
+/// §11 G5 — mixer / FX actions.
+#[derive(Subcommand)]
+enum MixAction {
+    /// Set a layer's insert FX chain (serialized FxChain JSON)
+    Fx {
+        /// Layer name (see `ss timeline`)
+        track: String,
+        /// Serialized FxChain JSON, e.g. `{"high_pass_hz":40}`
+        fx: String,
+    },
+    /// Apply per-instrument production mix defaults for a genre
+    Preset {
+        /// Genre (techno, melodic_techno, house, ambient)
+        genre: String,
+    },
+}
+
+/// §11 G6 — arrangement template actions.
+#[derive(Subcommand)]
+enum TemplateAction {
+    /// Apply a genre's section skeleton (intro → build → drop → …)
+    Apply {
+        /// Genre (techno, melodic_techno, house, ambient)
+        genre: String,
+        /// Total bars for the arrangement
+        bars: u32,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -246,7 +364,16 @@ fn main() -> Result<()> {
             segment,
         } => handle_render(&path, &mode, segment.as_deref())?,
         Commands::Analyze { path } => handle_analyze(&path)?,
-        Commands::Timeline { path } => handle_timeline(&path)?,
+        Commands::Timeline {
+            path,
+            segment,
+            layer,
+        } => handle_timeline(&path, segment.as_deref(), layer.as_deref())?,
+        Commands::Layer { path, action } => handle_layer(&path, action)?,
+        Commands::Pattern { path, action } => handle_pattern(&path, action)?,
+        Commands::Automation { path, action } => handle_automation(&path, action)?,
+        Commands::Mix { path, action } => handle_mix(&path, action)?,
+        Commands::Template { path, action } => handle_template(&path, action)?,
         Commands::ExportMidi { path, output } => handle_export_midi(&path, output.as_deref())?,
         Commands::Capabilities => handle_capabilities()?,
         Commands::Demo { dir } => handle_demo(&dir)?,
@@ -1266,7 +1393,13 @@ fn handle_analyze(path: &str) -> Result<()> {
 ///
 /// Renders the composition as sections × layer lanes with occupied octave
 /// registers, using the same derivation as the `get_timeline_view` MCP tool.
-fn handle_timeline(path: &str) -> Result<()> {
+/// `--segment` filters to one section (name or 1-based index) and `--layer`
+/// filters to one layer name — the §11 `ss timeline` flags.
+fn handle_timeline(
+    path: &str,
+    segment_filter: Option<&str>,
+    layer_filter: Option<&str>,
+) -> Result<()> {
     println!("{}", format!("Timeline: {path}").cyan());
 
     let project_path = Path::new(path);
@@ -1274,15 +1407,60 @@ fn handle_timeline(path: &str) -> Result<()> {
         .context("Failed to load project — run `ss new <name>` first")?;
     let view = scorestrata_mcp::resources::build_timeline_view(&project);
 
+    // §11 `--segment N` — keep sections whose name matches or whose 1-based
+    // index equals N, and keep only lanes from those sections.
+    let mut kept_sections: Vec<&scorestrata_mcp::resources::TimelineSection> =
+        view.sections.iter().collect();
+    if let Some(filter) = segment_filter {
+        kept_sections = view
+            .sections
+            .iter()
+            .enumerate()
+            .filter(|(idx, s)| {
+                s.name == filter
+                    || u32::try_from(idx + 1)
+                        .map_or(false, |one_based| one_based.to_string() == filter)
+            })
+            .map(|(_, s)| s)
+            .collect();
+        if kept_sections.is_empty() {
+            anyhow::bail!("Segment '{filter}' not found (see `ss timeline {path}`)");
+        }
+    }
+    let kept_segment_names: Vec<&str> = kept_sections.iter().map(|s| s.name.as_str()).collect();
+
+    // §11 `--layer name` — keep only lanes with that name.
+    let mut kept_layers: Vec<&scorestrata_mcp::resources::TimelineLayer> = view
+        .layers
+        .iter()
+        .filter(|l| {
+            kept_segment_names.is_empty() || kept_segment_names.contains(&l.segment.as_str())
+        })
+        .collect();
+    if let Some(filter) = layer_filter {
+        kept_layers = kept_layers
+            .into_iter()
+            .filter(|l| l.name == filter || l.instrument == filter)
+            .collect();
+        if kept_layers.is_empty() {
+            anyhow::bail!("Layer '{filter}' not found (see `ss timeline {path}`)");
+        }
+    }
+
     println!(
-        "{} {} · {} · {} bpm · {} bars · {} sections · {} layer lanes",
+        "{} {} · {} · {} bpm · {} bars · {} sections · {} layer lanes{}",
         view.name.bold(),
         view.genre.cyan(),
         view.key,
         view.bpm,
         view.total_bars,
-        view.sections.len(),
-        view.layers.len()
+        kept_sections.len(),
+        kept_layers.len(),
+        if segment_filter.is_some() || layer_filter.is_some() {
+            " (filtered)".yellow().to_string()
+        } else {
+            String::new()
+        }
     );
 
     // Section ruler.
@@ -1295,14 +1473,14 @@ fn handle_timeline(path: &str) -> Result<()> {
     }
     println!("{ruler}");
     let mut sec_line = String::from("  sec ");
-    for section in &view.sections {
+    for section in &kept_sections {
         sec_line.push_str(&format!("{:<width$}", section.name, width = bar_width));
     }
     println!("{}", sec_line.cyan());
     println!();
 
     // Per-layer lanes with octave registers.
-    for layer in &view.layers {
+    for layer in &kept_layers {
         println!(
             "  {:<10} [oct {}..{}]  {}  {} notes · {}",
             layer.name.yellow(),
@@ -1316,7 +1494,7 @@ fn handle_timeline(path: &str) -> Result<()> {
 
     // Note summary per layer (first notes with pitch names).
     println!();
-    for layer in &view.layers {
+    for layer in &kept_layers {
         let sample: Vec<String> = layer
             .notes
             .iter()
@@ -1340,6 +1518,221 @@ fn handle_timeline(path: &str) -> Result<()> {
             .dimmed()
             .replace("{id}", &view.project_id)
     );
+    Ok(())
+}
+
+/// Resolve a layer by name (or id) across every segment to its
+/// `(segment_id, layer_id)` — the §11 commands take layer *names* like the
+/// timeline view shows, while the shared mutators take ids.
+fn resolve_layer_id(
+    project: &scorestrata_core::domain::Project,
+    query: &str,
+) -> Option<(String, String)> {
+    for segment in &project.arrangement.segments {
+        if let Some(layer) = segment.layers.iter().find(|l| l.name == query) {
+            return Some((segment.id.to_string(), layer.id.to_string()));
+        }
+    }
+    // Fall back to an id match so scripts can pass the `TimelineLayer.layer_id`.
+    for segment in &project.arrangement.segments {
+        if let Some(layer) = segment.layers.iter().find(|l| l.id.to_string() == query) {
+            return Some((segment.id.to_string(), layer.id.to_string()));
+        }
+    }
+    None
+}
+
+/// §11 G2 — `ss layer <path> set-register <layer> <minOct> <maxOct>`.
+fn handle_layer(path: &str, action: LayerAction) -> Result<()> {
+    let LayerAction::SetRegister {
+        layer,
+        min_octave,
+        max_octave,
+    } = action;
+    println!(
+        "{}",
+        format!("Layer register: {layer} → oct {min_octave}..{max_octave}").yellow()
+    );
+
+    let project_path = Path::new(path);
+    let mut project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+    let (segment_id, layer_id) = resolve_layer_id(&project, &layer)
+        .with_context(|| format!("Layer '{layer}' not found (see `ss timeline {path}`)"))?;
+
+    let outcome = scorestrata_mcp::production_ops::set_layer_register(
+        &mut project,
+        &segment_id,
+        &layer_id,
+        min_octave,
+        max_octave,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    scorestrata_storage::bundle::save_project(&project, project_path)
+        .context("Failed to save project")?;
+
+    println!(
+        "  Layer '{}' register set to octaves {}..{} (compiler clamps, validator flags)",
+        layer, outcome.register.min_octave, outcome.register.max_octave
+    );
+    println!("  Status: {}", "saved".green().bold());
+    Ok(())
+}
+
+/// §11 G3 — `ss pattern <path> repeat <layer> <pattern> <count> [--step]`.
+fn handle_pattern(path: &str, action: PatternAction) -> Result<()> {
+    let PatternAction::Repeat {
+        layer,
+        pattern,
+        count,
+        step,
+        transpose,
+    } = action;
+    println!(
+        "{}",
+        format!("Pattern repeat: {pattern} ×{count} in {layer}").yellow()
+    );
+
+    let project_path = Path::new(path);
+    let mut project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+    let (segment_id, layer_id) = resolve_layer_id(&project, &layer)
+        .with_context(|| format!("Layer '{layer}' not found (see `ss timeline {path}`)"))?;
+    let pattern_id = project
+        .patterns
+        .iter()
+        .find(|p| p.name == pattern)
+        .map(|p| p.id.to_string())
+        .with_context(|| format!("Pattern '{pattern}' not found"))?;
+
+    let outcome = scorestrata_mcp::production_ops::repeat_pattern_in_segment(
+        &mut project,
+        &segment_id,
+        &layer_id,
+        &pattern_id,
+        count,
+        step.unwrap_or(0),
+        transpose.unwrap_or(0),
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    scorestrata_storage::bundle::save_project(&project, project_path)
+        .context("Failed to save project")?;
+
+    println!(
+        "  Repeated pattern '{}' {}× in layer '{}' (step {} ticks, transpose ramp {}/step)",
+        pattern, outcome.placed, layer, outcome.step, outcome.transpose_step
+    );
+    println!("  Status: {}", "saved".green().bold());
+    Ok(())
+}
+
+/// §11 G4 — `ss automation <path> write <layer> <param> <jsonPoints>`.
+fn handle_automation(path: &str, action: AutomationAction) -> Result<()> {
+    let AutomationAction::Write {
+        layer,
+        param,
+        points,
+    } = action;
+    println!("{}", format!("Automation: {param} on {layer}").yellow());
+
+    let points_json: Vec<scorestrata_core::domain::AutomationPointJson> =
+        serde_json::from_str(&points)
+            .with_context(|| format!("Invalid automation points JSON: {points}"))?;
+
+    let project_path = Path::new(path);
+    let mut project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+    let (segment_id, layer_id) = resolve_layer_id(&project, &layer)
+        .with_context(|| format!("Layer '{layer}' not found (see `ss timeline {path}`)"))?;
+
+    let outcome = scorestrata_mcp::production_ops::write_automation(
+        &mut project,
+        &segment_id,
+        &layer_id,
+        &param,
+        &points_json,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+    scorestrata_storage::bundle::save_project(&project, project_path)
+        .context("Failed to save project")?;
+
+    println!(
+        "  Layer '{}' {} automation lane with {} points (compiler emits CC {}, renderer sweeps)",
+        layer,
+        scorestrata_mcp::tools::param_str(&outcome.param),
+        points_json.len(),
+        outcome.param.cc_number()
+    );
+    println!("  Status: {}", "saved".green().bold());
+    Ok(())
+}
+
+/// §11 G5 — `ss mix <path> fx <track> <jsonFx>` / `ss mix <path> preset <genre>`.
+fn handle_mix(path: &str, action: MixAction) -> Result<()> {
+    let project_path = Path::new(path);
+    let mut project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+
+    match action {
+        MixAction::Fx { track, fx } => {
+            println!("{}", format!("Mix FX on {track}").yellow());
+            let chain: scorestrata_core::domain::FxChain =
+                serde_json::from_str(&fx).with_context(|| format!("Invalid FxChain JSON: {fx}"))?;
+            let (segment_id, layer_id) = resolve_layer_id(&project, &track)
+                .with_context(|| format!("Layer '{track}' not found (see `ss timeline {path}`)"))?;
+            scorestrata_mcp::production_ops::set_track_fx(
+                &mut project,
+                &segment_id,
+                &layer_id,
+                &chain,
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "  Layer '{}' FX chain set ({}); renderer applies HPF→EQ→comp→sends",
+                track,
+                scorestrata_mcp::tools::fx_summary(&chain)
+            );
+        }
+        MixAction::Preset { genre } => {
+            println!("{}", format!("Mix preset: {genre}").yellow());
+            let applied =
+                scorestrata_mcp::production_ops::apply_genre_mix_preset(&mut project, &genre);
+            println!(
+                "  Applied {genre} mix preset to {applied} layers (HPF/EQ/sidechain/sends per instrument)"
+            );
+        }
+    }
+
+    scorestrata_storage::bundle::save_project(&project, project_path)
+        .context("Failed to save project")?;
+    println!("  Status: {}", "saved".green().bold());
+    Ok(())
+}
+
+/// §11 G6 — `ss template <path> apply <genre> <bars>`.
+fn handle_template(path: &str, action: TemplateAction) -> Result<()> {
+    let TemplateAction::Apply { genre, bars } = action;
+    println!(
+        "{}",
+        format!("Arrangement template: {genre} × {bars} bars").yellow()
+    );
+
+    let project_path = Path::new(path);
+    let mut project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+    let outcome =
+        scorestrata_mcp::production_ops::apply_arrangement_template(&mut project, &genre, bars)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    scorestrata_storage::bundle::save_project(&project, project_path)
+        .context("Failed to save project")?;
+
+    println!(
+        "  Applied {genre} template: {} sections across {} bars — {}",
+        outcome.section_count,
+        outcome.total_bars,
+        outcome.layout.join(" · ")
+    );
+    println!("  Status: {}", "saved".green().bold());
     Ok(())
 }
 
@@ -2106,8 +2499,210 @@ mod tests {
     fn parse_timeline_command() {
         let cli = Cli::try_parse_from(["ss", "timeline", "my_song"]).unwrap();
         match cli.command {
-            Commands::Timeline { path } => assert_eq!(path, "my_song"),
+            Commands::Timeline {
+                path,
+                segment,
+                layer,
+            } => {
+                assert_eq!(path, "my_song");
+                assert!(segment.is_none());
+                assert!(layer.is_none());
+            }
             _ => panic!("expected Commands::Timeline"),
+        }
+    }
+
+    #[test]
+    fn parse_timeline_with_segment_and_layer_filters() {
+        let cli = Cli::try_parse_from([
+            "ss",
+            "timeline",
+            "my_song",
+            "--segment",
+            "2",
+            "--layer",
+            "Bass",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Timeline { segment, layer, .. } => {
+                assert_eq!(segment.as_deref(), Some("2"));
+                assert_eq!(layer.as_deref(), Some("Bass"));
+            }
+            _ => panic!("expected Commands::Timeline"),
+        }
+    }
+
+    #[test]
+    fn parse_layer_set_register_command() {
+        let cli = Cli::try_parse_from(["ss", "layer", "my_song", "set-register", "Bass", "1", "2"])
+            .unwrap();
+        match cli.command {
+            Commands::Layer {
+                path,
+                action:
+                    LayerAction::SetRegister {
+                        layer,
+                        min_octave,
+                        max_octave,
+                    },
+            } => {
+                assert_eq!(path, "my_song");
+                assert_eq!(layer, "Bass");
+                assert_eq!(min_octave, 1);
+                assert_eq!(max_octave, 2);
+            }
+            _ => panic!("expected Commands::Layer"),
+        }
+    }
+
+    #[test]
+    fn parse_pattern_repeat_command() {
+        let cli = Cli::try_parse_from([
+            "ss",
+            "pattern",
+            "my_song",
+            "repeat",
+            "Bass",
+            "bass_loop",
+            "4",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Pattern {
+                path,
+                action:
+                    PatternAction::Repeat {
+                        layer,
+                        pattern,
+                        count,
+                        step,
+                        transpose,
+                    },
+            } => {
+                assert_eq!(path, "my_song");
+                assert_eq!(layer, "Bass");
+                assert_eq!(pattern, "bass_loop");
+                assert_eq!(count, 4);
+                assert!(step.is_none());
+                assert!(transpose.is_none());
+            }
+            _ => panic!("expected Commands::Pattern"),
+        }
+    }
+
+    #[test]
+    fn parse_pattern_repeat_with_step_and_transpose() {
+        let cli = Cli::try_parse_from([
+            "ss",
+            "pattern",
+            "my_song",
+            "repeat",
+            "Bass",
+            "bass_loop",
+            "4",
+            "--step",
+            "1920",
+            "--transpose",
+            "12",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Pattern {
+                action:
+                    PatternAction::Repeat {
+                        step, transpose, ..
+                    },
+                ..
+            } => {
+                assert_eq!(step, Some(1920));
+                assert_eq!(transpose, Some(12));
+            }
+            _ => panic!("expected Commands::Pattern"),
+        }
+    }
+
+    #[test]
+    fn parse_automation_write_command() {
+        let cli = Cli::try_parse_from([
+            "ss",
+            "automation",
+            "my_song",
+            "write",
+            "Bass",
+            "cutoff",
+            "[{\"tick\":0,\"value\":0.2}]",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Automation {
+                path,
+                action:
+                    AutomationAction::Write {
+                        layer,
+                        param,
+                        points,
+                    },
+            } => {
+                assert_eq!(path, "my_song");
+                assert_eq!(layer, "Bass");
+                assert_eq!(param, "cutoff");
+                assert!(points.contains("0.2"));
+            }
+            _ => panic!("expected Commands::Automation"),
+        }
+    }
+
+    #[test]
+    fn parse_mix_fx_command() {
+        let cli = Cli::try_parse_from([
+            "ss",
+            "mix",
+            "my_song",
+            "fx",
+            "Bass",
+            "{\"high_pass_hz\":40}",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Mix {
+                path,
+                action: MixAction::Fx { track, fx },
+            } => {
+                assert_eq!(path, "my_song");
+                assert_eq!(track, "Bass");
+                assert!(fx.contains("high_pass_hz"));
+            }
+            _ => panic!("expected Commands::Mix"),
+        }
+    }
+
+    #[test]
+    fn parse_mix_preset_command() {
+        let cli = Cli::try_parse_from(["ss", "mix", "my_song", "preset", "techno"]).unwrap();
+        match cli.command {
+            Commands::Mix {
+                action: MixAction::Preset { genre },
+                ..
+            } => assert_eq!(genre, "techno"),
+            _ => panic!("expected Commands::Mix"),
+        }
+    }
+
+    #[test]
+    fn parse_template_apply_command() {
+        let cli =
+            Cli::try_parse_from(["ss", "template", "my_song", "apply", "techno", "64"]).unwrap();
+        match cli.command {
+            Commands::Template {
+                path,
+                action: TemplateAction::Apply { genre, bars },
+            } => {
+                assert_eq!(path, "my_song");
+                assert_eq!(genre, "techno");
+                assert_eq!(bars, 64);
+            }
+            _ => panic!("expected Commands::Template"),
         }
     }
 
@@ -2372,5 +2967,189 @@ mod tests {
                 .count();
         }
         assert_eq!(covered, full_events, "segments partition the timeline");
+    }
+
+    /// Write a fixture project bundle to a temp dir and return its path — the
+    /// §11 functional tests operate on a real on-disk project (load → mutate
+    /// → save) exactly like the CLI does.
+    fn temp_fixture_project() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ss-pp-cli-{}", uuid::Uuid::new_v4()));
+        let project = scorestrata_testkit::melodic_techno_project();
+        scorestrata_storage::bundle::save_project(&project, &dir).expect("fixture saved");
+        dir
+    }
+
+    #[test]
+    fn layer_set_register_persists_to_disk() {
+        let dir = temp_fixture_project();
+        handle_layer(
+            dir.to_str().unwrap(),
+            LayerAction::SetRegister {
+                layer: "Bass".to_string(),
+                min_octave: 1,
+                max_octave: 2,
+            },
+        )
+        .expect("set-register succeeds");
+
+        let reloaded = scorestrata_storage::bundle::load_project(&dir).expect("reloads");
+        let bass = reloaded
+            .arrangement
+            .segments
+            .iter()
+            .flat_map(|s| &s.layers)
+            .find(|l| l.name == "Bass")
+            .expect("bass layer");
+        let reg = bass.register.expect("register persisted");
+        assert_eq!((reg.min_octave, reg.max_octave), (1, 2));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pattern_repeat_persists_instances() {
+        let dir = temp_fixture_project();
+        let project = scorestrata_storage::bundle::load_project(&dir).expect("loads");
+        let pattern = project
+            .patterns
+            .iter()
+            .find(|p| p.name == "Bass_RootFifth")
+            .expect("pattern");
+        assert!(pattern.bars > 0);
+
+        handle_pattern(
+            dir.to_str().unwrap(),
+            PatternAction::Repeat {
+                layer: "Bass".to_string(),
+                pattern: "Bass_RootFifth".to_string(),
+                count: 4,
+                step: None,
+                transpose: Some(12),
+            },
+        )
+        .expect("repeat succeeds");
+
+        let reloaded = scorestrata_storage::bundle::load_project(&dir).expect("reloads");
+        let bass = reloaded
+            .arrangement
+            .segments
+            .iter()
+            .flat_map(|s| &s.layers)
+            .find(|l| l.name == "Bass")
+            .expect("bass layer");
+        let placed: Vec<_> = bass
+            .pattern_instances
+            .iter()
+            .filter(|i| i.pattern_id == pattern.id)
+            .collect();
+        assert_eq!(placed.len(), 4, "four instances persisted");
+        assert_eq!(placed[1].transpose, 12, "transpose ramp applies");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn automation_write_persists_cc_lane() {
+        let dir = temp_fixture_project();
+        handle_automation(
+            dir.to_str().unwrap(),
+            AutomationAction::Write {
+                layer: "Lead".to_string(),
+                param: "cutoff".to_string(),
+                points: "[{\"tick\":0,\"value\":0.2},{\"tick\":1920,\"value\":1.0}]".to_string(),
+            },
+        )
+        .expect("automation write succeeds");
+
+        let reloaded = scorestrata_storage::bundle::load_project(&dir).expect("reloads");
+        let lead = reloaded
+            .arrangement
+            .segments
+            .iter()
+            .flat_map(|s| &s.layers)
+            .find(|l| l.name == "Lead")
+            .expect("lead layer");
+        let lane = lead
+            .automation
+            .iter()
+            .find(|a| a.param == scorestrata_core::domain::AutomationParam::Cutoff)
+            .expect("cutoff lane persisted");
+        assert_eq!(lane.points.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mix_fx_persists_custom_chain() {
+        // A custom FX chain must survive the load→mutate→save round trip. Use
+        // a chain the techno preset would NOT produce (its bass chain HPF is
+        // 40.0) so the assertion proves the `ss mix fx` command itself.
+        let dir = temp_fixture_project();
+        handle_mix(
+            dir.to_str().unwrap(),
+            MixAction::Fx {
+                track: "Bass".to_string(),
+                fx: "{\"high_pass_hz\":100.0}".to_string(),
+            },
+        )
+        .expect("fx set");
+
+        let reloaded = scorestrata_storage::bundle::load_project(&dir).expect("reloads");
+        let bass = reloaded
+            .arrangement
+            .segments
+            .iter()
+            .flat_map(|s| &s.layers)
+            .find(|l| l.name == "Bass")
+            .expect("bass layer");
+        assert_eq!(bass.fx.as_ref().expect("fx set").high_pass_hz, Some(100.0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mix_preset_chains_all_instruments() {
+        let dir = temp_fixture_project();
+        handle_mix(
+            dir.to_str().unwrap(),
+            MixAction::Preset {
+                genre: "techno".to_string(),
+            },
+        )
+        .expect("preset applied");
+
+        let reloaded = scorestrata_storage::bundle::load_project(&dir).expect("reloads");
+        let chained: Vec<_> = reloaded
+            .arrangement
+            .segments
+            .iter()
+            .flat_map(|s| &s.layers)
+            .filter(|l| l.fx.is_some())
+            .collect();
+        assert!(
+            chained.len() >= 3,
+            "techno preset chains drums/bass/lead/pads (got {})",
+            chained.len()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn template_apply_persists_arrangement() {
+        let dir = temp_fixture_project();
+        handle_template(
+            dir.to_str().unwrap(),
+            TemplateAction::Apply {
+                genre: "techno".to_string(),
+                bars: 64,
+            },
+        )
+        .expect("template applied");
+
+        let reloaded = scorestrata_storage::bundle::load_project(&dir).expect("reloads");
+        assert_eq!(reloaded.arrangement.total_bars, 64);
+        let covered: u32 = reloaded.arrangement.segments.iter().map(|s| s.bars).sum();
+        assert_eq!(covered, 64, "sections sum to exactly 64 bars");
+        assert!(
+            reloaded.arrangement.segments.len() >= 3,
+            "multi-section skeleton"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

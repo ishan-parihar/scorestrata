@@ -267,10 +267,11 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
 
     matrix.add_entry(TraceabilityEntry {
         spec_id: "SPEC-PRODUCTION-PIPELINE".to_string(),
-        title: "Production-pipeline DoD — G1–G7 end-to-end simulation".to_string(),
+        title: "Production-pipeline DoD — G1–G7 end-to-end simulation + §11 CLI".to_string(),
         phase: "20".to_string(),
-        tasks: vec!["PROD-001".to_string()],
+        tasks: vec!["PROD-001".to_string(), "PROD-002".to_string()],
         code: vec![
+            "scorestrata_mcp::production_ops".to_string(),
             "scorestrata_mcp::tools::get_timeline_view".to_string(),
             "scorestrata_mcp::tools::set_layer_register".to_string(),
             "scorestrata_mcp::tools::repeat_pattern_in_segment".to_string(),
@@ -284,6 +285,7 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
             "production_pipeline_simulation".to_string(),
             "golden_harness_e2e".to_string(),
             "mvas_simulation".to_string(),
+            "scorestrata-cli tests".to_string(),
         ],
         mcp_tools: vec![
             "get_timeline_view".to_string(),
@@ -294,8 +296,16 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
             "apply_genre_mix_preset".to_string(),
             "apply_arrangement_template".to_string(),
         ],
-        cli_commands: vec!["ss timeline".to_string()],
-        docs: vec!["production-pipeline-ux-plan.md §3–§10, §13 DoD".to_string()],
+        cli_commands: vec![
+            "ss timeline [--segment N] [--layer name]".to_string(),
+            "ss layer set-register".to_string(),
+            "ss pattern repeat".to_string(),
+            "ss automation write".to_string(),
+            "ss mix fx".to_string(),
+            "ss mix preset".to_string(),
+            "ss template apply".to_string(),
+        ],
+        docs: vec!["production-pipeline-ux-plan.md §3–§11, §13 DoD".to_string()],
         eval_result: Some("pass".to_string()),
     });
 
