@@ -3484,6 +3484,7 @@ fn audio_plan_ss_analyze_flow_produces_audit_artifacts() {
         &scorestrata_audio::render::RenderConfig {
             stereo: true,
             limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
+            ..Default::default()
         },
     )
     .expect("render succeeds");

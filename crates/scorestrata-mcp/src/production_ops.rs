@@ -9,9 +9,9 @@
 //! drift apart.
 //!
 //! §11 of the production-pipeline-ux-plan: `set_layer_register` (G2),
-//! `repeat_pattern_in_segment` (G3), `write_automation` (G4), `set_track_fx`
-//! / `set_track_mix` / `apply_genre_mix_preset` (G5), `apply_arrangement_template`
-//! (G6).
+//! `repeat_pattern_in_segment` / `extend_arrangement` (G3), `write_automation`
+//! (G4), `set_track_fx` / `set_track_mix` / `apply_genre_mix_preset` (G5),
+//! `apply_arrangement_template` (G6).
 
 use scorestrata_core::domain::{
     Automation, AutomationParam, AutomationPoint, AutomationPointJson, CompressorCfg, FreqBand,
@@ -40,6 +40,13 @@ pub enum ProductionError {
     UnsupportedParam(String),
     /// `total_bars must be > 0`.
     InvalidTotalBars,
+    /// `total_bars` must exceed the current arrangement length.
+    InvalidExtendTarget {
+        /// Current arrangement length in bars.
+        current: u32,
+        /// The requested (too short) target.
+        requested: u32,
+    },
 }
 
 impl std::fmt::Display for ProductionError {
@@ -55,6 +62,10 @@ impl std::fmt::Display for ProductionError {
                 "Unsupported automation param '{p}' (expected cutoff|volume|pan|send)"
             ),
             Self::InvalidTotalBars => write!(f, "total_bars must be > 0"),
+            Self::InvalidExtendTarget { current, requested } => write!(
+                f,
+                "total_bars must exceed the current arrangement length ({current}); got {requested}"
+            ),
         }
     }
 }
@@ -87,6 +98,19 @@ pub struct TemplateOutcome {
     /// Number of archetype sections in the template.
     pub section_count: usize,
     /// Total bars the arrangement now spans.
+    pub total_bars: u32,
+}
+
+/// Outcome of an [`extend_arrangement`] call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtendOutcome {
+    /// `"name bars"` lines for the full arrangement after extension.
+    pub layout: Vec<String>,
+    /// Number of archetype sections appended.
+    pub added_sections: usize,
+    /// Arrangement length before the extension.
+    pub previous_bars: u32,
+    /// Arrangement length after the extension.
     pub total_bars: u32,
 }
 
@@ -271,20 +295,18 @@ pub fn apply_genre_mix_preset(project: &mut Project, genre: &str) -> usize {
 /// floor each section, then hand the leftover to the largest section so the
 /// segments always sum to *exactly* `total_bars` (the drop stays the longest
 /// — the DAW convention). u64 math avoids overflow on the multiply.
-pub fn apply_arrangement_template(
-    project: &mut Project,
-    genre: &str,
-    total_bars: u32,
-) -> Result<TemplateOutcome, ProductionError> {
-    if total_bars == 0 {
-        return Err(ProductionError::InvalidTotalBars);
-    }
-    let template = crate::resources::arrangement_template_for(genre);
-    let archetype_total: u64 = template.sections.iter().map(|s| u64::from(s.bars)).sum();
-    let total = u64::from(total_bars);
-    let n_sections = template.sections.len().max(1) as u64;
-    let mut bars: Vec<u64> = template
-        .sections
+/// Distribute `total` bars across template archetype sections proportionally:
+/// floor each section, then hand the leftover to the largest section so the
+/// segments always sum to *exactly* `total` (the drop stays the longest — the
+/// DAW convention). u64 math avoids overflow on the multiply.
+///
+/// Shared by [`apply_arrangement_template`] (full re-arrange) and
+/// [`extend_arrangement`] (grow the tail), so both hit exactly the requested
+/// bar count with one distribution rule.
+fn distribute_bars(sections: &[crate::resources::SectionTemplate], total: u64) -> Vec<u64> {
+    let archetype_total: u64 = sections.iter().map(|s| u64::from(s.bars)).sum();
+    let n_sections = sections.len().max(1) as u64;
+    let mut bars: Vec<u64> = sections
         .iter()
         .map(|s| {
             if archetype_total > 0 {
@@ -299,25 +321,33 @@ pub fn apply_arrangement_template(
     // Hand the remainder to the section with the largest archetype share (the
     // drop), preserving proportions and hitting exactly total_bars.
     if leftover > 0 {
-        if let Some((idx, _)) = template
-            .sections
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, s)| s.bars)
-        {
+        if let Some((idx, _)) = sections.iter().enumerate().max_by_key(|(_, s)| s.bars) {
             bars[idx] += leftover;
         }
     }
+    bars
+}
 
+/// Build concrete segments (+ energy curve) from template archetypes, starting
+/// at `start_bar`.
+///
+/// Each section is pre-populated with the template's instrument hints as
+/// empty stub layers carrying the production octave-register discipline (G2),
+/// so the planner and agent see exactly which voices a section needs and in
+/// which octave band they belong.
+fn build_template_segments(
+    sections: &[crate::resources::SectionTemplate],
+    bars: &[u64],
+    start_bar: u32,
+) -> (
+    Vec<scorestrata_core::domain::Segment>,
+    Vec<scorestrata_core::domain::EnergyPoint>,
+) {
     let mut segments: Vec<scorestrata_core::domain::Segment> = Vec::new();
     let mut energy_curve: Vec<scorestrata_core::domain::EnergyPoint> = Vec::new();
-    let mut start_bar = 0u32;
-    for (section, &section_bars) in template.sections.iter().zip(&bars) {
+    let mut start = start_bar;
+    for (section, &section_bars) in sections.iter().zip(bars) {
         let role = scorestrata_core::domain::SegmentRole::from_template_role(&section.role);
-        // Pre-populate each section with the template's instrument hints as
-        // empty stub layers carrying the production octave-register discipline
-        // (G2), so the planner and agent see exactly which voices a section
-        // needs and in which octave band they belong.
         let layers = section
             .layers
             .iter()
@@ -345,7 +375,7 @@ pub fn apply_arrangement_template(
             id: scorestrata_core::ids::SegmentId::new(),
             name: section.role.clone(),
             role,
-            start_bar,
+            start_bar: start,
             bars: section_bars_u32,
             layers,
         };
@@ -354,8 +384,30 @@ pub fn apply_arrangement_template(
             target_energy: section.energy,
         });
         segments.push(segment);
-        start_bar += section_bars_u32;
+        start += section_bars_u32;
     }
+    (segments, energy_curve)
+}
+
+/// Apply a per-genre arrangement template (G6) — build the section skeleton
+/// (intro → build → drop → breakdown → outro) with production-grade bar
+/// counts and an energy arc.
+///
+/// Distributes `total_bars` across the archetype sections proportionally:
+/// floor each section, then hand the leftover to the largest section so the
+/// segments always sum to *exactly* `total_bars` (the drop stays the longest
+/// — the DAW convention). u64 math avoids overflow on the multiply.
+pub fn apply_arrangement_template(
+    project: &mut Project,
+    genre: &str,
+    total_bars: u32,
+) -> Result<TemplateOutcome, ProductionError> {
+    if total_bars == 0 {
+        return Err(ProductionError::InvalidTotalBars);
+    }
+    let template = crate::resources::arrangement_template_for(genre);
+    let bars = distribute_bars(&template.sections, u64::from(total_bars));
+    let (segments, energy_curve) = build_template_segments(&template.sections, &bars, 0);
     // The distribution above guarantees the sections sum to total_bars; verify
     // rather than trust the math (defensive — catches future archetype edits).
     let layout: Vec<String> = segments
@@ -369,6 +421,63 @@ pub fn apply_arrangement_template(
         layout,
         section_count: template.sections.len(),
         total_bars,
+    })
+}
+
+/// Grow the arrangement to `total_bars` (G3) — the DAW "make it 64 bars"
+/// action.
+///
+/// Keeps the existing segments and appends archetype sections (intro → build →
+/// drop → …) derived from the project's genre template, so a producer can
+/// compose a loop and then extend it into a full arrangement without rebuilding
+/// the sections already written. Stub layers (with their G2 octave registers)
+/// are seeded so the planner fills the new sections the same way
+/// `apply_arrangement_template` does.
+///
+/// The arrangement grows to **at least** `total_bars`: the appended sections
+/// sum exactly to the request whenever the remaining span is at least the
+/// template's archetype section count, and exceed it (each section floored to
+/// 1 bar) when the request is smaller — the final `arrangement.total_bars` is
+/// always the actual segment coverage, so the segments-sum-to-total_bars
+/// invariant the timeline ruler draws from holds.
+pub fn extend_arrangement(
+    project: &mut Project,
+    total_bars: u32,
+) -> Result<ExtendOutcome, ProductionError> {
+    if total_bars == 0 {
+        return Err(ProductionError::InvalidTotalBars);
+    }
+    let current = project.arrangement.total_bars;
+    if total_bars <= current {
+        return Err(ProductionError::InvalidExtendTarget {
+            current,
+            requested: total_bars,
+        });
+    }
+    let template = crate::resources::arrangement_template_for(&project.config.genre);
+    let remaining = u64::from(total_bars - current);
+    let bars = distribute_bars(&template.sections, remaining);
+    // The distribution floors each section at 1 bar, so a request smaller than
+    // the section count overshoots — grow to the actual covered total instead
+    // of the request to keep total_bars consistent with the segments.
+    let covered: u64 = bars.iter().sum();
+    let actual_total = current.saturating_add(u32::try_from(covered).unwrap_or(u32::MAX));
+    let (segments, energy_curve) = build_template_segments(&template.sections, &bars, current);
+    let added_sections = segments.len();
+    project.arrangement.segments.extend(segments);
+    project.arrangement.energy_curve.extend(energy_curve);
+    project.arrangement.total_bars = actual_total;
+    let layout = project
+        .arrangement
+        .segments
+        .iter()
+        .map(|s| format!("{} {}", s.name, s.bars))
+        .collect();
+    Ok(ExtendOutcome {
+        layout,
+        added_sections,
+        previous_bars: current,
+        total_bars: actual_total,
     })
 }
 

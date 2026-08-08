@@ -62,6 +62,13 @@ pub struct RenderConfig {
     pub stereo: bool,
     /// Peak limiter applied to the master mix; `None` disables limiting.
     pub limiter: Option<LimiterConfig>,
+    /// Master output gain in dB applied to the folded mix (G5, §8.6
+    /// `MixerState::master_gain_db`); 0.0 = unity.
+    pub master_gain_db: f32,
+    /// Stereo width of the master bus (mid/side): 1.0 = neutral, 0.0 =
+    /// mono fold, >1.0 widens the side channel. The mono fold is invariant
+    /// under this transform, so mono renders are unaffected.
+    pub stereo_width: f32,
 }
 
 impl Default for RenderConfig {
@@ -69,8 +76,43 @@ impl Default for RenderConfig {
         Self {
             stereo: false,
             limiter: Some(LimiterConfig::default()),
+            master_gain_db: 0.0,
+            stereo_width: 1.0,
         }
     }
+}
+
+/// Apply the master-bus state (§8.6 `MixerState`, G5) to the folded mix:
+/// stereo width (mid/side) then master gain, before the master limiter so
+/// the ceiling still protects the final level.
+///
+/// The width transform keeps `(L+R)/2` invariant, so mono renders are not
+/// affected by width changes — only the stereo pair widens.
+fn apply_master_bus(
+    left: Vec<f32>,
+    right: Vec<f32>,
+    config: &RenderConfig,
+) -> (Vec<f32>, Vec<f32>) {
+    let mut left = left;
+    let mut right = right;
+    if config.stereo_width != 1.0 {
+        for (l, r) in left.iter_mut().zip(&mut right) {
+            let mid = (*l + *r) * 0.5;
+            let side = (*l - *r) * 0.5 * config.stereo_width;
+            *l = mid + side;
+            *r = mid - side;
+        }
+    }
+    if config.master_gain_db != 0.0 {
+        let gain = db_to_linear(config.master_gain_db);
+        for sample in &mut left {
+            *sample *= gain;
+        }
+        for sample in &mut right {
+            *sample *= gain;
+        }
+    }
+    (left, right)
 }
 
 /// A note to render, at absolute tick positions.
@@ -344,6 +386,9 @@ pub fn render_notes_full(
     }
 
     let (left, right) = mixer.mix();
+    // G5 — master bus: stereo width + master gain from `Project.mixer`,
+    // applied before the limiter so the ceiling still protects the level.
+    let (left, right) = apply_master_bus(left, right, config);
     let mono: Vec<f32> = left
         .iter()
         .zip(&right)
@@ -550,6 +595,8 @@ pub fn render_stems_full(
     }
 
     let (left, right) = mixer.mix();
+    // G5 — master bus, mirroring the master render so stems/master agree.
+    let (left, right) = apply_master_bus(left, right, config);
     let mut mono: Vec<f32> = left
         .iter()
         .zip(&right)
@@ -1062,6 +1109,110 @@ mod tests {
     }
 
     #[test]
+    fn master_gain_db_scales_the_master_fold() {
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        let unity = RenderConfig::default();
+        let boosted = RenderConfig {
+            master_gain_db: 12.0,
+            ..Default::default()
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let a = render_notes_full(&notes, 120, 48_000, &[], &[], &[], &unity).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let b = render_notes_full(&notes, 120, 48_000, &[], &[], &[], &boosted).unwrap();
+        // +12 dB master gain ≈ 4× linear, so the mastered fold rises clearly.
+        assert!(
+            rms(&b.mono_samples) > rms(&a.mono_samples) * 2.0,
+            "master gain raises the fold ({:.4} vs {:.4})",
+            rms(&b.mono_samples),
+            rms(&a.mono_samples)
+        );
+        // The limiter still protects the boosted render (ceiling −1 dBTP).
+        assert!(
+            !b.analysis.clipping_detected && b.analysis.true_peak_dbtp <= -0.4,
+            "boosted master stays within the limiter ceiling ({:.2} dBTP)",
+            b.analysis.true_peak_dbtp
+        );
+    }
+
+    #[test]
+    fn stereo_width_alters_channels_but_not_mono_fold() {
+        // A centered note plus a hard-panned note: width 0.0 collapses the
+        // side (channels equal), width 2.0 widens it (channels diverge) —
+        // while the mono fold (L+R)/2 stays identical (mid/side invariant).
+        let notes = vec![
+            RenderNote {
+                pitch: 60,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 0.8,
+                layer_name: "Lead".to_string(),
+            },
+            RenderNote {
+                pitch: 72,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ),
+                velocity: 0.8,
+                layer_name: "Lead Octave".to_string(),
+            },
+        ];
+        let voices = build_voices(&[("Lead", "lead_synth"), ("Lead Octave", "lead_synth")]);
+        // No limiter (it is per-channel and nonlinear, which would break the
+        // mid/side mono invariance under test); −6 dB master gain keeps the
+        // un-clipped two-layer sum inside the 16-bit range.
+        let narrow = RenderConfig {
+            stereo: true,
+            limiter: None,
+            master_gain_db: -6.0,
+            stereo_width: 0.0,
+        };
+        let wide = RenderConfig {
+            stereo: true,
+            limiter: None,
+            master_gain_db: -6.0,
+            stereo_width: 2.0,
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let a = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &narrow).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let b = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &wide).unwrap();
+        let channel_split = |result: &RenderResult| -> f64 {
+            let data = &result.wav_bytes[44..];
+            let frames = data.len() / 4;
+            let mut left_energy = 0.0f64;
+            let mut right_energy = 0.0f64;
+            for i in 0..frames {
+                let l = i16::from_le_bytes([data[i * 4], data[i * 4 + 1]]) as f64 / 32768.0;
+                let r = i16::from_le_bytes([data[i * 4 + 2], data[i * 4 + 3]]) as f64 / 32768.0;
+                left_energy += l * l;
+                right_energy += r * r;
+            }
+            (left_energy - right_energy).abs()
+        };
+        // Width 0 collapses to identical channels; width 2 diverges them.
+        assert!(
+            channel_split(&a) < channel_split(&b) * 0.5,
+            "width changes channel split (narrow {:.4} vs wide {:.4})",
+            channel_split(&a),
+            channel_split(&b)
+        );
+        // The mono fold is invariant under the mid/side transform.
+        assert!(
+            rms(&a.mono_samples) > 0.0
+                && (rms(&a.mono_samples) - rms(&b.mono_samples)).abs() < 1e-4,
+            "mono fold unchanged by width ({:.5} vs {:.5})",
+            rms(&a.mono_samples),
+            rms(&b.mono_samples)
+        );
+    }
+
+    #[test]
     fn empty_notes_renders_empty_wav() {
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let result = render_notes(&[], 120, 48_000, &[]).unwrap();
@@ -1150,6 +1301,7 @@ mod tests {
         let config = RenderConfig {
             stereo: true,
             limiter: Some(LimiterConfig::default()),
+            ..Default::default()
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let result = render_notes_with_config(&notes, 120, 48_000, &[], &config).unwrap();
@@ -1192,6 +1344,7 @@ mod tests {
         let config = RenderConfig {
             stereo: true,
             limiter: Some(LimiterConfig::default()),
+            ..Default::default()
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let result = render_notes_with_config(&notes, 120, 48_000, &voices, &config).unwrap();

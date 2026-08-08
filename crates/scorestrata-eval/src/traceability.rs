@@ -279,6 +279,9 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
             "scorestrata_mcp::tools::set_track_fx".to_string(),
             "scorestrata_mcp::tools::apply_genre_mix_preset".to_string(),
             "scorestrata_mcp::tools::apply_arrangement_template".to_string(),
+            "scorestrata_mcp::tools::extend_arrangement".to_string(),
+            "scorestrata_core::domain::MixerState".to_string(),
+            "scorestrata_audio::render::apply_master_bus".to_string(),
             "scorestrata_compiler::timeline::control_change_lanes".to_string(),
         ],
         tests: vec![
@@ -286,6 +289,7 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
             "golden_harness_e2e".to_string(),
             "mvas_simulation".to_string(),
             "scorestrata-cli tests".to_string(),
+            "scorestrata_audio::render tests".to_string(),
         ],
         mcp_tools: vec![
             "get_timeline_view".to_string(),
@@ -295,6 +299,7 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
             "set_track_fx".to_string(),
             "apply_genre_mix_preset".to_string(),
             "apply_arrangement_template".to_string(),
+            "extend_arrangement".to_string(),
         ],
         cli_commands: vec![
             "ss timeline [--segment N] [--layer name]".to_string(),
@@ -303,6 +308,7 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
             "ss automation write".to_string(),
             "ss mix fx".to_string(),
             "ss mix preset".to_string(),
+            "ss mix master".to_string(),
             "ss template apply".to_string(),
         ],
         docs: vec!["production-pipeline-ux-plan.md §3–§11, §13 DoD".to_string()],

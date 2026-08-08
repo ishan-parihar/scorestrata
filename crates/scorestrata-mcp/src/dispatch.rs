@@ -21,11 +21,11 @@ use crate::tools::{
     ApproveConfigParams, CancelRenderJobParams, CandidateDiffParams, CheckBudgetParams,
     CheckRegressionsParams, ClaimTaskParams, ClonePatternTransposedParams, CompareCandidatesParams,
     CreateAdrParams, CreateHumanReviewPacketParams, CreatePatternParams, CreateProjectParams,
-    DryRunPatchParams, ExplainMetricParams, GenerateConfigParams, GetAuditSummaryParams,
-    GetCommandTraceParams, GetEvalReportParams, GetFailureReportParams, GetLessonsParams,
-    GetMetricEvidenceParams, GetNextTaskParams, GetPolicyProfileParams, GetProjectSummaryParams,
-    GetRenderJobParams, GetRenderManifestParams, GetRepairTemplatesParams, GetRootCausesParams,
-    GetTimelineViewParams, GetValidationReportParams, HarmonizeMelodyParams,
+    DryRunPatchParams, ExplainMetricParams, ExtendArrangementParams, GenerateConfigParams,
+    GetAuditSummaryParams, GetCommandTraceParams, GetEvalReportParams, GetFailureReportParams,
+    GetLessonsParams, GetMetricEvidenceParams, GetNextTaskParams, GetPolicyProfileParams,
+    GetProjectSummaryParams, GetRenderJobParams, GetRenderManifestParams, GetRepairTemplatesParams,
+    GetRootCausesParams, GetTimelineViewParams, GetValidationReportParams, HarmonizeMelodyParams,
     IncreaseSegmentDensityParams, IsolateLayerParams, NormalizeLoudnessTargetParams,
     PlacePatternInSegmentParams, PlanArrangementParams, QuantizeLayerParams, RecordLessonParams,
     ReduceMaskingParams, RenderCandidatePreviewParams, RenderProjectParams, RenderSegmentParams,
@@ -412,6 +412,14 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 params,
                 crate::tools::ApplyArrangementTemplateParams,
                 crate::tools::apply_arrangement_template
+            )
+        }
+        "extend_arrangement" => {
+            route!(
+                tool_name,
+                params,
+                ExtendArrangementParams,
+                crate::tools::extend_arrangement
             )
         }
         "import_reference_profile" => {

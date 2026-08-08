@@ -478,6 +478,38 @@ impl Default for FxChain {
     }
 }
 
+/// The master-bus state of the project's mixer (§8.1 / §8.6, G5) — the
+/// controls the renderer applies to the *final mix fold*, distinct from
+/// per-layer insert FX ([`Layer::fx`]) and per-layer faders
+/// ([`Layer::mix_gain_db`] / [`Layer::mix_pan`]).
+///
+/// Mirrors the DAW mastering chain the production plan requires: master
+/// gain staging, stereo width (mid/side), and a peak limiter ceiling. The
+/// audio engine maps this onto its `RenderConfig` so `Project.mixer` is
+/// the single serializable source of truth for the mix bus.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MixerState {
+    /// Master output gain in dB applied to the folded mix (0.0 = unity).
+    pub master_gain_db: f32,
+    /// Stereo width of the master bus: 1.0 = neutral, 0.0 = mono fold,
+    /// >1.0 widens the side channel (mid/side transform).
+    pub stereo_width: f32,
+    /// Master limiter true-peak ceiling in dBTP; `None` disables the
+    /// master limiter (leaves headroom for the platform's own limiter).
+    pub limiter_ceiling_db: Option<f32>,
+}
+
+impl Default for MixerState {
+    fn default() -> Self {
+        Self {
+            master_gain_db: 0.0,
+            stereo_width: 1.0,
+            limiter_ceiling_db: Some(-1.0),
+        }
+    }
+}
+
 /// A project's genre reference profile (G7) — the spectral fingerprint of a
 /// reference track the agent is producing *toward*.
 ///
@@ -876,6 +908,10 @@ pub struct Project {
     /// produced toward, imported from `ss analyze` of a reference track.
     #[serde(default)]
     pub spectral_reference: Option<SpectralReference>,
+    /// Mixer master-bus state (G5) — master gain, stereo width, and the
+    /// master limiter ceiling the renderer applies to the final mix fold.
+    #[serde(default)]
+    pub mixer: MixerState,
     /// Current status.
     pub status: ProjectStatus,
 }

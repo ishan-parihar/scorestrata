@@ -56,6 +56,9 @@ fn production_error_warnings(err: &crate::production_ops::ProductionError) -> Ve
         crate::production_ops::ProductionError::InvalidTotalBars => {
             vec!["Invalid total_bars".to_string()]
         }
+        crate::production_ops::ProductionError::InvalidExtendTarget { .. } => {
+            vec!["total_bars must exceed the current arrangement".to_string()]
+        }
     }
 }
 
@@ -2863,6 +2866,107 @@ pub fn apply_arrangement_template(params: &ApplyArrangementTemplateParams) -> To
             params.genre,
             outcome.section_count,
             outcome.total_bars,
+            outcome.layout.join(" · ")
+        ),
+        score_delta,
+        evidence_uris: vec![format!("project://{}/arrangement", params.project_id)],
+        focus_uris: vec![format!("project://{}/timeline/view", params.project_id)],
+        next_actions: vec![
+            "plan_arrangement".to_string(),
+            "run_validation".to_string(),
+            "get_timeline_view".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `extend_arrangement` tool (G3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtendArrangementParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Total bars to grow the arrangement to (must exceed the current length).
+    pub total_bars: u32,
+    /// Serialized project to mutate (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Grow the arrangement to `total_bars` (G3) — the DAW "make it 64 bars"
+/// action.
+///
+/// Keeps the existing segments and appends genre-template sections (intro →
+/// build → drop → …) until the arrangement spans exactly `total_bars`, so an
+/// agent can compose a loop and then extend it into a full arrangement
+/// without rebuilding what it already wrote.
+#[must_use]
+pub fn extend_arrangement(params: &ExtendArrangementParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "extend_arrangement".to_string(),
+            status: ToolStatus::Failed,
+            summary: "Cannot extend arrangement: no project payload provided".to_string(),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![format!(
+                "No project payload — supply the serialized project to mutate"
+            )],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return deserialize_error_receipt("extend_arrangement", "project", &e);
+            }
+        };
+    let outcome = match crate::production_ops::extend_arrangement(&mut project, params.total_bars) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            return production_error_receipt(
+                "extend_arrangement",
+                &err,
+                production_error_warnings(&err),
+            );
+        }
+    };
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "arrangement.sections".to_string(),
+        project.arrangement.segments.len().to_string(),
+    );
+    score_delta.insert(
+        "arrangement.bars".to_string(),
+        project.arrangement.total_bars.to_string(),
+    );
+    score_delta.insert(
+        "arrangement.added_sections".to_string(),
+        outcome.added_sections.to_string(),
+    );
+    score_delta.insert(
+        "arrangement.extended_from".to_string(),
+        outcome.previous_bars.to_string(),
+    );
+    score_delta.insert("arrangement.layout".to_string(), outcome.layout.join(", "));
+    ToolReceipt {
+        tool: "extend_arrangement".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Extended arrangement to {} bars (+{} sections): {}",
+            outcome.total_bars,
+            outcome.added_sections,
             outcome.layout.join(" · ")
         ),
         score_delta,
@@ -9322,6 +9426,116 @@ mod tests {
         let receipt = apply_arrangement_template(&params);
         assert!(matches!(receipt.status, ToolStatus::Failed));
         assert!(receipt.summary.contains("total_bars must be > 0"));
+    }
+
+    #[test]
+    fn extend_arrangement_grows_existing_arrangement() {
+        // G3 "make it 64 bars": the arrangement keeps its existing sections
+        // and appends genre-template sections to reach the requested total.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let original_segments = project.arrangement.segments.len();
+        let original_bars = project.arrangement.total_bars;
+        let params = ExtendArrangementParams {
+            project_id: project.id.to_string(),
+            total_bars: original_bars + 32,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = extend_arrangement(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "extension succeeds: {receipt:#?}"
+        );
+        let bars = receipt
+            .score_delta
+            .get("arrangement.bars")
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(bars, (original_bars + 32).to_string());
+        // Existing sections are kept; the template adds its archetype count.
+        let sections = receipt
+            .score_delta
+            .get("arrangement.sections")
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(sections, (original_segments + 5).to_string());
+        let extended_from = receipt
+            .score_delta
+            .get("arrangement.extended_from")
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(extended_from, original_bars.to_string());
+        assert!(receipt.summary.contains("Extended arrangement"));
+    }
+
+    #[test]
+    fn extend_arrangement_rejects_shrink_target() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = ExtendArrangementParams {
+            project_id: project.id.to_string(),
+            total_bars: 8,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = extend_arrangement(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .summary
+                .contains("must exceed the current arrangement length")
+        );
+    }
+
+    #[test]
+    fn extend_arrangement_rejects_zero_bars() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = ExtendArrangementParams {
+            project_id: project.id.to_string(),
+            total_bars: 0,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = extend_arrangement(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("total_bars must be > 0"));
+    }
+
+    #[test]
+    fn extend_arrangement_small_request_keeps_segments_total_invariant() {
+        // Growing by fewer bars than the template's archetype section count
+        // (5) floors each appended section at 1 bar, so the final length
+        // exceeds the request — but the receipt must report an actual total
+        // that equals the segment coverage (the invariant the timeline ruler
+        // and validators rely on).
+        let project = scorestrata_testkit::melodic_techno_project();
+        let original_bars = project.arrangement.total_bars;
+        let params = ExtendArrangementParams {
+            project_id: project.id.to_string(),
+            total_bars: original_bars + 2,
+            project: Some(serde_json::to_value(&project).unwrap_or_default()),
+        };
+        let receipt = extend_arrangement(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        let total = receipt
+            .score_delta
+            .get("arrangement.bars")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        let layout = receipt
+            .score_delta
+            .get("arrangement.layout")
+            .cloned()
+            .unwrap_or_default();
+        let covered: u32 = layout
+            .split(',')
+            .filter_map(|part| part.split_whitespace().last())
+            .filter_map(|n| n.parse::<u32>().ok())
+            .sum();
+        assert_eq!(
+            covered, total,
+            "segments sum exactly to total_bars: {layout}"
+        );
+        assert!(
+            total > original_bars + 2,
+            "sub-5-bar request overshoots the 1-bar-per-section floor ({total} vs {original_bars} + 2)"
+        );
     }
 
     #[test]

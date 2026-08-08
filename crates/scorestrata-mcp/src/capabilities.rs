@@ -468,6 +468,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "arrangement",
         ),
         (
+            "extend_arrangement",
+            "mutating",
+            false,
+            "write",
+            "low",
+            "arrangement",
+        ),
+        (
             "import_reference_profile",
             "mutating",
             false,

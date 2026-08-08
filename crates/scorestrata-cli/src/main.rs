@@ -335,6 +335,15 @@ enum MixAction {
         /// Genre (techno, melodic_techno, house, ambient)
         genre: String,
     },
+    /// Set the master bus (gain, limiter ceiling) — §8.6 `MixerState`
+    Master {
+        /// Master output gain in dB (0.0 = unity); negatives need `--gain-db -3`
+        #[arg(long, allow_hyphen_values = true)]
+        gain_db: f32,
+        /// Master limiter ceiling in dBTP (omitted = keep current ceiling)
+        #[arg(long, allow_hyphen_values = true)]
+        ceiling_db: Option<f32>,
+    },
 }
 
 /// §11 G6 — arrangement template actions.
@@ -445,6 +454,7 @@ fn handle_new(name: &str, brief: Option<&str>) -> Result<()> {
         tracks: Vec::new(),
         patterns: plan.patterns,
         spectral_reference: None,
+        mixer: scorestrata_core::domain::MixerState::default(),
         // The config is generated deterministically and schema-valid, so the
         // project starts pipeline-ready (ConfigApproved → ArrangementPlanned…).
         status: ProjectStatus::ConfigApproved,
@@ -860,6 +870,28 @@ fn handle_validate(path: &str, scope: &str) -> Result<()> {
     Ok(())
 }
 
+/// Build the render config from the project's mixer bus (§8.6 G5) — master
+/// gain, stereo width, and the master limiter ceiling (`MixerState`) mapped
+/// onto the audio engine's `RenderConfig`. The default mixer state maps to
+/// the engine defaults, so legacy projects render byte-identically.
+fn render_config_for(
+    project: &scorestrata_core::domain::Project,
+) -> scorestrata_audio::render::RenderConfig {
+    let limiter = project.mixer.limiter_ceiling_db.map(|ceiling_db| {
+        let knee_db = scorestrata_audio::mastering::LimiterConfig::default().knee_db;
+        scorestrata_audio::mastering::LimiterConfig {
+            ceiling_db,
+            knee_db,
+        }
+    });
+    scorestrata_audio::render::RenderConfig {
+        stereo: true,
+        limiter,
+        master_gain_db: project.mixer.master_gain_db,
+        stereo_width: project.mixer.stereo_width,
+    }
+}
+
 fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
     let scope_note = match segment {
         Some(s) => format!(" (segment: {s})"),
@@ -975,10 +1007,7 @@ fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
 
     // F′ — segment mode: a single per-phase WAV plus a §17.2 segment manifest.
     if let Some(seg) = &segment_scope {
-        let config = scorestrata_audio::render::RenderConfig {
-            stereo: true,
-            limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
-        };
+        let config = render_config_for(&project);
         let result = scorestrata_audio::render::render_notes_full(
             &notes,
             timeline.bpm,
@@ -1045,10 +1074,7 @@ fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
 
     // Stems mode: write one WAV per layer plus the master mix (§16 stems).
     if mode == "stems" {
-        let config = scorestrata_audio::render::RenderConfig {
-            stereo: true,
-            limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
-        };
+        let config = render_config_for(&project);
         let (stems, master) = scorestrata_audio::render::render_stems_full(
             &notes,
             timeline.bpm,
@@ -1101,10 +1127,7 @@ fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let config = scorestrata_audio::render::RenderConfig {
-        stereo: true,
-        limiter: Some(scorestrata_audio::mastering::LimiterConfig::default()),
-    };
+    let config = render_config_for(&project);
     let result = scorestrata_audio::render::render_notes_full(
         &notes,
         timeline.bpm,
@@ -1699,6 +1722,24 @@ fn handle_mix(path: &str, action: MixAction) -> Result<()> {
                 scorestrata_mcp::production_ops::apply_genre_mix_preset(&mut project, &genre);
             println!(
                 "  Applied {genre} mix preset to {applied} layers (HPF/EQ/sidechain/sends per instrument)"
+            );
+        }
+        MixAction::Master {
+            gain_db,
+            ceiling_db,
+        } => {
+            println!("{}", format!("Mix master: gain {gain_db} dB").yellow());
+            project.mixer.master_gain_db = gain_db;
+            if let Some(ceiling) = ceiling_db {
+                project.mixer.limiter_ceiling_db = Some(ceiling);
+            }
+            let ceiling = project
+                .mixer
+                .limiter_ceiling_db
+                .map_or_else(|| "off".to_string(), |c| format!("{c} dBTP"));
+            println!(
+                "  Master bus: {gain_db} dB, limiter {ceiling}, width {:.2} — `ss render` applies it to the mix fold",
+                project.mixer.stereo_width
             );
         }
     }
@@ -2690,6 +2731,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_mix_master_command() {
+        let cli = Cli::try_parse_from([
+            "ss",
+            "mix",
+            "my_song",
+            "master",
+            "--gain-db=-6",
+            "--ceiling-db=-0.5",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Mix {
+                action:
+                    MixAction::Master {
+                        gain_db,
+                        ceiling_db,
+                    },
+                ..
+            } => {
+                assert_eq!(gain_db, -6.0);
+                assert_eq!(ceiling_db, Some(-0.5));
+            }
+            _ => panic!("expected Commands::Mix master"),
+        }
+    }
+
+    #[test]
     fn parse_template_apply_command() {
         let cli =
             Cli::try_parse_from(["ss", "template", "my_song", "apply", "techno", "64"]).unwrap();
@@ -3073,6 +3141,31 @@ mod tests {
             .find(|a| a.param == scorestrata_core::domain::AutomationParam::Cutoff)
             .expect("cutoff lane persisted");
         assert_eq!(lane.points.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mix_master_persists_and_maps_to_render_config() {
+        // The §8.6 MixerState must survive load→mutate→save and flow through
+        // to the audio engine's RenderConfig (gain + limiter ceiling).
+        let dir = temp_fixture_project();
+        handle_mix(
+            dir.to_str().unwrap(),
+            MixAction::Master {
+                gain_db: -6.0,
+                ceiling_db: Some(-0.5),
+            },
+        )
+        .expect("master set");
+
+        let reloaded = scorestrata_storage::bundle::load_project(&dir).expect("reloads");
+        assert_eq!(reloaded.mixer.master_gain_db, -6.0);
+        assert_eq!(reloaded.mixer.limiter_ceiling_db, Some(-0.5));
+        // The render path maps the mixer bus onto the engine config.
+        let config = render_config_for(&reloaded);
+        assert_eq!(config.master_gain_db, -6.0);
+        assert_eq!(config.stereo_width, 1.0);
+        assert_eq!(config.limiter.expect("limiter mapped").ceiling_db, -0.5);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

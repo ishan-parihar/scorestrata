@@ -91,6 +91,7 @@ pub fn minimal_project() -> Project {
         tracks: Vec::new(),
         patterns: Vec::new(),
         spectral_reference: None,
+        mixer: scorestrata_core::domain::MixerState::default(),
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -177,6 +178,7 @@ pub fn planned_project(name: &str, brief: &str) -> Project {
         tracks: Vec::new(),
         patterns: plan.patterns,
         spectral_reference: None,
+        mixer: scorestrata_core::domain::MixerState::default(),
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -381,6 +383,7 @@ pub fn eight_bar_loop() -> Project {
         tracks: Vec::new(),
         patterns: vec![drums, bass, lead],
         spectral_reference: None,
+        mixer: scorestrata_core::domain::MixerState::default(),
         status: ProjectStatus::ConfigApproved,
     }
 }

@@ -769,6 +769,7 @@ mod tests {
             tracks: vec![],
             patterns: vec![pattern],
             spectral_reference: None,
+            mixer: scorestrata_core::domain::MixerState::default(),
             status: scorestrata_core::domain::ProjectStatus::ConfigApproved,
         }
     }
