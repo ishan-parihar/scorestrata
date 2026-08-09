@@ -9520,13 +9520,13 @@ mod tests {
         assert!(matches!(receipt.status, ToolStatus::Succeeded));
         assert_eq!(
             receipt.score_delta.get("arrangement_templates.genres"),
-            Some(&"6".to_string()),
-            "six named genre tables (incl. rock)"
+            Some(&"20".to_string()),
+            "twenty named genre tables (rock + 13 S3 families)"
         );
         assert_eq!(
             receipt.score_delta.get("arrangement_templates.sections"),
-            Some(&"30".to_string()),
-            "6 genres × 5 sections"
+            Some(&"100".to_string()),
+            "20 genres × 5 sections"
         );
         assert!(receipt.summary.contains("techno"));
         assert!(receipt.summary.contains("ambient"));

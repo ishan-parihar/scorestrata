@@ -64,9 +64,11 @@ pub struct Plan {
 
 /// Genre family driving pattern selection (F10: genre-differentiated content).
 ///
-/// Techno keeps the baseline driving 16th patterns; house gets a swung
-/// offbeat groove with chord stabs; ambient gets a sparse drone/pad bed so
-/// the three genres no longer compile to identical timelines (R5).
+/// Each family owns its drum kit, bass line, and melodic voice so genres do
+/// not compile to identical timelines (R5). S3 added the band families
+/// (jazz/hip-hop/dnb/cinematic/pop/funk/blues/synthwave/lo-fi) so a brief
+/// like "jazz swing" or "trap" produces a genre-appropriate arrangement,
+/// not the electronic baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Genre {
     /// Driving baseline: 4/4 kick, 16th hats, root-fifth bass, arp lead.
@@ -79,6 +81,24 @@ enum Genre {
     /// driving root-fifth bass, and a vocal-range lead (per the §1.2
     /// reference-track research and the Linkin Park stress test).
     Rock,
+    /// Swing ride cymbal, walking bass, melodic horn/keys line.
+    Jazz,
+    /// Boom-bap: sparse kick/snare grid, sub-heavy root bass, stab lead.
+    HipHop,
+    /// Breakbeat drums, rolling bass, ambient pads.
+    DnB,
+    /// Orchestral: sparse percussion, low drone bass, strings/choir pads.
+    Cinematic,
+    /// 4/4 kick + claps, catchy root-fifth bass, vocal-range lead, chords.
+    Pop,
+    /// Syncopated 16th groove: kick/snare grid, popping bass, stab lead.
+    Funk,
+    /// Shuffle feel: swing hats, walking bass, guitar riff lead.
+    Blues,
+    /// Driving 8th-note bass, 16th arp lead, dark pads.
+    Synthwave,
+    /// Mellow swing: soft kick/snare, warm bass, keys/pad bed.
+    LoFi,
     /// Any genre the planner does not specialize yet (keeps the baseline).
     Other,
 }
@@ -88,9 +108,53 @@ fn detect_genre(config: &ProjectConfig) -> Genre {
     let genre = config.genre.to_lowercase();
     if genre.contains("house") {
         Genre::House
-    } else if genre.contains("ambient") || genre.contains("drone") || genre.contains("chill") {
+    } else if genre.contains("ambient")
+        || genre.contains("drone")
+        || genre.contains("chill")
+        || genre.contains("new age")
+    {
         Genre::Ambient
-    } else if genre.contains("techno") {
+    } else if genre.contains("jazz") || genre.contains("swing") || genre.contains("bossa") {
+        Genre::Jazz
+    } else if genre.contains("hip")
+        || genre.contains("trap")
+        || genre.contains("drill")
+        || genre.contains("boom")
+        || genre.contains("rap")
+        || genre.contains("grime")
+        || genre.contains("phonk")
+    {
+        Genre::HipHop
+    } else if genre.contains("drum and bass")
+        || genre.contains("drum_and_bass")
+        || genre.contains("dnb")
+        || genre.contains("jungle")
+        || genre.contains("breakbeat")
+    {
+        Genre::DnB
+    } else if genre.contains("cinematic")
+        || genre.contains("film")
+        || genre.contains("orchestral")
+        || genre.contains("classical")
+        || genre.contains("score")
+    {
+        Genre::Cinematic
+    } else if genre.contains("pop") {
+        Genre::Pop
+    } else if genre.contains("funk") || genre.contains("soul") || genre.contains("disco") {
+        Genre::Funk
+    } else if genre.contains("blues") {
+        Genre::Blues
+    } else if genre.contains("synthwave")
+        || genre.contains("retrowave")
+        || genre.contains("outrun")
+        || genre.contains("vaporwave")
+        || genre.contains("80s")
+    {
+        Genre::Synthwave
+    } else if genre.contains("lo-fi") || genre.contains("lofi") || genre.contains("chill hop") {
+        Genre::LoFi
+    } else if genre.contains("techno") || genre.contains("trance") {
         Genre::Techno
     } else if genre.contains("rock")
         || genre.contains("metal")
@@ -159,6 +223,60 @@ fn build_patterns(scale: &Scale, genre: Genre, ids: &mut IdSeq) -> Vec<Pattern> 
             rock_bass_pattern(scale, ids),
             rock_guitar_pattern(scale, ids),
             rock_lead_pattern(scale, ids),
+        ],
+        Genre::Jazz => vec![
+            jazz_drum_pattern(ids),
+            jazz_bass_pattern(scale, ids),
+            jazz_lead_pattern(scale, ids),
+            jazz_pad_pattern(scale, ids),
+        ],
+        Genre::HipHop => vec![
+            hiphop_drum_pattern(ids),
+            hiphop_bass_pattern(scale, ids),
+            hiphop_lead_pattern(scale, ids),
+            hiphop_pad_pattern(scale, ids),
+        ],
+        Genre::DnB => vec![
+            dnb_drum_pattern(ids),
+            dnb_bass_pattern(scale, ids),
+            dnb_lead_pattern(scale, ids),
+            dnb_pad_pattern(scale, ids),
+        ],
+        Genre::Cinematic => vec![
+            cinematic_drum_pattern(ids),
+            cinematic_bass_pattern(scale, ids),
+            cinematic_lead_pattern(scale, ids),
+            cinematic_pad_pattern(scale, ids),
+        ],
+        Genre::Pop => vec![
+            pop_drum_pattern(ids),
+            pop_bass_pattern(scale, ids),
+            pop_lead_pattern(scale, ids),
+            pop_pad_pattern(scale, ids),
+        ],
+        Genre::Funk => vec![
+            funk_drum_pattern(ids),
+            funk_bass_pattern(scale, ids),
+            funk_lead_pattern(scale, ids),
+            funk_pad_pattern(scale, ids),
+        ],
+        Genre::Blues => vec![
+            blues_drum_pattern(ids),
+            blues_bass_pattern(scale, ids),
+            blues_lead_pattern(scale, ids),
+            blues_pad_pattern(scale, ids),
+        ],
+        Genre::Synthwave => vec![
+            synthwave_drum_pattern(ids),
+            synthwave_bass_pattern(scale, ids),
+            synthwave_lead_pattern(scale, ids),
+            synthwave_pad_pattern(scale, ids),
+        ],
+        Genre::LoFi => vec![
+            lofi_drum_pattern(ids),
+            lofi_bass_pattern(scale, ids),
+            lofi_lead_pattern(scale, ids),
+            lofi_pad_pattern(scale, ids),
         ],
         Genre::Techno | Genre::Other => vec![
             drum_pattern(ids),
@@ -778,6 +896,865 @@ fn rock_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
     }
 }
 
+/// Build a 16-step drum pattern from a per-step `(active, velocity)`
+/// decision table (shared by every drum-family builder).
+fn drum_steps(ids: &mut IdSeq, name: &str, f: impl Fn(u32) -> (bool, u8)) -> Pattern {
+    let steps: Vec<Step> = (0..16u32)
+        .map(|i| {
+            let (active, velocity) = f(i);
+            Step {
+                id: StepId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+                index: i,
+                active,
+                velocity: Velocity::new(velocity),
+            }
+        })
+        .collect();
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: name.to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes: Vec::new(),
+        steps,
+    }
+}
+
+/// 1-bar jazz drums: ride swing on the eighths, backbeat snare, sparse kick.
+fn jazz_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    drum_steps(ids, "Drums_Jazz_Swing", |i| match i {
+        0 => (true, 100),      // kick on 1
+        3 | 11 => (true, 96),  // ride + ghost snare swings
+        4 | 12 => (true, 104), // snare backbeat on 2 & 4
+        6 | 14 => (true, 88),  // ride offbeats (swung)
+        8 => (true, 90),       // light kick on 3
+        _ => (false, 0),
+    })
+}
+
+/// 1-bar jazz bass: walking root-fifth-quarters with an octave pickup.
+fn jazz_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, octave] = chord_tones_in_range(scale, 24, 48);
+    let quarter = u64::from(PPQ);
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::quarter(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 0, 100, ids),
+        note(third, quarter, 88, ids),
+        note(fifth, quarter * 2, 96, ids),
+        note(octave, quarter * 3, 90, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_Walking".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar jazz lead: a horn-like melodic line in the mid register.
+fn jazz_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
+    let quarter = u64::from(PPQ);
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(third, 0, 98, ids),
+        note(fifth, quarter, 92, ids),
+        note(third, quarter * 2, 96, ids),
+        note(root, quarter * 3, 88, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_HornLine".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar jazz pads: warm chord voicings, two per bar.
+fn jazz_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
+    let half = u64::from(PPQ) * 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::half(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 0, 66, ids),
+        note(third, 0, 60, ids),
+        note(fifth, 0, 56, ids),
+        note(root, half, 62, ids),
+        note(fifth, half, 54, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Pads_JazzVoicings".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar hip-hop drums: boom-bap grid with swung hats.
+fn hiphop_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    drum_steps(ids, "Drums_BoomBap", |i| match i {
+        0 | 6 => (true, 108),  // kick on 1 and the "and" of 2
+        4 | 12 => (true, 104), // snare backbeat on 2 & 4
+        10 | 14 => (true, 86), // swung ghost hats
+        _ => (false, 0),
+    })
+}
+
+/// 1-bar hip-hop bass: sub-heavy root with an octave drop on the offbeat.
+fn hiphop_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, _, _, octave] = chord_tones_in_range(scale, 24, 48);
+    let eighth = u64::from(PPQ) / 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 0, 102, ids),
+        note(root, eighth, 90, ids),
+        note(octave, eighth * 4, 92, ids),
+        note(root, eighth * 6, 96, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_SubGroove".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar hip-hop lead: sparse sample-style stabs.
+fn hiphop_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
+    let eighth = u64::from(PPQ) / 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, eighth * 3, 94, ids),
+        note(third, eighth * 7, 90, ids),
+        note(fifth, eighth * 11, 86, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_StabSamples".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar hip-hop pads: dark sustained chords.
+fn hiphop_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
+    let note = |pitch: MidiNote, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(0),
+        duration: Duration::whole(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 60, ids),
+        note(third, 54, ids),
+        note(fifth, 50, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Pads_DarkChords".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar drum-and-bass drums: breakbeat syncopation with fast hats.
+fn dnb_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    drum_steps(ids, "Drums_Breakbeat", |i| match i {
+        0 | 6 | 14 => (true, 106),                      // kick syncopation
+        4 | 12 => (true, 102),                          // snare on the 2 & 4 break
+        1 | 3 | 5 | 7 | 9 | 11 | 13 | 15 => (true, 88), // 16th hat stream
+        _ => (false, 0),
+    })
+}
+
+/// 1-bar DnB bass: rolling root-fifth eighths with a sub feel.
+fn dnb_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, _, fifth, _] = chord_tones_in_range(scale, 24, 48);
+    let eighth = u64::from(PPQ) / 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 0, 100, ids),
+        note(fifth, eighth, 92, ids),
+        note(root, eighth * 2, 98, ids),
+        note(fifth, eighth * 3, 90, ids),
+        note(root, eighth * 4, 96, ids),
+        note(fifth, eighth * 5, 88, ids),
+        note(root, eighth * 6, 94, ids),
+        note(fifth, eighth * 7, 86, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_Rolling".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar DnB lead: airy stabs over the break.
+fn dnb_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [_root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
+    let eighth = u64::from(PPQ) / 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(third, eighth * 2, 94, ids),
+        note(fifth, eighth * 6, 90, ids),
+        note(third, eighth * 10, 92, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_AiryStabs".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar DnB pads: deep sustained chords.
+fn dnb_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
+    let note = |pitch: MidiNote, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(0),
+        duration: Duration::whole(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 62, ids),
+        note(third, 56, ids),
+        note(fifth, 52, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Pads_Deep".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar cinematic drums: sparse timpani hits, not a beat.
+fn cinematic_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    drum_steps(ids, "Drums_Timpani", |i| match i {
+        0 => (true, 104),
+        8 => (true, 86),
+        _ => (false, 0),
+    })
+}
+
+/// 1-bar cinematic bass: a low root drone with a fifth swell.
+fn cinematic_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, _, fifth, _] = chord_tones_in_range(scale, 24, 48);
+    let half = u64::from(PPQ) * 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::half(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![note(root, 0, 90, ids), note(fifth, half, 78, ids)];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_DroneFifth".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar cinematic lead: long strings/choir lines.
+fn cinematic_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [_root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
+    let half = u64::from(PPQ) * 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::half(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![note(third, 0, 88, ids), note(fifth, half, 80, ids)];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_StringsLine".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar cinematic pads: big orchestral chord swells.
+fn cinematic_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
+    let note = |pitch: MidiNote, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(0),
+        duration: Duration::whole(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 64, ids),
+        note(third, 58, ids),
+        note(fifth, 54, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Pads_Orchestral".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar pop drums: 4/4 kick, claps on 2 & 4, 8th hats.
+fn pop_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    drum_steps(ids, "Drums_Pop", |i| match i {
+        0 | 8 => (true, 110),
+        4 | 12 => (true, 104),         // clap backbeat
+        2 | 6 | 10 | 14 => (true, 88), // offbeat hats
+        _ => (false, 0),
+    })
+}
+
+/// 1-bar pop bass: catchy root-fifth with an octave pickup.
+fn pop_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, _, fifth, octave] = chord_tones_in_range(scale, 24, 48);
+    let eighth = u64::from(PPQ) / 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 0, 102, ids),
+        note(root, eighth, 90, ids),
+        note(fifth, eighth * 2, 96, ids),
+        note(octave, eighth * 3, 86, ids),
+        note(root, eighth * 4, 98, ids),
+        note(root, eighth * 5, 88, ids),
+        note(fifth, eighth * 6, 92, ids),
+        note(octave, eighth * 7, 84, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_PopGroove".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar pop lead: a singable vocal-range hook.
+fn pop_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
+    let eighth = u64::from(PPQ) / 2;
+    let note =
+        |pitch: MidiNote, start: u64, duration: Duration, velocity: u8, ids: &mut IdSeq| Note {
+            id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+            pitch,
+            start: Tick::new(start),
+            duration,
+            velocity: Velocity::new(velocity),
+            tied: false,
+        };
+    let notes = vec![
+        note(third, 0, Duration::quarter(), 100, ids),
+        note(root, eighth * 3, Duration::eighth(), 92, ids),
+        note(fifth, eighth * 5, Duration::eighth(), 96, ids),
+        note(third, eighth * 7, Duration::quarter(), 90, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_VocalHook".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar pop pads: bright chord stabs.
+fn pop_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
+    let half = u64::from(PPQ) * 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::half(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 0, 64, ids),
+        note(third, 0, 58, ids),
+        note(fifth, 0, 54, ids),
+        note(root, half, 60, ids),
+        note(fifth, half, 52, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Pads_PopChords".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar funk drums: syncopated 16th grid with ghost notes.
+fn funk_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    drum_steps(ids, "Drums_Funk", |i| match i {
+        0 => (true, 108),
+        4 | 12 => (true, 104), // snare backbeat
+        6 => (true, 92),       // kick pickup on "and" of 2
+        10 | 14 => (true, 84), // ghost hat
+        _ => (false, 0),
+    })
+}
+
+/// 1-bar funk bass: popping syncopated 16th line.
+fn funk_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, _, fifth, octave] = chord_tones_in_range(scale, 24, 48);
+    let sixteenth = u64::from(PPQ) / 4;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::sixteenth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 0, 102, ids),
+        note(octave, sixteenth * 2, 90, ids),
+        note(root, sixteenth * 6, 96, ids),
+        note(fifth, sixteenth * 8, 92, ids),
+        note(root, sixteenth * 10, 88, ids),
+        note(octave, sixteenth * 12, 94, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_FunkPop".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar funk lead: offbeat horn-stab riff.
+fn funk_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [_root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
+    let sixteenth = u64::from(PPQ) / 4;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(third, sixteenth * 4, 96, ids),
+        note(fifth, sixteenth * 10, 92, ids),
+        note(third, sixteenth * 14, 88, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_HornStabs".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar funk pads: tight chord hits.
+fn funk_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
+    let quarter = u64::from(PPQ);
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::quarter(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, quarter * 3, 66, ids),
+        note(third, quarter * 3, 60, ids),
+        note(fifth, quarter * 3, 54, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Pads_FunkHits".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar blues drums: shuffle with swing hats.
+fn blues_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    drum_steps(ids, "Drums_Shuffle", |i| match i {
+        0 | 8 => (true, 104),
+        4 | 12 => (true, 102),         // snare backbeat
+        2 | 6 | 10 | 14 => (true, 90), // shuffle triplet hats
+        _ => (false, 0),
+    })
+}
+
+/// 1-bar blues bass: walking shuffle line.
+fn blues_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 24, 48);
+    let eighth = u64::from(PPQ) / 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 0, 100, ids),
+        note(third, eighth, 90, ids),
+        note(fifth, eighth * 2, 96, ids),
+        note(third, eighth * 3, 88, ids),
+        note(root, eighth * 4, 98, ids),
+        note(fifth, eighth * 5, 88, ids),
+        note(third, eighth * 6, 92, ids),
+        note(root, eighth * 7, 84, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_ShuffleWalk".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar blues lead: a wailing guitar-style riff.
+fn blues_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
+    let eighth = u64::from(PPQ) / 2;
+    let note =
+        |pitch: MidiNote, start: u64, duration: Duration, velocity: u8, ids: &mut IdSeq| Note {
+            id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+            pitch,
+            start: Tick::new(start),
+            duration,
+            velocity: Velocity::new(velocity),
+            tied: false,
+        };
+    let notes = vec![
+        note(third, 0, Duration::quarter(), 96, ids),
+        note(fifth, eighth * 2, Duration::eighth(), 92, ids),
+        note(third, eighth * 4, Duration::quarter(), 90, ids),
+        note(root, eighth * 6, Duration::eighth(), 86, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_BluesRiff".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar blues pads: smoky sustained chords.
+fn blues_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
+    let note = |pitch: MidiNote, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(0),
+        duration: Duration::whole(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 60, ids),
+        note(third, 54, ids),
+        note(fifth, 50, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Pads_Smoky".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar synthwave drums: 4/4 kick with 16th hats and clap.
+fn synthwave_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    drum_steps(ids, "Drums_Synthwave", |i| match i {
+        0 | 8 => (true, 112),
+        4 | 12 => (true, 106),
+        _ if i % 2 == 1 => (true, 90), // driving 16th hats
+        _ => (false, 0),
+    })
+}
+
+/// 1-bar synthwave bass: pulsing 8th-note octave drive.
+fn synthwave_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, _, _, octave] = chord_tones_in_range(scale, 24, 48);
+    let eighth = u64::from(PPQ) / 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = (0..8)
+        .map(|i| {
+            let pitch = if i % 2 == 0 { root } else { octave };
+            note(pitch, eighth * i, if i % 2 == 0 { 100 } else { 88 }, ids)
+        })
+        .collect();
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_Pulsing8th".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar synthwave lead: 16th arpeggio.
+fn synthwave_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, octave] = chord_tones_in_range(scale, 60, 84);
+    let sixteenth = u64::from(PPQ) / 4;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::sixteenth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let pattern_notes = [root, third, fifth, octave, fifth, third];
+    let notes = pattern_notes
+        .iter()
+        .enumerate()
+        .map(|(i, pitch)| note(*pitch, sixteenth * u64::try_from(i).unwrap_or(0), 96, ids))
+        .collect();
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_Arp16".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar synthwave pads: dark retro chords.
+fn synthwave_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
+    let note = |pitch: MidiNote, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(0),
+        duration: Duration::whole(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 60, ids),
+        note(third, 54, ids),
+        note(fifth, 50, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Pads_Retro".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar lo-fi drums: mellow swing with soft hits.
+fn lofi_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    drum_steps(ids, "Drums_LofiSwing", |i| match i {
+        0 | 8 => (true, 96),
+        4 | 12 => (true, 92),
+        2 | 6 | 10 | 14 => (true, 78),
+        _ => (false, 0),
+    })
+}
+
+/// 1-bar lo-fi bass: warm root-octave half notes.
+fn lofi_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, _, _, octave] = chord_tones_in_range(scale, 24, 48);
+    let half = u64::from(PPQ) * 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::half(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![note(root, 0, 86, ids), note(octave, half, 74, ids)];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_WarmDrone".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar lo-fi lead: mellow keys melody.
+fn lofi_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
+    let quarter = u64::from(PPQ);
+    let note =
+        |pitch: MidiNote, start: u64, duration: Duration, velocity: u8, ids: &mut IdSeq| Note {
+            id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+            pitch,
+            start: Tick::new(start),
+            duration,
+            velocity: Velocity::new(velocity),
+            tied: false,
+        };
+    let notes = vec![
+        note(third, 0, Duration::half(), 84, ids),
+        note(fifth, quarter * 2, Duration::quarter(), 78, ids),
+        note(root, quarter * 3, Duration::quarter(), 74, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_KeysMellow".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar lo-fi pads: warm vinyl chord bed.
+fn lofi_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
+    let note = |pitch: MidiNote, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(0),
+        duration: Duration::whole(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    let notes = vec![
+        note(root, 58, ids),
+        note(third, 52, ids),
+        note(fifth, 48, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Pads_WarmVinyl".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
 fn build_segments(
     config: &ProjectConfig,
     patterns: &[Pattern],
@@ -853,8 +1830,203 @@ fn build_layers(
         Genre::House => house_layers(patterns, role, segment_bars, ids),
         Genre::Ambient => ambient_layers(patterns, role, segment_bars, ids),
         Genre::Rock => rock_layers(patterns, role, segment_bars, ids),
+        Genre::Jazz => band_layers(
+            patterns,
+            role,
+            segment_bars,
+            ids,
+            "Lead",
+            "lead_synth",
+            "Pads",
+            "pad_synth",
+            false,
+        ),
+        Genre::HipHop => band_layers(
+            patterns,
+            role,
+            segment_bars,
+            ids,
+            "Lead",
+            "lead_synth",
+            "Pads",
+            "pad_synth",
+            true,
+        ),
+        Genre::DnB => band_layers(
+            patterns,
+            role,
+            segment_bars,
+            ids,
+            "Lead",
+            "lead_synth",
+            "Pads",
+            "pad_synth",
+            true,
+        ),
+        Genre::Cinematic => band_layers(
+            patterns,
+            role,
+            segment_bars,
+            ids,
+            "Lead",
+            "lead_synth",
+            "Pads",
+            "pad_synth",
+            true,
+        ),
+        Genre::Pop => band_layers(
+            patterns,
+            role,
+            segment_bars,
+            ids,
+            "Lead",
+            "lead_synth",
+            "Pads",
+            "pad_synth",
+            false,
+        ),
+        Genre::Funk => band_layers(
+            patterns,
+            role,
+            segment_bars,
+            ids,
+            "Lead",
+            "lead_synth",
+            "Pads",
+            "pad_synth",
+            false,
+        ),
+        Genre::Blues => band_layers(
+            patterns,
+            role,
+            segment_bars,
+            ids,
+            "Lead",
+            "lead_synth",
+            "Pads",
+            "pad_synth",
+            false,
+        ),
+        Genre::Synthwave => band_layers(
+            patterns,
+            role,
+            segment_bars,
+            ids,
+            "Lead",
+            "lead_synth",
+            "Pads",
+            "pad_synth",
+            true,
+        ),
+        Genre::LoFi => band_layers(
+            patterns,
+            role,
+            segment_bars,
+            ids,
+            "Lead",
+            "lead_synth",
+            "Pads",
+            "pad_synth",
+            true,
+        ),
         Genre::Techno | Genre::Other => techno_layers(patterns, role, segment_bars, ids),
     }
+}
+
+/// Shared band-layer composition for the drum/bass/lead/pads families
+/// (jazz, hip-hop, dnb, cinematic, pop, funk, blues, synthwave, lo-fi).
+///
+/// Drums + bass always; lead joins in the mid/peak sections; pads either
+/// ride everywhere (`pads_always`, for pad-heavy families) or join the
+/// chorus only.
+#[allow(clippy::too_many_arguments)]
+fn band_layers(
+    patterns: &[Pattern],
+    role: SegmentRole,
+    segment_bars: u32,
+    ids: &mut IdSeq,
+    lead_name: &str,
+    lead_instrument: &str,
+    pad_name: &str,
+    pad_instrument: &str,
+    pads_always: bool,
+) -> Vec<Layer> {
+    let drum = patterns.first();
+    let bass = patterns.get(1);
+    let lead = patterns.get(2);
+    let pads = patterns.get(3);
+
+    let mut layers = Vec::new();
+    if let Some(p) = drum {
+        layers.push(make_layer("Drums", "drum_sampler", p, 0, segment_bars, ids));
+    }
+    if let Some(p) = bass {
+        layers.push(make_layer("Bass", "bass_synth", p, 0, segment_bars, ids));
+    }
+    if pads_always {
+        if let Some(p) = pads {
+            layers.push(make_layer(
+                pad_name,
+                pad_instrument,
+                p,
+                0,
+                segment_bars,
+                ids,
+            ));
+        }
+    }
+    match role {
+        SegmentRole::Intro | SegmentRole::Outro => {
+            // Pads ride through the intro/outro for pad-heavy families too.
+            if pads_always && !layers.iter().any(|l| l.name == pad_name) {
+                if let Some(p) = pads {
+                    layers.push(make_layer(
+                        pad_name,
+                        pad_instrument,
+                        p,
+                        0,
+                        segment_bars,
+                        ids,
+                    ));
+                }
+            }
+        }
+        SegmentRole::Verse | SegmentRole::Build | SegmentRole::Breakdown | SegmentRole::Bridge => {
+            if let Some(p) = lead {
+                layers.push(make_layer(
+                    lead_name,
+                    lead_instrument,
+                    p,
+                    0,
+                    segment_bars,
+                    ids,
+                ));
+            }
+        }
+        SegmentRole::Chorus | SegmentRole::Custom => {
+            if let Some(p) = lead {
+                layers.push(make_layer(
+                    lead_name,
+                    lead_instrument,
+                    p,
+                    0,
+                    segment_bars,
+                    ids,
+                ));
+            }
+            if let Some(p) = pads {
+                layers.push(make_layer(
+                    pad_name,
+                    pad_instrument,
+                    p,
+                    0,
+                    segment_bars,
+                    ids,
+                ));
+            }
+        }
+    }
+    layers
 }
 
 /// Baseline techno layer composition (unchanged from the original planner).
@@ -1477,6 +2649,184 @@ mod tests {
             5,
             "chorus stacks stabs + pads + octave"
         );
+    }
+
+    #[test]
+    fn s3_genres_each_have_distinct_pattern_sets() {
+        // The S3 genre families must each produce their own pattern names —
+        // jazz, hip-hop, dnb, cinematic, pop, funk, blues, synthwave, lo-fi
+        // — so a "jazz swing" brief never compiles to the techno baseline.
+        let cases = [
+            (
+                "jazz",
+                vec![
+                    "Drums_Jazz_Swing",
+                    "Bass_Walking",
+                    "Lead_HornLine",
+                    "Pads_JazzVoicings",
+                ],
+            ),
+            (
+                "hip-hop",
+                vec![
+                    "Drums_BoomBap",
+                    "Bass_SubGroove",
+                    "Lead_StabSamples",
+                    "Pads_DarkChords",
+                ],
+            ),
+            (
+                "drum_and_bass",
+                vec![
+                    "Drums_Breakbeat",
+                    "Bass_Rolling",
+                    "Lead_AiryStabs",
+                    "Pads_Deep",
+                ],
+            ),
+            (
+                "cinematic",
+                vec![
+                    "Drums_Timpani",
+                    "Bass_DroneFifth",
+                    "Lead_StringsLine",
+                    "Pads_Orchestral",
+                ],
+            ),
+            (
+                "pop",
+                vec![
+                    "Drums_Pop",
+                    "Bass_PopGroove",
+                    "Lead_VocalHook",
+                    "Pads_PopChords",
+                ],
+            ),
+            (
+                "funk",
+                vec![
+                    "Drums_Funk",
+                    "Bass_FunkPop",
+                    "Lead_HornStabs",
+                    "Pads_FunkHits",
+                ],
+            ),
+            (
+                "blues",
+                vec![
+                    "Drums_Shuffle",
+                    "Bass_ShuffleWalk",
+                    "Lead_BluesRiff",
+                    "Pads_Smoky",
+                ],
+            ),
+            (
+                "synthwave",
+                vec![
+                    "Drums_Synthwave",
+                    "Bass_Pulsing8th",
+                    "Lead_Arp16",
+                    "Pads_Retro",
+                ],
+            ),
+            (
+                "lo-fi",
+                vec![
+                    "Drums_LofiSwing",
+                    "Bass_WarmDrone",
+                    "Lead_KeysMellow",
+                    "Pads_WarmVinyl",
+                ],
+            ),
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for (genre, expected) in &cases {
+            let mut cfg = config(16);
+            cfg.genre = (*genre).to_string();
+            let plan = plan_project(&cfg);
+            let names: Vec<String> = plan.patterns.iter().map(|p| p.name.clone()).collect();
+            assert_eq!(
+                names,
+                expected
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect::<Vec<_>>(),
+                "genre '{genre}' must use its own pattern set"
+            );
+            seen.insert(names.join(","));
+        }
+        assert_eq!(
+            seen.len(),
+            cases.len(),
+            "every family's pattern set is unique"
+        );
+    }
+
+    #[test]
+    fn s3_genre_patterns_are_in_key() {
+        for genre in [
+            "jazz",
+            "hip-hop",
+            "drum_and_bass",
+            "cinematic",
+            "pop",
+            "funk",
+            "blues",
+            "synthwave",
+            "lo-fi",
+        ] {
+            let mut cfg = config(16);
+            cfg.genre = genre.to_string();
+            let plan = plan_project(&cfg);
+            let scale = Key::parse("C minor").expect("parses").to_scale();
+            for pattern in &plan.patterns {
+                for note in &pattern.notes {
+                    assert!(
+                        scale.contains_note(&note.pitch),
+                        "{} note {} out of key in genre '{genre}'",
+                        pattern.name,
+                        note.pitch.0
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn s3_genre_chorus_is_denser_than_intro() {
+        for genre in [
+            "jazz",
+            "hip-hop",
+            "drum_and_bass",
+            "cinematic",
+            "pop",
+            "funk",
+            "blues",
+            "synthwave",
+            "lo-fi",
+        ] {
+            let mut cfg = config(16);
+            cfg.genre = genre.to_string();
+            let plan = plan_project(&cfg);
+            let intro = plan
+                .arrangement
+                .segments
+                .iter()
+                .find(|s| s.role == SegmentRole::Intro)
+                .expect("intro");
+            let chorus = plan
+                .arrangement
+                .segments
+                .iter()
+                .find(|s| s.role == SegmentRole::Chorus)
+                .expect("chorus");
+            assert!(
+                chorus.layers.len() > intro.layers.len(),
+                "'{genre}': chorus ({} layers) denser than intro ({} layers)",
+                chorus.layers.len(),
+                intro.layers.len()
+            );
+        }
     }
 
     #[test]

@@ -242,8 +242,45 @@ impl GenreFingerprint {
             Some(&HOUSE_FINGERPRINT)
         } else if lower.contains("ambient") || lower.contains("drone") {
             Some(&AMBIENT_FINGERPRINT)
-        } else if lower.contains("techno") {
+        } else if lower.contains("techno") || lower.contains("trance") {
             Some(&TECHNO_FINGERPRINT)
+        } else if lower.contains("jazz") || lower.contains("swing") || lower.contains("bossa") {
+            Some(&JAZZ_FINGERPRINT)
+        } else if lower.contains("hip")
+            || lower.contains("trap")
+            || lower.contains("rap")
+            || lower.contains("phonk")
+        {
+            Some(&HIPHOP_FINGERPRINT)
+        } else if lower.contains("rock")
+            || lower.contains("metal")
+            || lower.contains("nu_metal")
+            || lower.contains("punk")
+        {
+            Some(&ROCK_FINGERPRINT)
+        } else if lower.contains("pop") {
+            Some(&POP_FINGERPRINT)
+        } else if lower.contains("funk") || lower.contains("soul") || lower.contains("disco") {
+            Some(&FUNK_FINGERPRINT)
+        } else if lower.contains("blues") {
+            Some(&BLUES_FINGERPRINT)
+        } else if lower.contains("synthwave")
+            || lower.contains("retrowave")
+            || lower.contains("vaporwave")
+        {
+            Some(&SYNTHWAVE_FINGERPRINT)
+        } else if lower.contains("lo-fi") || lower.contains("lofi") {
+            Some(&LOFI_FINGERPRINT)
+        } else if lower.contains("cinematic") || lower.contains("orchestral") {
+            Some(&CINEMATIC_FINGERPRINT)
+        } else if lower.contains("drum and bass")
+            || lower.contains("drum_and_bass")
+            || lower.contains("dnb")
+            || lower.contains("jungle")
+        {
+            Some(&DNB_FINGERPRINT)
+        } else if lower.contains("classical") {
+            Some(&CLASSICAL_FINGERPRINT)
         } else {
             None
         }
@@ -305,6 +342,94 @@ const AMBIENT_FINGERPRINT: GenreFingerprint = GenreFingerprint {
     aliasing_max: 0.12,
 };
 
+/// Jazz: mid-forward (horns/keys), warm low end, low aliasing.
+const JAZZ_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "jazz",
+    band_energy_expected: [0.15, 0.18, 0.24, 0.26, 0.10, 0.07],
+    centroid_expected_hz: 3500.0,
+    aliasing_max: 0.12,
+};
+
+/// Hip-hop/trap: sub-heavy with a bright hat top — the 808 sandwich.
+const HIPHOP_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "hip-hop",
+    band_energy_expected: [0.28, 0.16, 0.12, 0.16, 0.10, 0.18],
+    centroid_expected_hz: 4200.0,
+    aliasing_max: 0.20,
+};
+
+/// Rock/nu-metal: driven mid-band guitars, punchy low end.
+const ROCK_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "rock",
+    band_energy_expected: [0.16, 0.16, 0.20, 0.24, 0.12, 0.12],
+    centroid_expected_hz: 4000.0,
+    aliasing_max: 0.25,
+};
+
+/// Pop: balanced full-range with a clear vocal mid.
+const POP_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "pop",
+    band_energy_expected: [0.13, 0.15, 0.18, 0.26, 0.13, 0.15],
+    centroid_expected_hz: 4500.0,
+    aliasing_max: 0.20,
+};
+
+/// Funk: low-forward with a tight mid punch.
+const FUNK_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "funk",
+    band_energy_expected: [0.20, 0.18, 0.16, 0.22, 0.12, 0.12],
+    centroid_expected_hz: 3800.0,
+    aliasing_max: 0.18,
+};
+
+/// Blues: warm mid-forward (guitar/harmonica), gentle top.
+const BLUES_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "blues",
+    band_energy_expected: [0.18, 0.20, 0.22, 0.22, 0.10, 0.08],
+    centroid_expected_hz: 3200.0,
+    aliasing_max: 0.15,
+};
+
+/// Synthwave: driving 8th bass with a bright 16th arp top.
+const SYNTHWAVE_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "synthwave",
+    band_energy_expected: [0.20, 0.14, 0.12, 0.20, 0.14, 0.20],
+    centroid_expected_hz: 4800.0,
+    aliasing_max: 0.22,
+};
+
+/// Lo-fi: warm low end, muffled top (vinyl), low centroid.
+const LOFI_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "lo-fi",
+    band_energy_expected: [0.24, 0.20, 0.20, 0.22, 0.08, 0.06],
+    centroid_expected_hz: 2800.0,
+    aliasing_max: 0.10,
+};
+
+/// Cinematic: wide pads, low-forward, minimal aliasing.
+const CINEMATIC_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "cinematic",
+    band_energy_expected: [0.22, 0.20, 0.18, 0.24, 0.08, 0.08],
+    centroid_expected_hz: 3000.0,
+    aliasing_max: 0.12,
+};
+
+/// Drum-and-bass: sub-forward with a bright breakbeat top.
+const DNB_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "drum_and_bass",
+    band_energy_expected: [0.24, 0.14, 0.12, 0.18, 0.12, 0.20],
+    centroid_expected_hz: 5000.0,
+    aliasing_max: 0.25,
+};
+
+/// Classical: dynamic low-mid pads, gentle high end.
+const CLASSICAL_FINGERPRINT: GenreFingerprint = GenreFingerprint {
+    genre: "classical",
+    band_energy_expected: [0.16, 0.20, 0.22, 0.24, 0.10, 0.08],
+    centroid_expected_hz: 3000.0,
+    aliasing_max: 0.10,
+};
+
 /// Apply a linear gain (from a dB value) to a buffer in place.
 ///
 /// Used by `normalize_loudness_target` to move a render toward a target
@@ -319,6 +444,65 @@ pub fn apply_gain_db(samples: &mut [f32], gain_db: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn s3_genre_fingerprints_cover_all_families() {
+        // Every S3 genre family must resolve a fingerprint so the audit gate
+        // can score its spectral deviation against a genre-appropriate
+        // profile — not silently fall back to "no fingerprint".
+        let genres = [
+            "house",
+            "ambient",
+            "techno",
+            "trance",
+            "jazz",
+            "swing",
+            "hip-hop",
+            "trap",
+            "rock",
+            "nu_metal",
+            "pop",
+            "funk",
+            "blues",
+            "synthwave",
+            "lo-fi",
+            "cinematic",
+            "drum_and_bass",
+            "classical",
+        ];
+        for genre in genres {
+            assert!(
+                GenreFingerprint::for_genre(genre).is_some(),
+                "genre '{genre}' must have a fingerprint"
+            );
+        }
+    }
+
+    #[test]
+    fn s3_fingerprints_are_distinct() {
+        // Distinct genre profiles must not be identical — otherwise the
+        // deviation gate cannot tell a jazz render from a techno one.
+        let pairs = [
+            ("jazz", "techno"),
+            ("hip-hop", "ambient"),
+            ("rock", "lo-fi"),
+            ("pop", "blues"),
+            ("synthwave", "classical"),
+            ("drum_and_bass", "cinematic"),
+        ];
+        for (a, b) in pairs {
+            let fa = GenreFingerprint::for_genre(a).expect("a");
+            let fb = GenreFingerprint::for_genre(b).expect("b");
+            assert_ne!(
+                fa.band_energy_expected, fb.band_energy_expected,
+                "'{a}' and '{b}' must have distinct band profiles"
+            );
+            assert!(
+                (fa.centroid_expected_hz - fb.centroid_expected_hz).abs() > 100.0,
+                "'{a}' and '{b}' must differ in expected centroid"
+            );
+        }
+    }
 
     #[test]
     fn analyze_silent_audio_returns_silence_metrics() {

@@ -33,19 +33,112 @@ fn detect_genre(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
     let candidates: &[(&str, &[&str])] = &[
         ("melodic_techno", &["melodic techno", "melodic house"]),
-        ("techno", &["techno"]),
-        ("house", &["house"]),
-        ("ambient", &["ambient", "drone", "chillout"]),
-        ("cinematic", &["cinematic", "film score", "orchestral"]),
-        ("trance", &["trance"]),
-        ("dubstep", &["dubstep", "bass music"]),
-        ("lo-fi", &["lo-fi", "lofi", "chill hop"]),
-        ("drum_and_bass", &["drum and bass", "dnb", "jungle"]),
+        ("techno", &["techno", "dark techno", "minimal techno"]),
+        ("house", &["house", "deep house", "tech house", "garage"]),
+        (
+            "ambient",
+            &["ambient", "drone", "chillout", "new age", "meditation"],
+        ),
+        (
+            "cinematic",
+            &["cinematic", "film score", "orchestral", "epic trailer"],
+        ),
+        ("trance", &["trance", "psytrance", "uplifting"]),
+        ("dubstep", &["dubstep", "bass music", "riddim", "brostep"]),
+        ("lo-fi", &["lo-fi", "lofi", "chill hop", "study beats"]),
+        (
+            "drum_and_bass",
+            &[
+                "drum and bass",
+                "drum_and_bass",
+                "dnb",
+                "jungle",
+                "breakbeat",
+            ],
+        ),
         (
             "nu_metal",
             &["nu metal", "nu-metal", "linkin park", "rap metal"],
         ),
-        ("rock", &["rock", "metal", "hard rock", "punk"]),
+        (
+            "rock",
+            &[
+                "rock",
+                "hard rock",
+                "punk",
+                "grunge",
+                "metal",
+                "heavy metal",
+            ],
+        ),
+        (
+            "jazz",
+            &[
+                "jazz",
+                "swing",
+                "bossa nova",
+                "bebop",
+                "smooth jazz",
+                "big band",
+            ],
+        ),
+        (
+            "hip-hop",
+            &[
+                "hip-hop", "hip hop", "hiphop", "trap", "drill", "boom bap", "rap", "grime",
+                "phonk",
+            ],
+        ),
+        (
+            "pop",
+            &[
+                "pop",
+                "k-pop",
+                "j-pop",
+                "synth-pop",
+                "indie pop",
+                "dance pop",
+            ],
+        ),
+        ("funk", &["funk", "soul", "disco", "groove"]),
+        ("blues", &["blues", "delta blues", "electric blues"]),
+        (
+            "synthwave",
+            &["synthwave", "retrowave", "outrun", "vaporwave", "80s synth"],
+        ),
+        (
+            "classical",
+            &["classical", "baroque", "romantic", "piano sonata"],
+        ),
+        ("reggae", &["reggae", "dub music", "dancehall"]),
+        ("country", &["country", "bluegrass", "americana"]),
+        ("folk", &["folk", "acoustic", "singer-songwriter"]),
+        (
+            "latin",
+            &["latin", "salsa", "reggaeton", "flamenco", "tango", "samba"],
+        ),
+        ("gospel", &["gospel", "worship", "choir"]),
+        (
+            "electronic",
+            &[
+                "electronic",
+                "edm",
+                "electro",
+                "idm",
+                "glitch",
+                "industrial",
+            ],
+        ),
+        (
+            "world",
+            &[
+                "world music",
+                "celtic",
+                "middle eastern",
+                "indian classical",
+                "african",
+            ],
+        ),
     ];
     for (genre, keywords) in candidates {
         if keywords.iter().any(|k| lower.contains(k)) {
@@ -261,6 +354,23 @@ pub fn generate_config(project_name: &str, brief_text: &str) -> ProjectConfig {
         Some("trance") => (138, "F minor"),
         Some("nu_metal") => (104, "E minor"),
         Some("rock") => (112, "A minor"),
+        Some("jazz") => (112, "C major"),
+        Some("hip-hop") => (92, "E minor"),
+        Some("pop") => (118, "C major"),
+        Some("funk") => (104, "G minor"),
+        Some("blues") => (96, "E minor"),
+        Some("synthwave") => (110, "A minor"),
+        Some("drum_and_bass") => (172, "D minor"),
+        Some("dubstep") => (140, "F minor"),
+        Some("lo-fi") => (84, "A minor"),
+        Some("classical") => (72, "C major"),
+        Some("reggae") => (82, "A major"),
+        Some("country") => (100, "G major"),
+        Some("folk") => (96, "C major"),
+        Some("latin") => (104, "D minor"),
+        Some("gospel") => (88, "C major"),
+        Some("electronic") => (126, "C minor"),
+        Some("world") => (90, "D major"),
         _ => (120, "C minor"),
     };
 
@@ -395,6 +505,41 @@ mod tests {
         assert_eq!(multiline.genre, "rock");
         assert_eq!(multiline.bpm, 112, "multi-line bar count not read as tempo");
         assert_eq!(multiline.duration_bars, 128);
+    }
+
+    #[test]
+    fn s3_detects_all_new_genre_families() {
+        // Every S3 family must be detected from a natural brief and get its
+        // own BPM/key defaults — not the generic experimental fallback.
+        let cases = [
+            ("jazz swing quartet", "jazz", 112),
+            ("hip-hop trap beat", "hip-hop", 92),
+            ("pop song for radio", "pop", 118),
+            ("funky disco groove", "funk", 104),
+            ("delta blues shuffle", "blues", 96),
+            ("synthwave retrowave", "synthwave", 110),
+            ("drum and bass jungle", "drum_and_bass", 172),
+            ("lo-fi chill hop", "lo-fi", 84),
+            ("classical piano", "classical", 72),
+            ("reggae dub", "reggae", 82),
+            ("country ballad", "country", 100),
+            ("folk acoustic", "folk", 96),
+            ("latin salsa", "latin", 104),
+            ("gospel choir", "gospel", 88),
+            ("edm electronic", "electronic", 126),
+        ];
+        for (brief, expected_genre, expected_bpm) in cases {
+            let config = generate_config("S3", brief);
+            assert_eq!(
+                config.genre, expected_genre,
+                "brief '{brief}' should detect '{expected_genre}', got '{}'",
+                config.genre
+            );
+            assert_eq!(
+                config.bpm, expected_bpm,
+                "brief '{brief}' should default to {expected_bpm} BPM"
+            );
+        }
     }
 
     #[test]

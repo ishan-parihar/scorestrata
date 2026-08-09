@@ -572,20 +572,60 @@ pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<FxChain> {
     let sidechain = matches!(
         g.as_str(),
         "techno" | "house" | "melodic_techno" | "dark_techno"
-    );
+    ) || g.contains("pop")
+        || g.contains("funk")
+        || g.contains("synthwave")
+        || g.contains("drum")
+        || g.contains("dnb");
     // Rock/nu-metal gets its own character: punchier drums (parallel-
     // style aggressive compression), a driven bass, saturated guitars, and
     // a reverb-drenched vocal-range lead.
     let rock = g.contains("rock") || g.contains("metal") || g.contains("nu_metal");
+    // Hip-hop/trap: no sidechain (the 808 rings), heavier sub on the bass.
+    let hiphop =
+        g.contains("hip") || g.contains("trap") || g.contains("rap") || g.contains("phonk");
+    // Jazz/blues: warm, natural, gentle compression.
+    let live_band = g.contains("jazz")
+        || g.contains("swing")
+        || g.contains("blues")
+        || g.contains("country")
+        || g.contains("folk")
+        || g.contains("gospel");
+    // Cinematic/classical: minimal processing, lots of headroom.
+    let cinematic = g.contains("cinematic") || g.contains("orchestral") || g.contains("classical");
     let chain = match i.as_str() {
         "drum_sampler" | "drums" | "kick" => FxChain {
             high_pass_hz: Some(30.0),
             compressor: Some(CompressorCfg {
-                threshold_db: if rock { -16.0 } else { -12.0 },
-                ratio: if rock { 4.0 } else { 3.0 },
+                threshold_db: if rock {
+                    -16.0
+                } else if live_band {
+                    -10.0
+                } else {
+                    -12.0
+                },
+                ratio: if rock {
+                    4.0
+                } else if live_band {
+                    2.0
+                } else {
+                    3.0
+                },
                 attack_ms: 2.0,
-                release_ms: if rock { 60.0 } else { 80.0 },
-                makeup_db: if rock { 6.0 } else { 4.0 },
+                release_ms: if rock {
+                    60.0
+                } else if hiphop {
+                    120.0
+                } else {
+                    80.0
+                },
+                makeup_db: if rock {
+                    6.0
+                } else if live_band {
+                    2.0
+                } else {
+                    4.0
+                },
             }),
             ..Default::default()
         },
@@ -593,10 +633,22 @@ pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<FxChain> {
             high_pass_hz: Some(40.0),
             eq: vec![FreqBand {
                 freq_hz: 200.0,
-                gain_db: if rock { 2.0 } else { -2.0 },
+                gain_db: if rock {
+                    2.0
+                } else if hiphop {
+                    4.0
+                } else if live_band {
+                    1.0
+                } else {
+                    -2.0
+                },
                 q: 1.0,
             }],
-            sidechain_from_kick: sidechain,
+            sidechain_from_kick: if hiphop || cinematic {
+                false
+            } else {
+                sidechain
+            },
             ..Default::default()
         },
         "distorted_guitar" | "guitar" | "power_chord" => FxChain {
@@ -620,7 +672,13 @@ pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<FxChain> {
                 q: 1.0,
             }],
             sends: SendLevels {
-                reverb: 0.3,
+                reverb: if cinematic {
+                    0.45
+                } else if live_band {
+                    0.2
+                } else {
+                    0.3
+                },
                 delay: 0.0,
             },
             ..Default::default()
@@ -633,7 +691,7 @@ pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<FxChain> {
                 q: 1.2,
             }],
             sends: SendLevels {
-                reverb: 0.15,
+                reverb: if live_band { 0.25 } else { 0.15 },
                 delay: 0.2,
             },
             ..Default::default()
@@ -725,6 +783,39 @@ pub fn fx_summary(fx: &FxChain) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn s3_genre_mix_chains_have_distinct_character() {
+        // Each S3 family gets a production-appropriate chain: hip-hop bass
+        // boosts 200 Hz and never sidechains (the 808 rings), jazz drums
+        // compress gently, cinematic pads get heavy reverb.
+        let hiphop_bass = genre_mix_chain("trap", "bass").expect("trap bass");
+        assert!(
+            hiphop_bass
+                .eq
+                .iter()
+                .any(|b| b.freq_hz == 200.0 && b.gain_db == 4.0),
+            "trap bass gets a 200 Hz presence boost"
+        );
+        assert!(
+            !hiphop_bass.sidechain_from_kick,
+            "trap bass is not sidechained (808 rings)"
+        );
+
+        let jazz_drums = genre_mix_chain("jazz", "drums").expect("jazz drums");
+        let comp = jazz_drums.compressor.expect("jazz drums compressed");
+        assert_eq!(comp.ratio, 2.0, "jazz drums use gentle 2:1");
+        assert_eq!(comp.threshold_db, -10.0);
+
+        let cinematic_pads = genre_mix_chain("cinematic", "pad").expect("cinematic pads");
+        assert!(
+            cinematic_pads.sends.reverb > 0.4,
+            "cinematic pads are reverb-drenched"
+        );
+
+        let dnb_bass = genre_mix_chain("drum_and_bass", "bass").expect("dnb bass");
+        assert!(dnb_bass.sidechain_from_kick, "dnb bass pumps with the kick");
+    }
 
     #[test]
     fn rock_mix_chain_saturates_guitar_and_punches_drums() {

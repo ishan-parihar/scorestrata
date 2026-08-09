@@ -649,10 +649,35 @@ pub fn production_playbook_for(genre: &str) -> ProductionPlaybook {
         rock_playbook(genre)
     } else if g.contains("house") {
         house_playbook(genre)
-    } else if g.contains("ambient") || g.contains("drone") {
+    } else if g.contains("ambient")
+        || g.contains("drone")
+        || g.contains("lo-fi")
+        || g.contains("lofi")
+    {
         ambient_playbook(genre)
     } else if g.contains("techno") || g.contains("trance") {
         techno_playbook(genre)
+    } else if g.contains("jazz") || g.contains("swing") || g.contains("bossa") {
+        jazz_playbook(genre)
+    } else if g.contains("hip") || g.contains("trap") || g.contains("rap") || g.contains("phonk") {
+        hiphop_playbook(genre)
+    } else if g.contains("pop") {
+        pop_playbook(genre)
+    } else if g.contains("funk") || g.contains("soul") || g.contains("disco") {
+        funk_playbook(genre)
+    } else if g.contains("blues") {
+        blues_playbook(genre)
+    } else if g.contains("synthwave") || g.contains("retrowave") || g.contains("vaporwave") {
+        synthwave_playbook(genre)
+    } else if g.contains("drum and bass")
+        || g.contains("drum_and_bass")
+        || g.contains("dnb")
+        || g.contains("jungle")
+        || g.contains("breakbeat")
+    {
+        dnb_playbook(genre)
+    } else if g.contains("cinematic") || g.contains("orchestral") || g.contains("classical") {
+        cinematic_playbook(genre)
     } else {
         general_playbook(genre)
     }
@@ -925,6 +950,430 @@ fn techno_playbook(genre: &str) -> ProductionPlaybook {
     }
 }
 
+/// The jazz/swing playbook: ride cymbal swing, walking bass, horn/keys line.
+fn jazz_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Jazz is a swung, live feel: ride cymbal eighths, backbeat snare, ".to_string()
+            + "walking bass quarters, and a horn/keys melodic line. Keep the "
+            + "swing on the ride and the walking bass steady; let the harmony breathe.",
+        arrangement_shape: "head 8 · solo 8 · head 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Kick: 20–60 Hz, sparse".to_string(),
+            "Bass (upright feel): octaves 1–2, walking quarters".to_string(),
+            "Keys/piano: octaves 3–5".to_string(),
+            "Horns/lead: octaves 4–6, mid-forward".to_string(),
+            "Ride/cymbals: octaves 6–8, swung".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Set the swing".to_string(),
+                purpose: "Establish the ride-cymbal swing and the 2&4 backbeat.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "Swing ride eighths and a backbeat snare.".to_string(),
+            },
+            PlaybookStep {
+                name: "Write the walking bass".to_string(),
+                purpose: "Root-third-fifth lines that anchor the harmony.".to_string(),
+                tools: vec![
+                    "write_pattern_notes".to_string(),
+                    "set_layer_register".to_string(),
+                ],
+                exit_criteria: "Walking quarters in octaves 1–2.".to_string(),
+            },
+            PlaybookStep {
+                name: "Arrange head / solo / head".to_string(),
+                purpose: "Lay the theme, open a solo section, restate the head.".to_string(),
+                tools: vec![
+                    "apply_arrangement_template".to_string(),
+                    "extend_arrangement".to_string(),
+                ],
+                exit_criteria: "A recognizable head with a solo space.".to_string(),
+            },
+        ],
+        mix_master: "Keep the ride bright but not harsh; the walking bass warm and ".to_string()
+            + "present; master to −10/−12 LUFS for a live-room feel.",
+        common_mistakes: vec![
+            "Losing the swing (straight 16ths instead of swung eighths)".to_string(),
+            "Burying the walking bass under the piano".to_string(),
+        ],
+    }
+}
+
+/// The hip-hop/trap playbook: boom-bap grid, sub-heavy bass, stab samples.
+fn hiphop_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Hip-hop is a groove bed: sparse boom-bap kick/snare, sub-heavy root "
+            .to_string()
+            + "bass, and sample-style stabs. The bass and kick share the low end — "
+            + "tune them to the same root so the 808 sounds like one instrument.",
+        arrangement_shape: "intro 8 · hook 8 · verse 8 · hook 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Kick: 45–60 Hz, tight".to_string(),
+            "808 bass: octaves 1–2, sub-forward".to_string(),
+            "Keys/samples: octaves 3–5".to_string(),
+            "Lead/stabs: octaves 4–6".to_string(),
+            "Hats: octaves 7–8, swung".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Lay the boom-bap".to_string(),
+                purpose: "Sparse kick/snare grid with swung ghost hats.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "Kick on 1, snare on 2&4, swung hats.".to_string(),
+            },
+            PlaybookStep {
+                name: "Tune the 808".to_string(),
+                purpose: "Sub bass rooted to the kick so the low end locks.".to_string(),
+                tools: vec![
+                    "write_pattern_notes".to_string(),
+                    "set_layer_register".to_string(),
+                ],
+                exit_criteria: "Root-octave sub in octaves 1–2.".to_string(),
+            },
+            PlaybookStep {
+                name: "Drop the stabs".to_string(),
+                purpose: "Sample-style melodic stabs over the groove.".to_string(),
+                tools: vec![
+                    "apply_motivic_variation".to_string(),
+                    "place_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "A memorable 4–8 note hook.".to_string(),
+            },
+        ],
+        mix_master: "Sidechain nothing in trap; let the 808 ring. Keep hats bright, ".to_string()
+            + "bass huge; master to −8/−10 LUFS.",
+        common_mistakes: vec![
+            "Clashing 808 and kick frequencies (tune them together)".to_string(),
+            "Too-dense drums killing the swing".to_string(),
+        ],
+    }
+}
+
+/// The pop playbook: 4/4 kick + claps, catchy hook, singable lead.
+fn pop_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Pop is a song-form hook machine: 4/4 kick, claps on 2&4, a ".to_string()
+            + "root-fifth bass with octave pickups, bright chords, and a singable "
+            + "vocal-range lead. The chorus must hit harder than the verse — "
+            + "thicker layers and a lifted octave.",
+        arrangement_shape: "intro 8 · verse 8 · build 8 · chorus 24 · outro 8".to_string(),
+        octave_map: vec![
+            "Kick: 45–60 Hz".to_string(),
+            "Bass: octaves 1–2, pop groove".to_string(),
+            "Chords: octaves 3–5".to_string(),
+            "Lead/vocal: octaves 4–6, front and center".to_string(),
+            "Hats: octaves 7–8".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Write the hook first".to_string(),
+                purpose: "A singable 4-bar vocal-range melody is the song.".to_string(),
+                tools: vec![
+                    "write_pattern_notes".to_string(),
+                    "set_layer_register".to_string(),
+                ],
+                exit_criteria: "A memorable lead in octaves 4–6.".to_string(),
+            },
+            PlaybookStep {
+                name: "Build the groove bed".to_string(),
+                purpose: "Kick/clap grid plus the root-fifth pop bass.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "4/4 drive with claps on 2&4.".to_string(),
+            },
+            PlaybookStep {
+                name: "Arrange verse → chorus lift".to_string(),
+                purpose: "Chorus doubles the lead an octave and stacks the pads.".to_string(),
+                tools: vec![
+                    "apply_arrangement_template".to_string(),
+                    "repeat_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "A clearly bigger chorus than verse.".to_string(),
+            },
+        ],
+        mix_master: "Center the vocal-range lead, sidechain bass to kick, master to ".to_string()
+            + "−7/−9 LUFS for streaming loudness.",
+        common_mistakes: vec![
+            "Chorus not louder/denser than the verse".to_string(),
+            "Burying the lead under the chords".to_string(),
+        ],
+    }
+}
+
+/// The funk playbook: syncopated 16ths, popping bass, horn stabs.
+fn funk_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Funk lives in the pocket: syncopated 16th drums, a popping bass ".to_string()
+            + "with ghost notes, and tight horn stabs on the offbeats. The bass is "
+            + "the lead instrument — give it presence, not just lows.",
+        arrangement_shape: "intro 8 · groove 8 · hook 16 · breakdown 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Kick: 45–60 Hz, syncopated".to_string(),
+            "Bass: octaves 1–2, popping 16ths".to_string(),
+            "Keys: octaves 3–5".to_string(),
+            "Horns: octaves 4–6, tight stabs".to_string(),
+            "Hats: octaves 7–8, ghost notes".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Lock the pocket".to_string(),
+                purpose: "Syncopated kick/snare grid with ghost hats.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "16th feel with offbeat accents.".to_string(),
+            },
+            PlaybookStep {
+                name: "Pop the bass".to_string(),
+                purpose: "Syncopated 16th bass with octave pops.".to_string(),
+                tools: vec![
+                    "write_pattern_notes".to_string(),
+                    "set_layer_register".to_string(),
+                ],
+                exit_criteria: "Bass carries the groove in octaves 1–2.".to_string(),
+            },
+            PlaybookStep {
+                name: "Add horn stabs".to_string(),
+                purpose: "Tight offbeat stabs answer the bass.".to_string(),
+                tools: vec![
+                    "apply_motivic_variation".to_string(),
+                    "place_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "A recognizable stab riff.".to_string(),
+            },
+        ],
+        mix_master: "Give the bass a 200 Hz presence boost, keep horns tight, master ".to_string()
+            + "to −8/−10 LUFS.",
+        common_mistakes: vec![
+            "Straight 16ths instead of the syncopated pocket".to_string(),
+            "Bass lost in the low end (no presence)".to_string(),
+        ],
+    }
+}
+
+/// The blues playbook: shuffle feel, walking bass, wailing riff.
+fn blues_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Blues is a shuffle: triplet-feel hats, backbeat snare, a walking ".to_string()
+            + "bass, and a wailing guitar-style lead. Keep the call-and-response "
+            + "riff and let the lead bend the notes.",
+        arrangement_shape: "head 8 · solo 8 · head 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Kick: 45–60 Hz".to_string(),
+            "Bass: octaves 1–2, shuffle walk".to_string(),
+            "Keys: octaves 3–5".to_string(),
+            "Guitar/lead: octaves 4–6, mid-forward".to_string(),
+            "Hats: octaves 7–8, shuffle".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Set the shuffle".to_string(),
+                purpose: "Triplet-feel hats with the 2&4 backbeat.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "A genuine shuffle, not straight eighths.".to_string(),
+            },
+            PlaybookStep {
+                name: "Walk the bass".to_string(),
+                purpose: "Shuffle-walking root-third-fifth line.".to_string(),
+                tools: vec![
+                    "write_pattern_notes".to_string(),
+                    "set_layer_register".to_string(),
+                ],
+                exit_criteria: "Walking line in octaves 1–2.".to_string(),
+            },
+            PlaybookStep {
+                name: "Write the riff".to_string(),
+                purpose: "The wailing lead line is the song's voice.".to_string(),
+                tools: vec![
+                    "apply_motivic_variation".to_string(),
+                    "place_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "A memorable call-and-response riff.".to_string(),
+            },
+        ],
+        mix_master: "Warm mid-forward mix, gentle top end, master to −10/−12 LUFS.".to_string(),
+        common_mistakes: vec![
+            "Straight feel instead of the shuffle".to_string(),
+            "The riff too quiet against the shuffle drums".to_string(),
+        ],
+    }
+}
+
+/// The synthwave playbook: pulsing 8th bass, 16th arp, dark retro pads.
+fn synthwave_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Synthwave is a driving retro machine: pulsing 8th-note bass, 16th ".to_string()
+            + "arpeggios, dark pads, and a 4/4 kick with fast hats. The bass pulse "
+            + "and the arp are the genre's signature — keep them locked.",
+        arrangement_shape: "intro 16 · build 8 · drop 32 · breakdown 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Kick: 45–60 Hz".to_string(),
+            "Bass: octaves 1–2, pulsing 8ths".to_string(),
+            "Pads: octaves 3–5, dark retro chords".to_string(),
+            "Arp/lead: octaves 5–7, 16ths".to_string(),
+            "Hats: octaves 7–8, driving 16ths".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Set the pulse".to_string(),
+                purpose: "4/4 kick with 16th hats and a clap.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "Relentless 16th drive.".to_string(),
+            },
+            PlaybookStep {
+                name: "Pulse the bass".to_string(),
+                purpose: "Root-octave 8th-note pulse in octaves 1–2.".to_string(),
+                tools: vec![
+                    "write_pattern_notes".to_string(),
+                    "set_layer_register".to_string(),
+                ],
+                exit_criteria: "A locked 8th-note bass pulse.".to_string(),
+            },
+            PlaybookStep {
+                name: "Run the arp".to_string(),
+                purpose: "16th arpeggio over dark pads.".to_string(),
+                tools: vec![
+                    "apply_motivic_variation".to_string(),
+                    "place_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "A memorable 16th arp line.".to_string(),
+            },
+        ],
+        mix_master: "Wide pads, tight kick/bass, master to −8/−10 LUFS with the ".to_string()
+            + "retro high-end kept clear.",
+        common_mistakes: vec![
+            "Bass pulse losing sync with the kick".to_string(),
+            "Pads too dark, swallowing the arp".to_string(),
+        ],
+    }
+}
+
+/// The drum-and-bass playbook: breakbeat, rolling bass, airy stabs.
+fn dnb_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Drum and bass is a fast breakbeat over a rolling bass: syncopated ".to_string()
+            + "kick/snare, 16th hats, a rolling root-fifth bass, and airy stabs. "
+            + "At 170+ BPM the drums are the engine — keep the break tight.",
+        arrangement_shape: "intro 16 · build 8 · drop 32 · breakdown 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Kick: 45–60 Hz, syncopated".to_string(),
+            "Bass: octaves 1–2, rolling eighths".to_string(),
+            "Pads: octaves 3–5".to_string(),
+            "Stabs/lead: octaves 4–6, airy".to_string(),
+            "Hats: octaves 7–8, 16ths".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Build the break".to_string(),
+                purpose: "Syncopated breakbeat with a 16th hat stream.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "A tight, fast break.".to_string(),
+            },
+            PlaybookStep {
+                name: "Roll the bass".to_string(),
+                purpose: "Root-fifth eighths that drive under the break.".to_string(),
+                tools: vec![
+                    "write_pattern_notes".to_string(),
+                    "set_layer_register".to_string(),
+                ],
+                exit_criteria: "A rolling bass in octaves 1–2.".to_string(),
+            },
+            PlaybookStep {
+                name: "Float the stabs".to_string(),
+                purpose: "Airy stabs over the break for the drop.".to_string(),
+                tools: vec![
+                    "apply_motivic_variation".to_string(),
+                    "place_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "A distinctive stab motif.".to_string(),
+            },
+        ],
+        mix_master: "Keep the sub tight, the break loud, master to −7/−9 LUFS.".to_string(),
+        common_mistakes: vec![
+            "The break losing energy at 170 BPM (too sparse)".to_string(),
+            "Rolling bass clashing with the kick".to_string(),
+        ],
+    }
+}
+
+/// The cinematic/orchestral playbook: sparse percussion, big pads, strings.
+fn cinematic_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Cinematic music is a slow-build epic: sparse timpani, a low drone ".to_string()
+            + "bass, long strings/choir lines, and big orchestral chord swells. "
+            + "Dynamics do the work — save the biggest swell for the peak.",
+        arrangement_shape: "intro 16 · build 8 · peak 24 · breakdown 8 · outro 16".to_string(),
+        octave_map: vec![
+            "Timpani: 40–80 Hz, sparse".to_string(),
+            "Bass: octaves 1–2, drone".to_string(),
+            "Strings/choir: octaves 3–5".to_string(),
+            "Lead melody: octaves 4–6, long notes".to_string(),
+            "Cymbals/swells: octaves 7–8, rare".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Paint the bed".to_string(),
+                purpose: "Low drone bass plus a big orchestral chord pad.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_notes".to_string(),
+                ],
+                exit_criteria: "A sustained, evolving pad bed.".to_string(),
+            },
+            PlaybookStep {
+                name: "Write the theme".to_string(),
+                purpose: "Long strings/choir melody lines.".to_string(),
+                tools: vec![
+                    "apply_motivic_variation".to_string(),
+                    "place_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "A memorable slow theme.".to_string(),
+            },
+            PlaybookStep {
+                name: "Shape the dynamics".to_string(),
+                purpose: "Automate the swell up to the peak section.".to_string(),
+                tools: vec![
+                    "write_automation".to_string(),
+                    "apply_arrangement_template".to_string(),
+                ],
+                exit_criteria: "A clear build to a bigger peak.".to_string(),
+            },
+        ],
+        mix_master: "Wide pads, warm lows, plenty of headroom; master to −12/−14 LUFS ".to_string()
+            + "for the dynamics.",
+        common_mistakes: vec![
+            "Constant loudness killing the epic dynamics".to_string(),
+            "Too many busy parts (cinematic needs space)".to_string(),
+        ],
+    }
+}
+
 /// The general fallback playbook for any other genre.
 fn general_playbook(genre: &str) -> ProductionPlaybook {
     ProductionPlaybook {
@@ -1034,19 +1483,46 @@ pub struct ArrangementTemplate {
 #[must_use]
 pub fn arrangement_template_for(genre: &str) -> ArrangementTemplate {
     let g = genre.to_lowercase();
-    let (intro, build, drop, breakdown, outro) = if g.contains("ambient") {
+    let (intro, build, drop, breakdown, outro) = if g.contains("ambient")
+        || g.contains("lo-fi")
+        || g.contains("lofi")
+        || g.contains("classical")
+    {
+        // Slow-burn genres: long intro, gentle build, sustained middle.
         (32u32, 8u32, 16u32, 16u32, 16u32)
+    } else if g.contains("jazz") || g.contains("swing") || g.contains("blues") {
+        // Live-band forms: head / solo / head with a compact intro/outro.
+        (8u32, 8u32, 16u32, 16u32, 8u32)
+    } else if g.contains("hip")
+        || g.contains("trap")
+        || g.contains("rap")
+        || g.contains("funk")
+        || g.contains("reggae")
+    {
+        // Groove-driven: short intro, hook chorus, breakdown for the beat.
+        (8u32, 8u32, 16u32, 8u32, 8u32)
     } else if g.contains("house") {
         (16u32, 8u32, 16u32, 8u32, 8u32)
     } else if g.contains("rock")
         || g.contains("metal")
         || g.contains("nu_metal")
         || g.contains("punk")
+        || g.contains("country")
     {
         // Rock/nu-metal: shorter intro, big chorus (the peak), and a
         // breakdown for the quiet middle-eight — the Linkin Park shape.
         (8u32, 8u32, 32u32, 8u32, 8u32)
-    } else if g.contains("techno") || g.contains("trance") || g.contains("dubstep") {
+    } else if g.contains("pop") || g.contains("cinematic") || g.contains("folk") {
+        // Song forms: verse/build/chorus with a song-length peak.
+        (8u32, 8u32, 24u32, 8u32, 8u32)
+    } else if g.contains("techno")
+        || g.contains("trance")
+        || g.contains("dubstep")
+        || g.contains("drum")
+        || g.contains("dnb")
+        || g.contains("synthwave")
+        || g.contains("electronic")
+    {
         (16u32, 8u32, 32u32, 8u32, 8u32)
     } else {
         (16u32, 8u32, 16u32, 8u32, 8u32)
@@ -1090,7 +1566,28 @@ pub struct ArrangementTemplates {
 /// the default fallback.
 #[must_use]
 pub fn arrangement_templates_resource() -> ArrangementTemplates {
-    let genres = ["techno", "house", "ambient", "trance", "dubstep", "rock"];
+    let genres = [
+        "techno",
+        "house",
+        "ambient",
+        "trance",
+        "dubstep",
+        "rock",
+        "jazz",
+        "hip-hop",
+        "pop",
+        "funk",
+        "blues",
+        "synthwave",
+        "drum_and_bass",
+        "lo-fi",
+        "cinematic",
+        "classical",
+        "reggae",
+        "country",
+        "folk",
+        "electronic",
+    ];
     let templates: Vec<ArrangementTemplate> =
         genres.iter().map(|g| arrangement_template_for(g)).collect();
     ArrangementTemplates {
@@ -1704,6 +2201,15 @@ mod tests {
                 "house".to_string(),
                 "ambient".to_string(),
                 "techno".to_string(),
+                "jazz".to_string(),
+                "hip-hop".to_string(),
+                "pop".to_string(),
+                "funk".to_string(),
+                "blues".to_string(),
+                "synthwave".to_string(),
+                "drum_and_bass".to_string(),
+                "cinematic".to_string(),
+                "lo-fi".to_string(),
             ],
             failure_taxonomy: vec![FailureTaxonomyEntry {
                 code: "SCALE_VIOLATION".to_string(),
