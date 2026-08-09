@@ -138,14 +138,47 @@ instruments), MIT licensing, pure Rust, no torrents.
 
 ## 5. Recommended plan (ordered)
 
-| Step | Work | Gate |
-|---|---|---|
-| P1 | Fix `F1`: level-correct velocity layers in the generator (pre-normalize by layer, hard = +6 dB, brighter) | `audit_samples.py` shows hard ≥ soft |
-| P2 | Fix `F2`: normalize all layers to a common RMS (−18 dB ref) in the generator | all files within ±3 dB |
-| P3 | Fix `F5`: DC-block the generator output (one-pole HPF at 20 Hz) | |dc| < 1e-5 |
-| P4 | Add `rustysynth` (MIT) behind a `soundfont` feature; wire a GM patch → layer mapping; embed FluidR3_GM or GeneralUser GS at build time | demo renders, checksum changes, clippy/test gate green |
-| P5 | Regenerate + commit; re-run LP demo; compare LUFS/spectrogram vs. current bank | report in `docs/` |
+| Step | Work | Gate | Status |
+|---|---|---|---|
+| P1 | Fix `F1`: level-correct velocity layers in the generator (pre-normalize by layer, hard = +6 dB, brighter) | `audit_samples.py` shows hard ≥ soft | ✅ `4b49a87` |
+| P2 | Fix `F2`: normalize all layers to a common RMS (−18 dB ref) in the generator | all files within ±3 dB | ✅ `4b49a87` |
+| P3 | Fix `F5`: DC-block the generator output (one-pole HPF at 20 Hz) | |dc| < 1e-5 | ✅ `4b49a87` |
+| P4 | Add `rustysynth` (MIT); wire a GM patch → layer mapping; render FluidR3_GM one-shots at build time | demo renders, checksum changes, clippy/test gate green | ✅ `147778e` |
+| P5 | Regenerate + commit; re-run LP demo; compare LUFS/spectrogram vs. current bank | report in `docs/` | ✅ below |
 
-Steps P1–P3 are small, self-contained, and fix real defects today. P4 is the
-production-grade leap and is deliberately gated behind the user's go-ahead
-(30 MB embedded asset + new dependency).
+## 6. Result — Phase H shipped
+
+### The recorded bank (`147778e`)
+
+- **`extract_sf2`** — a build-time tool that renders FluidR3_GM GM programs
+  (30 Distortion Guitar, 34 Picked Bass, 4 E.Piano) through **rustysynth
+  (MIT, pure Rust)** into 21 dry 48 kHz mono one-shot WAVs. Rendering (not
+  raw-sample copy) bakes in the font's own envelopes, filters and velocity
+  layers — the one-shot is what the recorded instrument *sounds like*.
+- **`sf2_bank`** — zone manifest + `include_bytes!` over the rendered
+  one-shots, with a deterministic sustain-loop detector for the e-piano.
+  Same instrument names/zones as the synthetic bank, so the two are
+  drop-in interchangeable behind `melodic_bank: "embedded" | "sf2"`.
+- The 100 MB SoundFont itself is **not** embedded (R7 posture kept: only
+  ~8.6 MB of rendered one-shots are committed).
+
+### LP-demo stem comparison (synthetic → recorded)
+
+| Layer | Synthetic | SF2 bank | Δ |
+|---|---|---|---|
+| Guitar | −10.4 LUFS | **−9.0** | +1.4 (loudest melodic element) |
+| Bass | −18.7 LUFS | **−10.8** | **+7.9** (recorded picked bass present) |
+| Drums | −19.7 | −19.7 | kit untouched |
+| Lead | −9.2 | −9.2 | synth lead unchanged |
+
+Master render: **−14.0 LUFS, −5.1 dBTP**, checksum `193704f5` (was
+`51ae96cb` — the recorded bank is verifiably in the mix). Bass jumped
+~8 dB because the recorded GM-34 picked bass carries real body and
+attack that the synthetic pluck could not.
+
+### Gates
+
+- 936 workspace tests pass (6 new: bank load, determinism, register
+  coverage, SF2≠synthetic proof, 8 s e-piano sustain, loop detector).
+- `clippy --workspace --all-targets -- -D warnings` clean, `fmt` clean.
+- Commits: `4b49a87` (level fixes), `147778e` (SF2 bank).

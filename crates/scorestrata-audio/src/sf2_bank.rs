@@ -170,6 +170,9 @@ fn load_zone(root_note: u8, wav: &'static [u8]) -> Sample {
 /// done). Windowed RMS over 20 ms; deterministic — pure function of `data`.
 fn detect_loop_start(data: &[f32]) -> usize {
     let win = (0.02 * BANK_RATE as f32) as usize;
+    if data.len() < win * 2 {
+        return 0;
+    }
     let peak = windowed_rms_peak(data, win);
     if peak <= 1e-6 {
         return 0;
@@ -189,6 +192,9 @@ fn detect_loop_start(data: &[f32]) -> usize {
 fn detect_loop_end(data: &[f32]) -> usize {
     let win = (0.02 * BANK_RATE as f32) as usize;
     let start = detect_loop_start(data);
+    if data.len() < win * 2 {
+        return data.len();
+    }
     let sustain_rms = windowed_rms(data, win)
         .skip(start / win)
         .take(20)
@@ -200,6 +206,9 @@ fn detect_loop_end(data: &[f32]) -> usize {
             break;
         }
     }
+    // Clamp keeps the loop window sane: never shrink below one window past
+    // the start, never run past the buffer. The guard above guarantees the
+    // clamp range is non-empty (min <= max).
     end.clamp(start + win, data.len().saturating_sub(win))
 }
 
@@ -337,6 +346,21 @@ mod tests {
             tail_peak > 0.01,
             "epiano sustains through an 8 s note (tail peak {tail_peak})"
         );
+    }
+
+    #[test]
+    fn loop_detector_handles_short_and_silent_buffers() {
+        // Guard regression: buffers under two windows (or silent) must not
+        // panic the clamp in `detect_loop_end` (min > max).
+        let short = vec![0.1f32; 100];
+        let (start, end) = (detect_loop_start(&short), detect_loop_end(&short));
+        assert!(end >= start, "short buffer: end {end} >= start {start}");
+        assert!(end <= short.len(), "short buffer end in range");
+
+        let silent = vec![0.0f32; BANK_RATE as usize * 2];
+        assert_eq!(detect_loop_start(&silent), 0, "silent buffer start");
+        let end = detect_loop_end(&silent);
+        assert!(end <= silent.len(), "silent buffer end in range: {end}");
     }
 
     #[test]

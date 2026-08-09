@@ -1200,13 +1200,15 @@ pub fn is_percussion_instrument(instrument: &str) -> bool {
 ///   (`embedded_bank`), the Phase G default.
 /// - `"sf2"` → the recorded `SoundFont` bank (`sf2_bank`), Phase H — real
 ///   multi-sampled instruments rendered from `FluidR3_GM`.
-/// - any other value → `None` (the subtractive synth voice, R1).
+/// - any other value → `None` (the subtractive synth voice, R1). Unknown
+///   names deliberately do **not** fall back to a sample bank — a typo like
+///   `"sft"` must not silently swap the instrument sound.
 #[must_use]
 fn melodic_bank_for(config: &RenderConfig) -> Option<crate::multisample::InstrumentBank> {
     match config.melodic_bank.as_deref() {
         Some("sf2") => Some(crate::sf2_bank::sf2_instrument_bank()),
-        Some(_) => Some(crate::embedded_bank::embedded_instrument_bank()),
-        None => None,
+        Some("embedded") => Some(crate::embedded_bank::embedded_instrument_bank()),
+        Some(_) | None => None,
     }
 }
 
@@ -1705,6 +1707,73 @@ mod tests {
         assert_eq!(
             sampled.checksum, sampled_again.checksum,
             "banked render is deterministic (R2)"
+        );
+    }
+
+    #[test]
+    fn unknown_melodic_bank_name_falls_back_to_synth_not_samples() {
+        // A typo like "sft" must NOT silently swap to a sample bank — it
+        // falls back to the subtractive synth voice (R1), so the render is
+        // byte-identical to the no-bank render.
+        let notes = vec![RenderNote {
+            pitch: 57,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ) * 2,
+            velocity: 0.8,
+            layer_name: "Guitar".to_string(),
+        }];
+        let voices = build_voices(&[("Guitar", "distorted_guitar")]);
+        let plain = RenderConfig::default();
+        let typo = RenderConfig {
+            melodic_bank: Some("sft".to_string()),
+            ..RenderConfig::default()
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let synth = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &plain).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let unknown = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &typo).unwrap();
+        assert_eq!(
+            synth.checksum, unknown.checksum,
+            "unknown bank name falls back to the synth voice, not a sample bank"
+        );
+    }
+
+    #[test]
+    fn sf2_melodic_bank_renders_and_differs_from_embedded() {
+        // Phase H: melodic_bank "sf2" uses the recorded SoundFont bank; it
+        // must render audibly and produce different bytes than "embedded"
+        // (recorded vs synthetic source), and stay deterministic (R2).
+        let notes = vec![RenderNote {
+            pitch: 57,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ) * 2,
+            velocity: 0.8,
+            layer_name: "Guitar".to_string(),
+        }];
+        let voices = build_voices(&[("Guitar", "distorted_guitar")]);
+        let embedded = RenderConfig {
+            melodic_bank: Some("embedded".to_string()),
+            ..RenderConfig::default()
+        };
+        let sf2 = RenderConfig {
+            melodic_bank: Some("sf2".to_string()),
+            ..RenderConfig::default()
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let embedded_r =
+            render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &embedded).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let sf2_r = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &sf2).unwrap();
+        assert!(rms(&sf2_r.mono_samples) > 0.01, "SF2 bank path audible");
+        assert_ne!(
+            embedded_r.checksum, sf2_r.checksum,
+            "recorded SF2 bank differs from the synthetic bank"
+        );
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let sf2_again = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &sf2).unwrap();
+        assert_eq!(
+            sf2_r.checksum, sf2_again.checksum,
+            "SF2 render is deterministic (R2)"
         );
     }
 
