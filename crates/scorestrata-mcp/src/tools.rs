@@ -4036,6 +4036,83 @@ pub fn get_timeline_view(params: &GetTimelineViewParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `get_arrangement_templates` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetArrangementTemplatesParams {
+    /// Project ID (used for the evidence URI).
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Optional genre filter (`techno`, `house`, `ambient`, `trance`,
+    /// `dubstep`); when omitted, every named genre table plus the default
+    /// fallback is returned.
+    #[serde(default)]
+    pub genre: Option<String>,
+}
+
+/// Get the `arrangement_templates` resource (G6) — the genre archetype tables.
+///
+/// Read-only (the §8.1 "tools mutate, resources inspect" split): returns the
+/// per-genre section layouts (intro/build/drop/breakdown/outro with production
+/// bar counts, energy arc, and active layers) that a producer consults before
+/// choosing an arrangement shape or calling `apply_arrangement_template` /
+/// `extend_arrangement`.
+#[must_use]
+pub fn get_arrangement_templates(params: &GetArrangementTemplatesParams) -> ToolReceipt {
+    let resource = crate::resources::arrangement_templates_resource();
+    let selected = match &params.genre {
+        Some(genre) => {
+            // Derive the label from the returned template so unknown genres
+            // (which fall back to the default table) stay self-consistent:
+            // `genres[0]` always equals `templates[0].genre`.
+            let template = crate::resources::arrangement_template_for(genre);
+            crate::resources::ArrangementTemplates {
+                genres: vec![template.genre.clone()],
+                templates: vec![template],
+                default: resource.default,
+            }
+        }
+        None => resource,
+    };
+    let summary = serde_json::to_string(&selected).unwrap_or_else(|_| "{}".to_string());
+    let project_id = params.project_id.as_deref().unwrap_or("unknown");
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "arrangement_templates.genres".to_string(),
+        selected.genres.len().to_string(),
+    );
+    score_delta.insert(
+        "arrangement_templates.sections".to_string(),
+        selected
+            .templates
+            .iter()
+            .map(|t| t.sections.len())
+            .sum::<usize>()
+            .to_string(),
+    );
+
+    ToolReceipt {
+        tool: "get_arrangement_templates".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!("arrangement_templates {summary}"),
+        score_delta,
+        evidence_uris: vec![format!("project://{project_id}/arrangement/templates")],
+        focus_uris: vec![format!("project://{project_id}/arrangement/templates/view")],
+        next_actions: vec![
+            "apply_arrangement_template".to_string(),
+            "extend_arrangement".to_string(),
+            "ss timeline".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 /// Parameters for `solo_segment` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoloSegmentParams {
@@ -9138,6 +9215,86 @@ mod tests {
                 .any(|w| w.contains("serialized project payload")),
             "transparent stub warning"
         );
+    }
+
+    #[test]
+    fn get_arrangement_templates_returns_all_named_genres() {
+        // G6 resource: no genre filter → every named genre table plus the
+        // default fallback, each with the production 5-section archetype.
+        let params = GetArrangementTemplatesParams {
+            project_id: Some("proj_1".to_string()),
+            genre: None,
+        };
+        let receipt = get_arrangement_templates(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(
+            receipt.score_delta.get("arrangement_templates.genres"),
+            Some(&"5".to_string()),
+            "five named genre tables"
+        );
+        assert_eq!(
+            receipt.score_delta.get("arrangement_templates.sections"),
+            Some(&"25".to_string()),
+            "5 genres × 5 sections"
+        );
+        assert!(receipt.summary.contains("techno"));
+        assert!(receipt.summary.contains("ambient"));
+        assert!(receipt.summary.contains("\"genre\":\"default\""));
+    }
+
+    #[test]
+    fn get_arrangement_templates_filters_by_genre() {
+        // A producer can inspect a single genre's archetype before applying
+        // its template (read-only, no mutation).
+        let params = GetArrangementTemplatesParams {
+            project_id: None,
+            genre: Some("house".to_string()),
+        };
+        let receipt = get_arrangement_templates(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(
+            receipt.score_delta.get("arrangement_templates.genres"),
+            Some(&"1".to_string())
+        );
+        assert!(receipt.summary.contains("\"genre\":\"house\""));
+        assert!(
+            !receipt.summary.contains("\"genre\":\"techno\""),
+            "filtered to the requested genre only"
+        );
+        // Energy arc peaks at the drop for the requested genre too.
+        assert!(receipt.summary.contains("\"role\":\"drop\""));
+    }
+
+    #[test]
+    fn get_arrangement_templates_unknown_genre_falls_back_to_default_table() {
+        // Unknown genres fall back to the default table's section layout
+        // (16/8/16/8/8), and the response stays self-consistent:
+        // `genres[0]` always matches `templates[0].genre` — the label is
+        // derived from the returned template, never diverges from it.
+        let params = GetArrangementTemplatesParams {
+            project_id: None,
+            genre: Some("jazz".to_string()),
+        };
+        let receipt = get_arrangement_templates(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(
+            receipt.score_delta.get("arrangement_templates.genres"),
+            Some(&"1".to_string())
+        );
+        // The genre label the agent sees is exactly the one on the template.
+        let start = receipt.summary.find("\"genres\":[").map(|i| i + 10);
+        let genre_label = start.and_then(|i| {
+            receipt.summary[i..]
+                .find(']')
+                .map(|j| &receipt.summary[i..i + j])
+        });
+        assert!(
+            genre_label
+                .is_some_and(|label| { receipt.summary.contains(&format!("\"genre\":{label}")) }),
+            "genres[0] == templates[0].genre (self-consistent)"
+        );
+        // And the sections use the default-table layout (16-bar intro).
+        assert!(receipt.summary.contains("\"role\":\"intro\",\"bars\":16"));
     }
 
     #[test]

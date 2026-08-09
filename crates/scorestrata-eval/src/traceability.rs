@@ -273,6 +273,7 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
         code: vec![
             "scorestrata_mcp::production_ops".to_string(),
             "scorestrata_mcp::tools::get_timeline_view".to_string(),
+            "scorestrata_mcp::tools::get_arrangement_templates".to_string(),
             "scorestrata_mcp::tools::set_layer_register".to_string(),
             "scorestrata_mcp::tools::repeat_pattern_in_segment".to_string(),
             "scorestrata_mcp::tools::write_automation".to_string(),
@@ -293,6 +294,7 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
         ],
         mcp_tools: vec![
             "get_timeline_view".to_string(),
+            "get_arrangement_templates".to_string(),
             "set_layer_register".to_string(),
             "repeat_pattern_in_segment".to_string(),
             "write_automation".to_string(),

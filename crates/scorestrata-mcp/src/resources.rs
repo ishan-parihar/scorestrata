@@ -646,6 +646,37 @@ pub fn arrangement_template_for(genre: &str) -> ArrangementTemplate {
     }
 }
 
+/// The `arrangement_templates` resource (G6) — every genre's section
+/// archetypes (intro/build/drop/breakdown/outro) with production bar counts,
+/// the energy arc, and the layers active in each section, from the §1.2
+/// reference-track research. Inspectable by agents without mutating anything
+/// ("tools mutate, resources inspect"), so a producer can see the available
+/// arrangement shapes before choosing one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArrangementTemplates {
+    /// Genres that have a named archetype table (unknown genres fall back to
+    /// the default table).
+    pub genres: Vec<String>,
+    /// One template per named genre, in the same order.
+    pub templates: Vec<ArrangementTemplate>,
+    /// The fallback template used for any genre without a named table.
+    pub default: ArrangementTemplate,
+}
+
+/// Build the `arrangement_templates` resource: the named-genre tables plus
+/// the default fallback.
+#[must_use]
+pub fn arrangement_templates_resource() -> ArrangementTemplates {
+    let genres = ["techno", "house", "ambient", "trance", "dubstep"];
+    let templates: Vec<ArrangementTemplate> =
+        genres.iter().map(|g| arrangement_template_for(g)).collect();
+    ArrangementTemplates {
+        genres: genres.iter().map(|g| g.to_string()).collect(),
+        templates,
+        default: arrangement_template_for("default"),
+    }
+}
+
 /// Build the layered timeline view from a real project.
 ///
 /// Pure derivation (no storage): sections come from the arrangement, lanes
@@ -1267,5 +1298,39 @@ mod tests {
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let json = serde_json::to_string_pretty(&onboarding).unwrap();
         assert!(json.contains("system_map"));
+    }
+
+    #[test]
+    fn arrangement_templates_resource_covers_genres_and_energy_arc() {
+        // The G6 resource must expose every named genre table plus the
+        // default fallback, each with the production 5-section archetype and
+        // an energy arc peaking at the drop.
+        let resource = arrangement_templates_resource();
+        assert!(
+            !resource.genres.is_empty() && resource.genres.len() == resource.templates.len(),
+            "one template per named genre"
+        );
+        for (genre, template) in resource.genres.iter().zip(&resource.templates) {
+            assert_eq!(template.genre, *genre);
+            assert_eq!(template.sections.len(), 5, "{genre} has 5 sections");
+            assert!(
+                template.sections.iter().all(|s| s.bars > 0),
+                "{genre} sections all have bars"
+            );
+            // The drop (index 2) carries the energy peak of the arc.
+            let drop_energy = template.sections[2].energy;
+            assert!(
+                template.sections.iter().all(|s| s.energy <= drop_energy),
+                "{genre} energy arc peaks at the drop"
+            );
+            // Each section lists the layers active in it.
+            assert!(template.sections.iter().all(|s| !s.layers.is_empty()));
+        }
+        assert_eq!(resource.default.sections.len(), 5);
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&resource).unwrap();
+        assert!(json.contains("\"genres\""));
+        assert!(json.contains("\"default\""));
+        assert!(json.contains("techno"));
     }
 }
