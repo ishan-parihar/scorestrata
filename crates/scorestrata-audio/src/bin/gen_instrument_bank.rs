@@ -40,6 +40,17 @@ fn main() {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/instruments");
     std::fs::create_dir_all(&out_dir).expect("create assets dir");
 
+    // ── Level plan (F1/F2) ───────────────────────────────────────────────
+    // Velocity response is fixed by **RMS** normalization, not peak: a hard
+    // pick is louder AND brighter than a soft one, so hard layers target
+    // −18 dB RMS and soft layers −24 dB (6 dB velocity spread) instead of all
+    // files peaking at 0.85 (which flattened the layers into silence on the
+    // hard ones — audit finding F1). All families share the same −18 dB
+    // reference so the bank is internally level-matched (F2). A 20 Hz
+    // one-pole DC-block removes the body-resonance offset (F5).
+    const REF_RMS_DB: f32 = -18.0; // hard layers
+    const SOFT_OFFSET_DB: f32 = -6.0; // soft layers sit 6 dB below
+
     // ── Guitar ─────────────────────────────────────────────────────────
     // Zones at C2/A2/E3/B3/E4, each with soft + hard velocity layers. The
     // C2 root is essential: rock power-chords sit in octaves 2–4 (MIDI
@@ -55,7 +66,8 @@ fn main() {
                 if hard { 0.35 } else { 0.55 },
                 0.18,
             );
-            write_wav_file(&out_dir, &format!("guitar_{root}_{name}.wav"), &pluck);
+            let target = if hard { REF_RMS_DB } else { REF_RMS_DB + SOFT_OFFSET_DB };
+            write_wav_file(&out_dir, &format!("guitar_{root}_{name}.wav"), &finalize(pluck, target));
             let _ = i;
         }
     }
@@ -73,17 +85,19 @@ fn main() {
                 if hard { 0.3 } else { 0.5 },
                 0.12,
             );
-            write_wav_file(&out_dir, &format!("bass_{root}_{name}.wav"), &pluck);
+            let target = if hard { REF_RMS_DB } else { REF_RMS_DB + SOFT_OFFSET_DB };
+            write_wav_file(&out_dir, &format!("bass_{root}_{name}.wav"), &finalize(pluck, target));
             let _ = i;
         }
     }
 
     // ── E-piano ────────────────────────────────────────────────────────
-    // Zones at C3/C4/C5, single layer, looped sustain.
+    // Zones at C3/C4/C5, single layer, looped sustain, at the same −18 dB
+    // reference so it no longer dominates the mix by 15+ dB (F2).
     let epiano_roots = [48u8, 60, 72];
     for (i, root) in epiano_roots.iter().enumerate() {
         let tone = epiano_tone(midi_freq(*root), 3.0);
-        write_wav_file(&out_dir, &format!("epiano_{root}.wav"), &tone);
+        write_wav_file(&out_dir, &format!("epiano_{root}.wav"), &finalize(tone, REF_RMS_DB));
         let _ = i;
     }
 
@@ -187,7 +201,6 @@ fn plucked_string(freq: f32, seconds: f32, pluck: f32, damping: f32, body: f32) 
 
         out.push(y * 0.9 + body_sample);
     }
-    normalize(&mut out);
     out
 }
 /// Additive e-piano tone: inharmonic partials (the classic struck-tine
@@ -230,17 +243,38 @@ fn epiano_tone(freq: f32, seconds: f32) -> Vec<f32> {
         let trem = 0.08f32.mul_add((std::f32::consts::TAU * 5.0 * t).sin(), 1.0);
         out.push(s * trem * 0.22);
     }
-    normalize(&mut out);
     out
 }
 
-/// Peak-normalize to ~0.85 (headroom for the mix).
-fn normalize(buf: &mut [f32]) {
-    let peak = buf.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
-    if peak > 1e-6 {
-        let gain = 0.85 / peak;
-        for s in buf.iter_mut() {
-            *s *= gain;
-        }
+/// Finalize a one-shot: DC-block (F5) then RMS-normalize to `target_db` (F1/F2).
+///
+/// Returns a peak-safe buffer: the render path applies its own gain staging,
+/// and the bank's level plan lives here so all layers/families sit on the
+/// same −18 dB RMS reference with a 6 dB velocity spread.
+fn finalize(mut buf: Vec<f32>, target_db: f32) -> Vec<f32> {
+    dc_block(&mut buf);
+    let rms = (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt().max(1e-9);
+    let gain = 10f32.powf(target_db / 20.0) / rms;
+    for s in buf.iter_mut() {
+        // Clamp at 0.92 (not 1.0): the pluck transient is hot, and
+        // pitch-shifting up in the sampler can interpolate slightly past the
+        // source peak — headroom keeps interpolated samples below full-scale.
+        *s = (*s * gain).clamp(-0.92, 0.92);
+    }
+    buf
+}
+
+/// One-pole high-pass DC blocker (~20 Hz) — removes the body-resonance sine
+/// offset that a mastering DC-block would thump on (audit F5).
+fn dc_block(buf: &mut [f32]) {
+    let rc = 1.0 / (std::f32::consts::TAU * 20.0);
+    let alpha = rc / (rc + 1.0 / RATE as f32);
+    let mut prev_in = 0.0f32;
+    let mut prev_out = 0.0f32;
+    for s in buf.iter_mut() {
+        let out = alpha * (prev_out + *s - prev_in);
+        prev_in = *s;
+        prev_out = out;
+        *s = out;
     }
 }
