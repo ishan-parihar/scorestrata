@@ -276,6 +276,8 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
             "scorestrata_mcp::tools::get_arrangement_templates".to_string(),
             "scorestrata_mcp::tools::get_production_playbook".to_string(),
             "scorestrata_mcp::resources::production_playbook_for".to_string(),
+            "scorestrata-cli arrangement plan".to_string(),
+            "scorestrata-cli audit".to_string(),
             "scorestrata_mcp::tools::set_layer_register".to_string(),
             "scorestrata_mcp::tools::repeat_pattern_in_segment".to_string(),
             "scorestrata_mcp::tools::write_automation".to_string(),

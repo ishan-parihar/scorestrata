@@ -81,6 +81,16 @@ enum Commands {
         /// Project path
         path: String,
     },
+    /// Arrangement planning (show the genre-aware section layout)
+    Arrangement {
+        #[command(subcommand)]
+        action: ArrangementAction,
+    },
+    /// Audit — spectral gate of the rendered master (alias of analyze)
+    Audit {
+        /// Project path
+        path: String,
+    },
     /// Layered timeline view (sections × layers × octave registers)
     Timeline {
         /// Project path
@@ -358,6 +368,16 @@ enum TemplateAction {
     },
 }
 
+/// §19.1 — arrangement planning actions.
+#[derive(Subcommand)]
+enum ArrangementAction {
+    /// Show the genre-aware planned section layout (from the brief config)
+    Plan {
+        /// Project path
+        path: String,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -373,6 +393,10 @@ fn main() -> Result<()> {
             segment,
         } => handle_render(&path, &mode, segment.as_deref())?,
         Commands::Analyze { path } => handle_analyze(&path)?,
+        Commands::Arrangement { action } => match action {
+            ArrangementAction::Plan { path } => handle_arrangement_plan(&path)?,
+        },
+        Commands::Audit { path } => handle_analyze(&path)?,
         Commands::Timeline {
             path,
             segment,
@@ -1294,6 +1318,50 @@ fn handle_demo(dir: &str) -> Result<()> {
 /// (peak/RMS/DC/clipping, centroid, rolloff, aliasing proxy, band energies)
 /// and, when a genre fingerprint exists, the genre deviation. Writes a text
 /// log plus spectrogram/waveform PNGs into `<project>/render/audit/`.
+/// §19.1 — show the genre-aware planned section layout for a project.
+///
+/// Runs the same `plan_project` the planner uses, so a producer (human or
+/// agent) sees the section roles, bar counts, and layers the config implies
+/// before writing any notes.
+fn handle_arrangement_plan(path: &str) -> Result<()> {
+    println!("{}", format!("Arrangement plan: {path}").cyan());
+    let project_path = Path::new(path);
+    let project = scorestrata_storage::bundle::load_project(project_path)
+        .context("Failed to load project — run `ss new <name>` first")?;
+    let plan = scorestrata_compiler::plan::plan_project(&project.config);
+
+    println!(
+        "  {} · {} BPM · {} · {} bars total · {} segment(s)",
+        project.config.genre.yellow(),
+        project.config.bpm,
+        project.config.key,
+        plan.arrangement.total_bars,
+        plan.arrangement.segments.len()
+    );
+    for segment in &plan.arrangement.segments {
+        let layer_names: Vec<&str> = segment.layers.iter().map(|l| l.name.as_str()).collect();
+        println!(
+            "  {:>6} bar {:>3}  {:8}  {}",
+            format!("bar {}", segment.start_bar),
+            segment.bars,
+            format!("{:?}", segment.role).replace("SegmentRole::", ""),
+            layer_names.join(" + ")
+        );
+    }
+    println!(
+        "  Patterns: {}",
+        plan.patterns
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "  Next: `ss compile <path>`, `ss timeline <path>`, or follow the genre playbook (ss tool get_production_playbook)"
+    );
+    Ok(())
+}
+
 fn handle_analyze(path: &str) -> Result<()> {
     use scorestrata_audio::audit::write_audit_files;
     use scorestrata_audio::wav::read_wav_file;
@@ -2533,6 +2601,26 @@ mod tests {
         match cli.command {
             Commands::Analyze { path } => assert_eq!(path, "my_song"),
             _ => panic!("expected Commands::Analyze"),
+        }
+    }
+
+    #[test]
+    fn parse_arrangement_plan_command() {
+        let cli = Cli::try_parse_from(["ss", "arrangement", "plan", "my_song"]).unwrap();
+        match cli.command {
+            Commands::Arrangement { action } => match action {
+                ArrangementAction::Plan { path } => assert_eq!(path, "my_song"),
+            },
+            _ => panic!("expected Commands::Arrangement"),
+        }
+    }
+
+    #[test]
+    fn parse_audit_command() {
+        let cli = Cli::try_parse_from(["ss", "audit", "my_song"]).unwrap();
+        match cli.command {
+            Commands::Audit { path } => assert_eq!(path, "my_song"),
+            _ => panic!("expected Commands::Audit"),
         }
     }
 
