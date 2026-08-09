@@ -754,6 +754,9 @@ pub fn waveform_for_instrument(instrument: &str) -> Waveform {
         "bass" => Waveform::Saw,
         "lead" | "synth" | "pluck" => Waveform::Square,
         "pad" | "strings" | "keys" => Waveform::Triangle,
+        "guitar" | "distorted_guitar" => Waveform::Saw,
+        "bell" => Waveform::Sine,
+        "brass" => Waveform::Saw,
         "drums" | "percussion" => Waveform::Sine,
         _ => Waveform::Saw,
     }
@@ -765,15 +768,27 @@ fn instrument_family(instrument: &str) -> &str {
     let lower = instrument.to_lowercase();
     if lower.contains("drum") || lower.contains("perc") || lower.contains("sampler") {
         "drums"
-    } else if lower.contains("bass") {
+    } else if lower.contains("bass") || lower.contains("sub") {
         "bass"
+    } else if lower.contains("guitar") || lower.contains("riff") {
+        "guitar"
+    } else if lower.contains("bell") {
+        "bell"
+    } else if lower.contains("brass") || lower.contains("horn") {
+        "brass"
     } else if lower.contains("lead")
         || lower.contains("pluck")
         || lower.contains("arp")
-        || lower.contains("bell")
+        || lower.contains("vocal")
+        || lower.contains("flute")
     {
         "lead"
-    } else if lower.contains("pad") || lower.contains("string") || lower.contains("key") {
+    } else if lower.contains("pad")
+        || lower.contains("string")
+        || lower.contains("key")
+        || lower.contains("choir")
+        || lower.contains("organ")
+    {
         "pad"
     } else {
         "synth"
@@ -786,11 +801,15 @@ pub fn is_percussion_instrument(instrument: &str) -> bool {
     instrument_family(instrument) == "drums"
 }
 
-/// Synth parameters for a layer instrument (per-family timbre).
+/// Production-grade per-family voice timbres.
 ///
-/// These are the timbres the first listen test was missing: bass gets a
-/// driving filtered saw, lead a plucky square, pad a slow-attack triangle,
-/// and percussion its own short body (drums bypass the pitched oscillator).
+/// Each family is a **layered** voice now: a detuned second oscillator
+/// (the classic "thick" spread), a sine sub-oscillator for weight, a noise
+/// blend for air/texture, a drive stage for harmonic richness, a filter
+/// envelope for the "wow", and a vibrato for life. The values encode the
+/// first-listen learnings: bass is a driven detuned saw with sub, lead is
+/// a detuned square with a cutoff sweep and vibrato, pads are slow-attack
+/// detuned triangles with air, guitars are heavily driven saws.
 #[must_use]
 pub fn voice_params_for_instrument(instrument: &str) -> SynthParams {
     match instrument_family(instrument) {
@@ -802,15 +821,71 @@ pub fn voice_params_for_instrument(instrument: &str) -> SynthParams {
             decay: 0.1,
             sustain: 0.2,
             release: 0.05,
+            ..Default::default()
         },
         "bass" => SynthParams {
             waveform: Waveform::Saw,
-            filter_cutoff: 0.4,
+            filter_cutoff: 0.42,
             filter_resonance: 0.3,
             attack: 0.01,
-            decay: 0.1,
+            decay: 0.12,
             sustain: 0.8,
             release: 0.15,
+            // Detuned saw pair + a sine sub an octave down: the "fat"
+            // bass sound (weight without mud, presence without buzz).
+            osc2_mix: 0.55,
+            detune_cents: 9.0,
+            sub_mix: 0.6,
+            drive: 0.28,
+            filter_env_amount: 0.35,
+            filter_env_decay: 0.09,
+            ..Default::default()
+        },
+        "guitar" => SynthParams {
+            waveform: Waveform::Saw,
+            filter_cutoff: 0.5,
+            filter_resonance: 0.3,
+            attack: 0.003,
+            decay: 0.1,
+            sustain: 0.55,
+            release: 0.12,
+            // Heavy drive + noise fizz = the distorted-guitar chug;
+            // the filter envelope adds the pick "snarl" on each note.
+            osc2_mix: 0.45,
+            detune_cents: 6.0,
+            noise_mix: 0.12,
+            drive: 0.85,
+            filter_env_amount: 0.45,
+            filter_env_decay: 0.06,
+            ..Default::default()
+        },
+        "bell" => SynthParams {
+            waveform: Waveform::Sine,
+            filter_cutoff: 0.8,
+            filter_resonance: 0.15,
+            attack: 0.002,
+            decay: 0.35,
+            sustain: 0.0,
+            release: 0.25,
+            // Beating detuned sine pair = the shimmer of struck metal.
+            osc2_mix: 0.7,
+            detune_cents: 5.0,
+            ..Default::default()
+        },
+        "brass" => SynthParams {
+            waveform: Waveform::Saw,
+            filter_cutoff: 0.5,
+            filter_resonance: 0.25,
+            attack: 0.03,
+            decay: 0.15,
+            sustain: 0.7,
+            release: 0.2,
+            osc2_mix: 0.5,
+            detune_cents: 7.0,
+            drive: 0.4,
+            filter_env_amount: 0.5,
+            filter_env_decay: 0.12,
+            ..Default::default()
         },
         "lead" => SynthParams {
             waveform: Waveform::Square,
@@ -820,15 +895,33 @@ pub fn voice_params_for_instrument(instrument: &str) -> SynthParams {
             decay: 0.08,
             sustain: 0.6,
             release: 0.15,
+            osc2_mix: 0.6,
+            detune_cents: 7.0,
+            drive: 0.25,
+            filter_env_amount: 0.4,
+            filter_env_decay: 0.1,
+            vibrato_rate_hz: 5.0,
+            vibrato_depth: 4.0,
+            ..Default::default()
         },
         "pad" => SynthParams {
             waveform: Waveform::Triangle,
             filter_cutoff: 0.35,
             filter_resonance: 0.2,
-            attack: 0.4,
-            decay: 0.2,
+            attack: 0.6,
+            decay: 0.25,
             sustain: 0.8,
-            release: 0.5,
+            release: 0.8,
+            // Wide detuned pair + a little noise air = the "breathing" pad.
+            osc2_mix: 0.75,
+            detune_cents: 10.0,
+            noise_mix: 0.06,
+            drive: 0.12,
+            filter_env_amount: 0.3,
+            filter_env_decay: 0.6,
+            vibrato_rate_hz: 0.4,
+            vibrato_depth: 3.0,
+            ..Default::default()
         },
         _ => SynthParams {
             waveform: Waveform::Saw,
@@ -838,6 +931,12 @@ pub fn voice_params_for_instrument(instrument: &str) -> SynthParams {
             decay: 0.1,
             sustain: 0.7,
             release: 0.2,
+            osc2_mix: 0.5,
+            detune_cents: 8.0,
+            drive: 0.2,
+            filter_env_amount: 0.35,
+            filter_env_decay: 0.12,
+            ..Default::default()
         },
     }
 }
