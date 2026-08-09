@@ -299,6 +299,10 @@ pub fn bass_pattern(key: &str) -> Pattern {
 /// the closed loop (brief → config → 8-bar loop → compile → validate →
 /// patch → score improvement).
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "MVAS fixture spells out every layer's full literal so the closed loop is inspectable"
+)]
 pub fn eight_bar_loop() -> Project {
     let drums = drum_pattern_four_on_floor();
     let bass = bass_pattern("C minor");
