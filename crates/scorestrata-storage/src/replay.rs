@@ -153,7 +153,7 @@ impl ReplayEngine {
         let bisected = (lo < entries.len() && is_failure(&entries[lo])).then(|| entries[lo].seq);
         // Cross-check with the linear scan; never let bisect win on a
         // non-monotone input where it could skip the true first failure.
-        let linear = ReplayEngine::replay_until_failure(entries, is_failure);
+        let linear = Self::replay_until_failure(entries, is_failure);
         linear.or(bisected)
     }
 
@@ -214,10 +214,8 @@ impl ReplayEngine {
 
     /// Reconstruct the event stream a command produced (§9.4 event
     /// reconstruction) — the flattened, command-tagged outcomes.
-    #[must_use]
-    pub fn reconstruct_events<'a>(
-        entries: &'a [JournalEntry],
-    ) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
+    #[must_use = "consuming the reconstructed event stream is required for replay"]
+    pub fn reconstruct_events(entries: &[JournalEntry]) -> impl Iterator<Item = (&str, &str)> + '_ {
         entries.iter().flat_map(|e| {
             e.events
                 .iter()

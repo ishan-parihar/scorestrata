@@ -92,6 +92,10 @@ const GENRE_LOUDNESS_TARGETS: &[(&str, f32)] = &[
 /// from `GenreProfile::new()` + overrides — this keeps the curated spec
 /// values visible at a glance and prevents accidental drift.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Curated genre profile table is intentionally flat and literal for drift-free review"
+)]
 pub fn default_genre_profiles() -> Vec<GenreProfile> {
     vec![
         GenreProfile {

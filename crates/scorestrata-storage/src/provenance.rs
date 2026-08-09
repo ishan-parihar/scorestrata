@@ -120,7 +120,7 @@ impl ProvenanceManifest {
     /// A manifest is "complete" when every non-optional reproducibility input
     /// has been recorded. `seed` is optional by design (unseeded projects).
     #[must_use]
-    pub fn is_complete(&self) -> bool {
+    pub const fn is_complete(&self) -> bool {
         !self.project_id.is_empty()
             && !self.brief_hash.is_empty()
             && !self.config_hash.is_empty()

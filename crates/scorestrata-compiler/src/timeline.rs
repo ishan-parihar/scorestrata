@@ -120,6 +120,10 @@ impl TimelineIR {
     /// conversion sites map `layer_id` → layer name and build
     /// `RenderAutomation` from the result.
     #[must_use]
+    #[expect(
+        clippy::type_complexity,
+        reason = "CC lane tuple (layer, controller, points) is consumed directly by the audio renderer"
+    )]
     pub fn control_change_lanes(&self) -> Vec<(LayerId, u8, Vec<(u64, f32)>)> {
         let mut lanes: Vec<(LayerId, u8, Vec<(u64, f32)>)> = Vec::new();
         for e in &self.events {

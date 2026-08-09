@@ -124,13 +124,13 @@ impl MetricLineage {
 
     /// Total samples recorded.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.samples.len()
     }
 
     /// Whether the lineage is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
 }
@@ -218,6 +218,7 @@ mod tests {
     }
 
     fn scorecard(metrics: Vec<MetricSample>) -> Scorecard {
+        #[expect(clippy::cast_precision_loss, reason = "Test metric count is tiny")]
         let overall = metrics.iter().map(|m| m.value).sum::<f32>() / metrics.len() as f32;
         Scorecard {
             id: ScorecardId::new(),
@@ -235,9 +236,15 @@ mod tests {
         lineage.record(metric("harmony.scale_compliance", 0.80), 2, Some("cmd_2"));
         lineage.record(metric("harmony.scale_compliance", 0.70), 2, Some("cmd_3"));
         assert_eq!(lineage.len(), 3);
-        assert!((lineage.samples[1].delta.unwrap() - 0.30).abs() < f32::EPSILON); // improved
-        assert!((lineage.samples[2].delta.unwrap() - (-0.10)).abs() < f32::EPSILON); // regressed
-        assert!((lineage.total_delta().unwrap() - 0.20).abs() < f32::EPSILON);
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let delta1 = lineage.samples[1].delta.unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let delta2 = lineage.samples[2].delta.unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let total_delta = lineage.total_delta().unwrap();
+        assert!((delta1 - 0.30).abs() < f32::EPSILON); // improved
+        assert!((delta2 - (-0.10)).abs() < f32::EPSILON); // regressed
+        assert!((total_delta - 0.20).abs() < f32::EPSILON);
         assert_eq!(lineage.latest_value(), Some(0.70));
     }
 
@@ -250,7 +257,9 @@ mod tests {
         assert_eq!(lineage.regression_count(), 1);
         assert_eq!(lineage.improvement_count(), 1);
         assert!(lineage.worst_regression().is_some());
-        assert!((lineage.worst_regression().unwrap() - (-0.05)).abs() < f32::EPSILON);
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let worst = lineage.worst_regression().unwrap();
+        assert!((worst - (-0.05)).abs() < f32::EPSILON);
         assert!(lineage.samples[1].is_improvement());
         assert!(lineage.samples[2].is_regression());
     }

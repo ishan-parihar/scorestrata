@@ -993,6 +993,10 @@ impl AgentKernel {
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "Kernel loop tests assert diagnosis/metric presence with expect"
+)]
 mod tests {
     use super::*;
 
@@ -1317,7 +1321,7 @@ mod tests {
             evidence_uri: None,
         };
         assert!(
-            kernel.level_task_complete(&[diag.clone()]),
+            kernel.level_task_complete(std::slice::from_ref(&diag)),
             "target + gates completes L3"
         );
         kernel.hard_gates_passing = false;
@@ -1362,7 +1366,7 @@ mod tests {
 
         // Iteration 1: L0 orientation completes after the first pass.
         let result = kernel
-            .run_iteration(&[hard.clone()], &templates, &metrics)
+            .run_iteration(std::slice::from_ref(&hard), &templates, &metrics)
             .expect("iteration runs");
         assert!(result.improved);
         assert_eq!(
@@ -1376,7 +1380,7 @@ mod tests {
         // (`iteration.is_multiple_of(2)`) would have advanced to L2.
         for _ in 0..2 {
             let result = kernel
-                .run_iteration(&[hard.clone()], &templates, &metrics)
+                .run_iteration(std::slice::from_ref(&hard), &templates, &metrics)
                 .expect("iteration runs");
             assert!(result.improved);
         }
@@ -1498,7 +1502,7 @@ mod tests {
             ("true_peak_dbtp".to_string(), -3.0),
         ];
         let result = kernel
-            .run_iteration(&[diag.clone()], &templates, &failing)
+            .run_iteration(std::slice::from_ref(&diag), &templates, &failing)
             .expect("iteration runs");
         assert!(result.improved);
         assert!(

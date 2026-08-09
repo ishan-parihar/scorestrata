@@ -76,6 +76,10 @@ impl RenderManifest {
     /// reproducibility inputs (snapshot, command, versions, seed, assets) are
     /// supplied by the caller so the manifest can be verified later (§17.2).
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Manifest construction takes every §17.2 reproducibility input; grouping into a struct would obscure the wire contract"
+    )]
     pub fn from_render(
         artifact_id: &str,
         artifact_type: &str,
@@ -334,10 +338,10 @@ mod tests {
         // The declared checksum must match the actual bytes.
         let bytes = b"RIFF....WAV data".to_vec();
         let real_sha = content_hash(&bytes);
-        manifest.sha256 = real_sha.clone();
+        manifest.sha256 = real_sha;
         assert!(manifest.verify_artifact(&bytes));
         // Tampered bytes must fail verification.
-        let mut tampered = bytes.clone();
+        let mut tampered = bytes;
         tampered[0] ^= 0xFF;
         assert!(!manifest.verify_artifact(&tampered));
     }
@@ -407,6 +411,7 @@ mod tests {
         let m = complete_manifest();
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let json = serde_json::to_value(&m).unwrap();
+        #[expect(clippy::expect_used, reason = "Test assertions")]
         let obj = json.as_object().expect("manifest serializes to an object");
         for field in [
             "artifact_id",

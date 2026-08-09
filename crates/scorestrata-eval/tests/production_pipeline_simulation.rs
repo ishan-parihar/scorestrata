@@ -16,19 +16,18 @@
 //! 2. **Pipeline shape** (`pipeline_produced_track_compiles_renders_and_views`):
 //!    a fully-produced project (template sections, registers, repeated
 //!    patterns, automation lanes, per-layer FX) compiles to a timeline that
-//!    carries ControlChange lanes, renders to audio with a Level-4
+//!    carries `ControlChange` lanes, renders to audio with a Level-4
 //!    analysis, passes the symbolic gates, and renders a layered timeline
-//!    view — the whole DoD loop.
+//!    view — the whole `DoD` loop.
 //!
 //! This wires the real crates together — domain, planner, compiler, audio
 //! renderer, validator, MCP tools, resources — so a regression in any plane
 //! fails the simulation.
 
 #![expect(
-    clippy::unwrap_used,
     clippy::expect_used,
-    clippy::assertions_on_constants,
-    reason = "Integration test asserts the full pipeline explicitly"
+    clippy::too_many_lines,
+    reason = "Integration test asserts the full pipeline explicitly; helper fns are long by design"
 )]
 
 use scorestrata_core::domain::{Automation, AutomationParam, AutomationPoint, Register};
@@ -88,7 +87,7 @@ fn pipeline_g_tools_report_real_receipts() {
         project_id: project.id.to_string(),
         segment_id: seg0.clone(),
         layer_id: layer1.clone(),
-        pattern_id: first_pattern.clone(),
+        pattern_id: first_pattern,
         count: 4,
         step_ticks: 480 * 4,
         transpose_step: 12,
@@ -147,8 +146,8 @@ fn pipeline_g_tools_report_real_receipts() {
     };
     let receipt = set_track_fx(&SetTrackFxParams {
         project_id: project.id.to_string(),
-        segment_id: seg0.clone(),
-        layer_id: layer1.clone(),
+        segment_id: seg0,
+        layer_id: layer1,
         fx: serde_json::to_value(&fx).unwrap_or_default(),
         project: Some(payload.clone()),
     });
@@ -181,7 +180,7 @@ fn pipeline_g_tools_report_real_receipts() {
     // G1 — layered timeline view (the agent's arrange view).
     let receipt = get_timeline_view(&GetTimelineViewParams {
         project_id: project.id.to_string(),
-        project: Some(payload.clone()),
+        project: Some(payload),
     });
     assert!(
         matches!(receipt.status, ToolStatus::Succeeded),
@@ -195,7 +194,7 @@ fn pipeline_g_tools_report_real_receipts() {
     );
 }
 
-/// The DoD loop: a fully-produced track — template sections, register
+/// The `DoD` loop: a fully-produced track — template sections, register
 /// discipline, repeated patterns, automation lanes, per-layer FX — compiles
 /// to a ControlChange-carrying timeline, renders with a Level-4 analysis,
 /// and renders a layered timeline view.
@@ -456,7 +455,7 @@ fn pipeline_mix_preset_moves_render_toward_reference_profile() {
     // moves the spectrum meaningfully rather than leaving it untouched.
     let reference = scorestrata_core::domain::SpectralReference {
         track_name: format!("{genre}_reference"),
-        genre: genre.clone(),
+        genre,
         band_energy_expected: preset_audit.band_shares(),
         centroid_expected_hz: preset_audit.spectral_centroid_hz,
         aliasing_max: preset_audit.aliasing_ratio,
@@ -501,7 +500,7 @@ fn pipeline_register_discipline_flags_escaped_notes() {
         .iter()
         .map(|pi| pi.pattern_id)
         .collect();
-    drop(seg0);
+    let _ = seg0;
 
     // Force the escape unconditionally: push a C6 note into a referenced
     // bass pattern so the assertion never depends on fixture note content.
@@ -519,18 +518,17 @@ fn pipeline_register_discipline_flags_escaped_notes() {
     }
 
     let diags = scorestrata_validator::register_check::check_layer_registers(&project);
-    let hits: Vec<_> = diags
+    let flagged = diags
         .iter()
-        .filter(|d| d.code == "LAYER_NOTE_OUTSIDE_REGISTER")
-        .collect();
+        .any(|d| d.code == "LAYER_NOTE_OUTSIDE_REGISTER");
     assert!(
-        !hits.is_empty(),
+        flagged,
         "register escape is flagged (layer {bass_layer_id}): {diags:?}"
     );
 
     // And a compliant track passes clean.
     let mut clean = scorestrata_testkit::melodic_techno_project();
-    for layer in clean.arrangement.segments[0].layers.iter_mut() {
+    for layer in &mut clean.arrangement.segments[0].layers {
         layer.register = Some(Register::new(1, 7));
     }
     let clean_diags = scorestrata_validator::register_check::check_layer_registers(&clean);

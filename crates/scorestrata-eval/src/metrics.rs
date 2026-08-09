@@ -330,7 +330,7 @@ mod tests {
         good.render_determinism = 1.0;
         let good_score = good.health_score();
 
-        let mut bad = good.clone();
+        let mut bad = good;
         bad.regression_rate = 0.5;
         let bad_score = bad.health_score();
 

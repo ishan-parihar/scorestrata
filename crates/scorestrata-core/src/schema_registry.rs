@@ -559,17 +559,22 @@ pub fn validate_required_fields(schema_name: &str, instance: &Value) -> Vec<Stri
 
     let mut errors = Vec::new();
     for field in required {
-        if let Some(field_name) = field.as_str() {
-            if !instance.get(field_name).is_some() {
-                errors.push(format!("missing required field '{field_name}'"));
-            }
+        if let Some(field_name) = field.as_str()
+            && instance.get(field_name).is_none()
+        {
+            errors.push(format!("missing required field '{field_name}'"));
         }
     }
     errors
 }
 
 /// Validate that an instance is a JSON object with the required fields.
-#[must_use]
+///
+/// # Errors
+///
+/// Returns `Err(Vec<String>)` with the list of missing required fields, or
+/// `Err(vec!["instance must be a JSON object"])` if the instance is not an
+/// object.
 pub fn validate_instance(schema_name: &str, instance: &Value) -> Result<(), Vec<String>> {
     if !instance.is_object() {
         return Err(vec!["instance must be a JSON object".to_string()]);
@@ -662,6 +667,7 @@ mod tests {
         });
         let err = validate_instance("ProjectConfig", &config);
         assert!(err.is_err());
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let errors = err.unwrap_err();
         assert!(errors.iter().any(|e| e.contains("genre")));
     }
@@ -676,7 +682,9 @@ mod tests {
     fn unknown_schema_reports_error() {
         let err = validate_instance("NoSuchSchema", &json!({}));
         assert!(err.is_err());
-        assert!(err.unwrap_err()[0].contains("unknown schema"));
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let errors = err.unwrap_err();
+        assert!(errors[0].contains("unknown schema"));
     }
 
     #[test]

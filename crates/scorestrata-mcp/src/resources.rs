@@ -5,6 +5,16 @@
 //!
 //! Implements architecture spec §10.3 (system resources) and §10.4
 //! (project resources and engineering resources).
+//!
+//! Resource renderers are long formatting functions converting domain types
+//! to inspectable text, so the pedantic size/doc/cast lints are expected.
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::too_long_first_doc_paragraph,
+    clippy::too_many_lines,
+    reason = "Resource renderers are long formatting functions with bounded wire-type casts"
+)]
 
 use scorestrata_core::error::Severity;
 use serde::{Deserialize, Serialize};
@@ -143,7 +153,7 @@ pub struct PolicyProfileView {
 }
 
 impl PolicyProfileView {
-    /// Create from a core PolicyProfile.
+    /// Create from a core `PolicyProfile`.
     #[must_use]
     pub fn from_policy(project_id: &str, policy: &scorestrata_core::policy::PolicyProfile) -> Self {
         Self {
@@ -1591,7 +1601,10 @@ pub fn arrangement_templates_resource() -> ArrangementTemplates {
     let templates: Vec<ArrangementTemplate> =
         genres.iter().map(|g| arrangement_template_for(g)).collect();
     ArrangementTemplates {
-        genres: genres.iter().map(|g| g.to_string()).collect(),
+        genres: genres
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect(),
         templates,
         default: arrangement_template_for("default"),
     }
@@ -1607,7 +1620,7 @@ pub fn build_timeline_view(project: &scorestrata_core::domain::Project) -> Timel
     use scorestrata_compiler::timeline::EventKind;
 
     const MAX_NOTES_PER_LAYER: usize = 24;
-    let ppq = scorestrata_core::domain::PPQ as u64;
+    let ppq = u64::from(scorestrata_core::domain::PPQ);
     let ts_num = u64::from(project.arrangement.time_signature.numerator);
     let ticks_per_bar = ppq * ts_num;
 

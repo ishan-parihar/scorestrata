@@ -94,6 +94,7 @@ fn valid_arrangement() -> Arrangement {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "Test assertions")]
 fn config_serializes_and_validates_against_schema() {
     let config = valid_config();
     let value = serde_json::to_value(&config).expect("serialize config");
@@ -101,6 +102,7 @@ fn config_serializes_and_validates_against_schema() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "Test assertions")]
 fn brief_serializes_and_validates_against_schema() {
     let brief = valid_brief();
     let value = serde_json::to_value(&brief).expect("serialize brief");
@@ -108,6 +110,7 @@ fn brief_serializes_and_validates_against_schema() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "Test assertions")]
 fn note_serializes_and_validates_against_schema() {
     let note = valid_note();
     let value = serde_json::to_value(&note).expect("serialize note");
@@ -115,6 +118,7 @@ fn note_serializes_and_validates_against_schema() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "Test assertions")]
 fn pattern_serializes_and_validates_against_schema() {
     let pattern = valid_pattern();
     let value = serde_json::to_value(&pattern).expect("serialize pattern");
@@ -122,6 +126,7 @@ fn pattern_serializes_and_validates_against_schema() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "Test assertions")]
 fn segment_serializes_and_validates_against_schema() {
     let segment = valid_segment();
     let value = serde_json::to_value(&segment).expect("serialize segment");
@@ -129,6 +134,7 @@ fn segment_serializes_and_validates_against_schema() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "Test assertions")]
 fn arrangement_serializes_with_valid_segments() {
     let arrangement = valid_arrangement();
     let value = serde_json::to_value(&arrangement).expect("serialize arrangement");
@@ -140,6 +146,7 @@ fn arrangement_serializes_with_valid_segments() {
 }
 
 #[test]
+#[expect(clippy::expect_used, reason = "Test assertions")]
 fn config_with_all_fields_round_trips() {
     let config = valid_config();
     let json = serde_json::to_string(&config).expect("serialize");
@@ -165,7 +172,7 @@ fn missing_required_field_in_config_fails() {
 fn all_registry_schemas_have_unique_names() {
     let mut names: Vec<&str> = crate::schema_registry::list_schema_names();
     let original_len = names.len();
-    names.sort();
+    names.sort_unstable();
     names.dedup();
     assert_eq!(names.len(), original_len, "schema names must be unique");
 }

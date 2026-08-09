@@ -14,6 +14,16 @@
 //! - **Reverb** — Schroeder–Moorer (4 comb + 2 all-pass), deterministic.
 //! - **Delay** — ping-pong delay with feedback + low-pass dampening.
 
+// FX DSP intentionally casts sample-rate integers to f32 for coefficient
+// math and f32 delay indices to usize; both are bounded by buffer sizes.
+#![expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::needless_range_loop,
+    reason = "FX DSP uses bounded sample-index casts; delay lengths are prime-based and bounded"
+)]
+
 use scorestrata_core::domain::{CompressorCfg, FreqBand, FxChain, SendLevels};
 
 /// Apply a full insert [`FxChain`] to a mono buffer in place.
@@ -22,10 +32,10 @@ use scorestrata_core::domain::{CompressorCfg, FreqBand, FxChain, SendLevels};
 /// by [`apply_sidechain`] separately (the renderer drives it with the kick
 /// layer's envelope, which is a cross-layer dependency).
 pub fn apply_fx_chain(buffer: &mut [f32], fx: &FxChain, sample_rate: u32) {
-    if let Some(cutoff) = fx.high_pass_hz {
-        if cutoff > 0.0 {
-            apply_high_pass(buffer, cutoff, sample_rate);
-        }
+    if let Some(cutoff) = fx.high_pass_hz
+        && cutoff > 0.0
+    {
+        apply_high_pass(buffer, cutoff, sample_rate);
     }
     for band in &fx.eq {
         apply_peaking_eq(buffer, *band, sample_rate);
@@ -46,9 +56,9 @@ pub fn apply_high_pass(buffer: &mut [f32], cutoff_hz: f32, sample_rate: u32) {
     let cos_w0 = w0.cos();
     let alpha = w0.sin() / (2.0 * q);
 
-    let b0 = (1.0 + cos_w0) / 2.0;
+    let b0 = f32::midpoint(1.0, cos_w0);
     let b1 = -(1.0 + cos_w0);
-    let b2 = (1.0 + cos_w0) / 2.0;
+    let b2 = f32::midpoint(1.0, cos_w0);
     let a0 = 1.0 + alpha;
     let a1 = -2.0 * cos_w0;
     let a2 = 1.0 - alpha;
@@ -60,7 +70,7 @@ pub fn apply_high_pass(buffer: &mut [f32], cutoff_hz: f32, sample_rate: u32) {
     let mut y2 = 0.0f32;
     for sample in buffer {
         let x = *sample;
-        let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        let y = a2.mul_add(-y2, a1.mul_add(-y1, b2.mul_add(x2, b1.mul_add(x1, b0 * x))));
         x2 = x1;
         x1 = x;
         y2 = y1;
@@ -94,7 +104,7 @@ pub fn apply_peaking_eq(buffer: &mut [f32], band: FreqBand, sample_rate: u32) {
     let mut y2 = 0.0f32;
     for sample in buffer {
         let x = *sample;
-        let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        let y = a2.mul_add(-y2, a1.mul_add(-y1, b2.mul_add(x2, b1.mul_add(x1, b0 * x))));
         x2 = x1;
         x1 = x;
         y2 = y1;
@@ -247,11 +257,11 @@ pub fn apply_delay(buffer: &[f32], sample_rate: u32, time_ms: f32, feedback: f32
         wet_l[i] = d_l;
         wet_r[i] = d_r;
         // Ping-pong: input feeds the opposite channel, feedback crosses over.
-        lp += damp * (x + feedback * d_r - lp);
+        lp += damp * (feedback.mul_add(d_r, x) - lp);
         line_l[idx] = lp;
         let lp2 = {
             let mut lp2 = 0.0f32;
-            lp2 += damp * (x + feedback * d_l - lp2);
+            lp2 += damp * (feedback.mul_add(d_l, x) - lp2);
             lp2
         };
         line_r[idx] = lp2;
@@ -272,13 +282,13 @@ pub fn apply_sends(buffer: &mut [f32], sends: &SendLevels, sample_rate: u32) {
     if sends.reverb > 0.001 {
         let wet = apply_reverb(buffer, sample_rate);
         for (b, w) in buffer.iter_mut().zip(&wet) {
-            *b += *w * sends.reverb.clamp(0.0, 1.0);
+            *b = (*w).mul_add(sends.reverb.clamp(0.0, 1.0), *b);
         }
     }
     if sends.delay > 0.001 {
         let wet = apply_delay(buffer, sample_rate, 375.0, 0.4);
         for (b, w) in buffer.iter_mut().zip(&wet) {
-            *b += *w * sends.delay.clamp(0.0, 1.0);
+            *b = (*w).mul_add(sends.delay.clamp(0.0, 1.0), *b);
         }
     }
 }
@@ -359,8 +369,7 @@ mod tests {
         let after = buf[sr as usize / 4];
         assert!(
             after.abs() < before.abs() * 0.8,
-            "compressor tames steady-state amplitude: {} vs {before}",
-            after
+            "compressor tames steady-state amplitude: {after} vs {before}"
         );
     }
 

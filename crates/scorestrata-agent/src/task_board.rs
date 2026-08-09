@@ -105,7 +105,7 @@ pub struct TaskBoard {
 }
 
 /// An agent role with its capabilities and restrictions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentRole {
     /// Role name (e.g. `composer`, `critic`, `mix_engineer`).
     pub name: String,
@@ -117,18 +117,6 @@ pub struct AgentRole {
     pub can_escalate: bool,
     /// Allowed tool categories.
     pub allowed_tool_categories: Vec<String>,
-}
-
-impl Default for AgentRole {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            can_mutate: false,
-            can_finalize: false,
-            can_escalate: false,
-            allowed_tool_categories: vec![],
-        }
-    }
 }
 
 impl TaskBoard {
@@ -159,8 +147,12 @@ impl TaskBoard {
         if let Some(task) = self.tasks.get_mut(task_id) {
             task.status = TaskBoardStatus::Claimed;
             task.claimed_by = Some(agent_id.to_string());
-            task.lease_expires_at =
-                Some(chrono::Utc::now() + chrono::Duration::seconds(lease_duration_secs as i64));
+            task.lease_expires_at = Some(
+                chrono::Utc::now()
+                    + chrono::Duration::seconds(
+                        i64::try_from(lease_duration_secs).unwrap_or(i64::MAX),
+                    ),
+            );
             true
         } else {
             false
@@ -245,7 +237,7 @@ impl TaskBoard {
             .values()
             .filter(|t| t.status == TaskBoardStatus::Ready)
             .collect();
-        tasks.sort_by(|a, b| b.priority.cmp(&a.priority));
+        tasks.sort_by_key(|t| std::cmp::Reverse(t.priority));
         tasks
     }
 

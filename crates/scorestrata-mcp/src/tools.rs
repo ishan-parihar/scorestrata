@@ -3,6 +3,26 @@
 //! Every tool returns a receipt with status, score delta, evidence URIs,
 //! policy decisions, and next actions per the architecture spec §10.5.
 //!
+//! Tool handlers are deliberately large dispatch-style functions (one per
+//! wire tool) and convert between wire JSON and domain types, so the
+//! pedantic size/cast/documentation lints are expected for this module.
+#![expect(
+    clippy::assigning_clones,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::empty_line_after_doc_comments,
+    clippy::expect_used,
+    clippy::implicit_hasher,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::option_if_let_else,
+    clippy::or_fun_call,
+    clippy::too_long_first_doc_paragraph,
+    clippy::too_many_lines,
+    reason = "MCP tool handlers are large dispatch functions converting wire JSON to domain types; casts are clamped and docs reflect tool contracts"
+)]
+//!
 //! Tool categories from the architecture:
 //! - Governance tools: `get_capabilities`, `get_contracts`, `get_policy_profile`, `check_budget`
 //! - Project tools: `create_project`, `generate_config_from_brief`, `validate_config`, `approve_config`,
@@ -19,7 +39,7 @@
 //!   `isolate_layer`, `solo_segment`, `explain_metric` (real logic in [`debug_ops`])
 //! - Escalation tools: `get_failure_report`, `create_human_review_packet`
 //!   (real §12.3 logic in [`debug_ops`])
-//! - Learning tools: get_lessons, record_lesson, get_repair_templates
+//! - Learning tools: `get_lessons`, `record_lesson`, `get_repair_templates`
 //!   (real logic against [`LessonStore`](scorestrata_storage::lesson_store::LessonStore))
 //! - Engineering tools: `get_next_task`, `claim_task`, `submit_task_result`, `run_acceptance_tests`,
 //!   `get_eval_report`, `update_docs`, `create_adr`, `update_calibration_profile`
@@ -248,57 +268,57 @@ pub fn run_validation_with_project(
     // "keep loops fast" contract, and it finally honors the previously
     // ignored `scope` param. `full` (the default) keeps the level-gated
     // behavior below.
-    if let Some(scope) = scorestrata_validator::scope::ValidationScope::parse(&params.scope) {
-        if scope != scorestrata_validator::scope::ValidationScope::Full {
-            let mut diagnostics = Vec::new();
-            if matches!(
-                scope,
-                scorestrata_validator::scope::ValidationScope::Segment(_)
-            ) && !params.segment_ids.is_empty()
-            {
-                // Honor the explicitly-requested segment ids: validate only
-                // those segments instead of every segment in the project
-                // (the `Segment(default)` fallback below means "all").
-                for id in &params.segment_ids {
-                    if let Ok(segment_id) = id.parse() {
-                        diagnostics.extend(scorestrata_validator::scope::validate_symbolic(
-                            project,
-                            scorestrata_validator::scope::ValidationScope::Segment(segment_id),
-                        ));
-                    }
-                }
-            } else {
-                diagnostics = scorestrata_validator::scope::validate_symbolic(project, scope);
-            }
-            if scope == scorestrata_validator::scope::ValidationScope::Mix {
-                match render_project_to_analysis(project) {
-                    Ok(result) => {
-                        diagnostics.extend(
-                            scorestrata_validator::audio_check::generate_audio_diagnostics(
-                                &result.analysis,
-                            ),
-                        );
-                    }
-                    Err(e) => diagnostics.push(audio_render_failed_diagnostic(e)),
+    if let Some(scope) = scorestrata_validator::scope::ValidationScope::parse(&params.scope)
+        && scope != scorestrata_validator::scope::ValidationScope::Full
+    {
+        let mut diagnostics = Vec::new();
+        if matches!(
+            scope,
+            scorestrata_validator::scope::ValidationScope::Segment(_)
+        ) && !params.segment_ids.is_empty()
+        {
+            // Honor the explicitly-requested segment ids: validate only
+            // those segments instead of every segment in the project
+            // (the `Segment(default)` fallback below means "all").
+            for id in &params.segment_ids {
+                if let Ok(segment_id) = id.parse() {
+                    diagnostics.extend(scorestrata_validator::scope::validate_symbolic(
+                        project,
+                        scorestrata_validator::scope::ValidationScope::Segment(segment_id),
+                    ));
                 }
             }
-            if scope == scorestrata_validator::scope::ValidationScope::Diff {
-                // Over the wire there is no compile-cache path, so the diff
-                // scope uses the explicitly-requested segment ids as the
-                // changed set (the CLI `ss validate --scope diff` is the
-                // canonical cache-driven path). Malformed ids are dropped
-                // rather than silently coerced to the default id.
-                let changed: Vec<scorestrata_core::ids::SegmentId> = params
-                    .segment_ids
-                    .iter()
-                    .filter_map(|id| id.parse().ok())
-                    .collect();
-                diagnostics.extend(scorestrata_validator::scope::validate_diff(
-                    project, &changed,
-                ));
-            }
-            return finish_validation_receipt(params, level, diagnostics);
+        } else {
+            diagnostics = scorestrata_validator::scope::validate_symbolic(project, scope);
         }
+        if scope == scorestrata_validator::scope::ValidationScope::Mix {
+            match render_project_to_analysis(project) {
+                Ok(result) => {
+                    diagnostics.extend(
+                        scorestrata_validator::audio_check::generate_audio_diagnostics(
+                            &result.analysis,
+                        ),
+                    );
+                }
+                Err(e) => diagnostics.push(audio_render_failed_diagnostic(e)),
+            }
+        }
+        if scope == scorestrata_validator::scope::ValidationScope::Diff {
+            // Over the wire there is no compile-cache path, so the diff
+            // scope uses the explicitly-requested segment ids as the
+            // changed set (the CLI `ss validate --scope diff` is the
+            // canonical cache-driven path). Malformed ids are dropped
+            // rather than silently coerced to the default id.
+            let changed: Vec<scorestrata_core::ids::SegmentId> = params
+                .segment_ids
+                .iter()
+                .filter_map(|id| id.parse().ok())
+                .collect();
+            diagnostics.extend(scorestrata_validator::scope::validate_diff(
+                project, &changed,
+            ));
+        }
+        return finish_validation_receipt(params, level, diagnostics);
     }
 
     let mut diagnostics = collect_symbolic_diagnostics(params, &project.arrangement.segments);
@@ -889,7 +909,7 @@ pub struct HarmonizeMelodyParams {
     pub project: Option<serde_json::Value>,
 }
 
-fn default_third() -> u32 {
+const fn default_third() -> u32 {
     3
 }
 
@@ -980,16 +1000,16 @@ pub fn harmonize_melody(params: &HarmonizeMelodyParams) -> ToolReceipt {
         let original: Vec<scorestrata_core::domain::Note> = pattern.notes.clone();
         for note in &original {
             let base = i32::from(note.pitch.0);
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "Clamped to 0..=127 before casting to u8"
-            )] // Clamp the interval to a sane range so pathological values
+            // Clamp the interval to a sane range so pathological values
             // (e.g. > i32::MAX) degrade honestly instead of silently
             // substituting a magic default.
             let interval = i32::try_from(params.interval_degrees)
                 .unwrap_or(i32::MAX)
                 .clamp(1, 24);
+            #[expect(
+                clippy::cast_sign_loss,
+                reason = "Clamped to 0..=127 before casting to u8"
+            )]
             let below = (base - interval).clamp(0, 127) as u8;
             let harmony_pitch = match &scale {
                 Some(scale) => scale.quantize(&scorestrata_core::domain::MidiNote::new(below)),
@@ -1090,7 +1110,7 @@ pub struct AddDrumFillParams {
     pub project: Option<serde_json::Value>,
 }
 
-fn default_fill_steps() -> u32 {
+const fn default_fill_steps() -> u32 {
     4
 }
 
@@ -1245,7 +1265,7 @@ pub struct IncreaseSegmentDensityParams {
     pub project: Option<serde_json::Value>,
 }
 
-fn default_density_factor() -> u32 {
+const fn default_density_factor() -> u32 {
     2
 }
 
@@ -1313,7 +1333,6 @@ pub fn increase_segment_density(params: &IncreaseSegmentDensityParams) -> ToolRe
             for i in 1..=extra {
                 #[expect(
                     clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
                     reason = "Velocity reduction stays in u8 range (5 * small i)"
                 )]
                 let velocity_cut = (5 * i) as u8;
@@ -1413,7 +1432,7 @@ pub struct ReduceMaskingParams {
     pub project: Option<serde_json::Value>,
 }
 
-fn default_masking_amount() -> f32 {
+const fn default_masking_amount() -> f32 {
     0.15
 }
 
@@ -1489,7 +1508,7 @@ pub fn reduce_masking(params: &ReduceMaskingParams) -> ToolReceipt {
         for note in &mut pattern.notes {
             let overlapping = notes_snapshot.iter().any(|other| {
                 other.id != note.id
-                    && (other.pitch.0 as i16 - i16::from(note.pitch.0)).unsigned_abs() <= 7
+                    && (i16::from(other.pitch.0) - i16::from(note.pitch.0)).unsigned_abs() <= 7
                     && other.start.0.abs_diff(note.start.0) <= 48
             });
             if overlapping && note.velocity.0 > reduction {
@@ -1648,13 +1667,13 @@ pub struct SegmentPlan {
 #[must_use]
 pub fn plan_arrangement(params: &PlanArrangementParams) -> ToolReceipt {
     let total_planned: u32 = params.segments.iter().map(|s| s.bars).sum();
-    let warnings = if total_planned != params.total_bars {
+    let warnings = if total_planned == params.total_bars {
+        vec![]
+    } else {
         vec![format!(
             "Planned segments sum to {total_planned} bars but total_bars is {}",
             params.total_bars
         )]
-    } else {
-        vec![]
     };
     ToolReceipt {
         tool: "plan_arrangement".to_string(),
@@ -2003,7 +2022,6 @@ pub fn apply_motivic_variation(params: &ApplyMotivicVariationParams) -> ToolRece
                 let base = i32::from(note.pitch.0);
                 let shifted = (base + params.semitones).clamp(0, 127);
                 #[expect(
-                    clippy::cast_possible_truncation,
                     clippy::cast_sign_loss,
                     reason = "Clamped to 0..=127 before casting to u8"
                 )]
@@ -2028,8 +2046,7 @@ pub fn apply_motivic_variation(params: &ApplyMotivicVariationParams) -> ToolRece
                 tool: "apply_motivic_variation".to_string(),
                 status: ToolStatus::Failed,
                 summary: format!(
-                    "Unsupported variation '{}' (expected transpose|retrograde|syncopate)",
-                    other
+                    "Unsupported variation '{other}' (expected transpose|retrograde|syncopate)"
                 ),
                 score_delta: BTreeMap::new(),
                 evidence_uris: vec![],
@@ -3560,7 +3577,7 @@ pub struct QuantizeLayerParams {
     pub preserve_rhythm: bool,
 }
 
-fn default_one_f32() -> f32 {
+const fn default_one_f32() -> f32 {
     1.0
 }
 
@@ -3867,7 +3884,7 @@ pub struct IsolateLayerParams {
 /// Isolate a layer for solo inspection.
 ///
 /// With a project payload, produces a real [`LayerIsolation`]
-/// (scorestrata_core::debug) with the layer's location and note count.
+/// (`scorestrata_core::debug`) with the layer's location and note count.
 #[must_use]
 pub fn isolate_layer(params: &IsolateLayerParams) -> ToolReceipt {
     let Some(project_json) = &params.project else {
@@ -4180,7 +4197,7 @@ pub struct SoloSegmentParams {
 /// Solo a segment for inspection.
 ///
 /// With a project payload, produces a real [`SegmentSolo`]
-/// (scorestrata_core::debug) with the segment's structure.
+/// (`scorestrata_core::debug`) with the segment's structure.
 #[must_use]
 pub fn solo_segment(params: &SoloSegmentParams) -> ToolReceipt {
     let Some(project_json) = &params.project else {
@@ -4359,7 +4376,7 @@ pub fn explain_metric(params: &ExplainMetricParams) -> ToolReceipt {
         score_delta,
         evidence_uris: explanation.evidence_uris.clone(),
         focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
-        next_actions: explanation.suggested_actions.clone(),
+        next_actions: explanation.suggested_actions,
         cost: ToolCost {
             cpu_ms: 6,
             tool_calls: 1,
@@ -4578,12 +4595,12 @@ pub fn get_failure_report(params: &GetFailureReportParams) -> ToolReceipt {
             report
                 .top_issues
                 .first()
-                .map_or_else(|| "none".to_string(), |t| t.clone())
+                .map_or_else(|| "none".to_string(), std::clone::Clone::clone)
         ),
         score_delta,
         evidence_uris: vec![format!("project://{}/failure-report", params.project_id)],
         focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
-        next_actions: report.recommended_actions.clone(),
+        next_actions: report.recommended_actions,
         cost: ToolCost {
             cpu_ms: 4,
             tool_calls: 1,
@@ -4641,7 +4658,7 @@ impl From<&AttemptedPatchParams> for scorestrata_core::debug::AttemptedPatch {
     }
 }
 
-fn default_agent_confidence() -> f32 {
+const fn default_agent_confidence() -> f32 {
     0.5
 }
 
@@ -4773,7 +4790,7 @@ pub(crate) fn deserialize_error_receipt(
     }
 }
 
-fn default_min_confidence() -> f32 {
+const fn default_min_confidence() -> f32 {
     0.5
 }
 
@@ -5677,7 +5694,7 @@ pub fn check_budget(params: &CheckBudgetParams) -> ToolReceipt {
 /// List all registered contract schemas (§3.2).
 ///
 /// Returns the schema registry contents — every versioned, machine-readable
-/// contract (ProjectConfig, CommandReceipt, Diagnostic, etc.) that agents can
+/// contract (`ProjectConfig`, `CommandReceipt`, Diagnostic, etc.) that agents can
 /// rely on. No payload needed: the registry is a system resource.
 #[must_use]
 pub fn get_contracts() -> ToolReceipt {
@@ -5965,7 +5982,7 @@ pub fn get_project_summary(params: &GetProjectSummaryParams) -> ToolReceipt {
             score_delta: BTreeMap::new(),
             evidence_uris: vec![format!("project://{}/summary", params.project_id)],
             focus_uris: vec![],
-            next_actions: stub.next_actions.clone(),
+            next_actions: stub.next_actions,
             cost: ToolCost::default(),
             warnings: vec!["No project payload — summary is a state-only stub".to_string()],
             dry_run: false,
@@ -6212,15 +6229,15 @@ pub fn suggest_fixes(params: &SuggestFixesParams) -> ToolReceipt {
             store.get_best_for_trigger(&params.diagnostic_code, params.genre.as_deref())
         {
             lesson_sources = 1;
-            if let Some(op) = best.successful_patch.as_deref() {
-                if !fixes.iter().any(|f| f.op == op) {
-                    fixes.push(scorestrata_core::diagnostic::SuggestedPatch {
-                        op: op.to_string(),
-                        params: serde_json::json!({}),
-                        expected_delta: None,
-                        confidence: best.confidence,
-                    });
-                }
+            if let Some(op) = best.successful_patch.as_deref()
+                && !fixes.iter().any(|f| f.op == op)
+            {
+                fixes.push(scorestrata_core::diagnostic::SuggestedPatch {
+                    op: op.to_string(),
+                    params: serde_json::json!({}),
+                    expected_delta: None,
+                    confidence: best.confidence,
+                });
             }
         } else {
             warnings.push(format!(
@@ -6323,7 +6340,7 @@ pub struct GetValidationReportParams {
     pub project: Option<serde_json::Value>,
 }
 
-fn default_validation_level() -> u8 {
+const fn default_validation_level() -> u8 {
     2
 }
 
@@ -6419,7 +6436,7 @@ pub fn get_validation_report(params: &GetValidationReportParams) -> ToolReceipt 
         },
         warnings: vec![],
         dry_run: false,
-        diagnostics: report.diagnostics.clone(),
+        diagnostics: report.diagnostics,
     }
 }
 
@@ -6512,7 +6529,7 @@ pub fn get_root_causes(params: &GetRootCausesParams) -> ToolReceipt {
         score_delta,
         evidence_uris: explanation.evidence_uris.clone(),
         focus_uris: vec![format!("project://{}/validation/latest", params.project_id)],
-        next_actions: explanation.suggested_actions.clone(),
+        next_actions: explanation.suggested_actions,
         cost: ToolCost {
             cpu_ms: 6,
             tool_calls: 1,
@@ -6575,44 +6592,37 @@ pub fn get_metric_evidence(params: &GetMetricEvidenceParams) -> ToolReceipt {
     let mut warnings = Vec::new();
 
     // ── Evidence from the warehouse (§9.5) ──
-    let evidence_text = match &params.warehouse {
-        Some(json) => {
-            match serde_json::from_value::<scorestrata_storage::evidence::EvidenceWarehouse>(
-                json.clone(),
-            ) {
-                Ok(warehouse) => {
-                    let entries = warehouse.get_evidence_for_metric(&params.metric_name);
-                    let latest = entries.last().copied();
-                    score_delta.insert("evidence.entries".to_string(), entries.len().to_string());
-                    if let Some(entry) = latest {
-                        score_delta.insert(
-                            "evidence.latest_value".to_string(),
-                            format!("{:.3}", entry.metric.value),
-                        );
-                    }
-                    format!(
-                        "{} sample(s){}",
-                        entries.len(),
-                        latest.map_or_else(
-                            || String::new(),
-                            |e| format!(
-                                ", latest value {:.3} (level {} validation, confidence {:.2})",
-                                e.metric.value, e.validation_level, e.metric.confidence
-                            )
-                        )
-                    )
+    let evidence_text = if let Some(json) = &params.warehouse {
+        match serde_json::from_value::<scorestrata_storage::evidence::EvidenceWarehouse>(
+            json.clone(),
+        ) {
+            Ok(warehouse) => {
+                let entries = warehouse.get_evidence_for_metric(&params.metric_name);
+                let latest = entries.last().copied();
+                score_delta.insert("evidence.entries".to_string(), entries.len().to_string());
+                if let Some(entry) = latest {
+                    score_delta.insert(
+                        "evidence.latest_value".to_string(),
+                        format!("{:.3}", entry.metric.value),
+                    );
                 }
-                Err(e) => {
-                    warnings.push(format!("Malformed evidence warehouse payload: {e}"));
-                    "0 sample(s)".to_string()
-                }
+                format!(
+                    "{} sample(s){}",
+                    entries.len(),
+                    latest.map_or_else(String::new, |e| format!(
+                        ", latest value {:.3} (level {} validation, confidence {:.2})",
+                        e.metric.value, e.validation_level, e.metric.confidence
+                    ))
+                )
+            }
+            Err(e) => {
+                warnings.push(format!("Malformed evidence warehouse payload: {e}"));
+                "0 sample(s)".to_string()
             }
         }
-        None => {
-            warnings
-                .push("No evidence warehouse payload — evidence counts unavailable".to_string());
-            "0 sample(s)".to_string()
-        }
+    } else {
+        warnings.push("No evidence warehouse payload — evidence counts unavailable".to_string());
+        "0 sample(s)".to_string()
     };
 
     // ── Lineage trajectory from the store (§8.3, §15.1) ──
@@ -6897,7 +6907,7 @@ pub fn compare_candidates(params: &CompareCandidatesParams) -> ToolReceipt {
         diff.score_comparison.len().to_string(),
     );
     if let Some(winner) = &diff.winner {
-        score_delta.insert("diff.winner".to_string(), format!("{:?}", winner));
+        score_delta.insert("diff.winner".to_string(), format!("{winner:?}"));
     }
     let winner_desc = diff.winner.map_or_else(
         || "tie".to_string(),
@@ -7158,6 +7168,7 @@ pub fn render_config_from_project(
 ///
 /// Shared by the L4 render path and the CLI so automation reaches the audio
 /// engine identically everywhere.
+#[must_use]
 pub fn automation_lanes_from_timeline(
     timeline: &scorestrata_compiler::TimelineIR,
     layer_names: &std::collections::HashMap<String, String>,
@@ -7183,6 +7194,7 @@ pub fn automation_lanes_from_timeline(
 /// Shared by the L4 render path and the CLI so per-track FX reaches the
 /// audio engine identically everywhere. Layers with no FX and no mix
 /// override are omitted (the renderer then uses its static staging).
+#[must_use]
 pub fn render_fx_from_project(
     project: &scorestrata_core::domain::Project,
 ) -> Vec<scorestrata_audio::render::RenderFx> {
@@ -7288,14 +7300,14 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
     let timeline = match &params.segment_id {
         Some(seg_id) => scorestrata_compiler::compile_project(&project)
             .ok()
-            .and_then(|tl| {
+            .map(|tl| {
                 let events: Vec<_> = tl
                     .events
                     .into_iter()
                     .filter(|e| e.segment_id.to_string() == *seg_id)
                     .collect();
                 let total_ticks = events.iter().map(|e| e.tick.0).max().unwrap_or(0);
-                Some(scorestrata_compiler::TimelineIR {
+                scorestrata_compiler::TimelineIR {
                     project_id: tl.project_id,
                     events,
                     total_ticks,
@@ -7303,7 +7315,7 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
                     time_signature_num: tl.time_signature_num,
                     input_hash: tl.input_hash,
                     compiler_version: tl.compiler_version,
-                })
+                }
             }),
         None => scorestrata_compiler::compile_project(&project).ok(),
     };
@@ -7373,7 +7385,7 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
             if let Some(dev) = spectral_audit.genre_fingerprint_deviation {
                 score_delta.insert(
                     "audio.genre_fingerprint_deviation".to_string(),
-                    format!("{:.3}", dev),
+                    format!("{dev:.3}"),
                 );
             }
 
@@ -7417,7 +7429,7 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
                 params.asset_hashes.clone().unwrap_or_default(),
             );
             let manifest_hash = manifest.manifest_hash();
-            score_delta.insert("manifest.artifact_id".to_string(), artifact_id.clone());
+            score_delta.insert("manifest.artifact_id".to_string(), artifact_id);
             score_delta.insert("manifest.manifest_hash".to_string(), manifest_hash.clone());
             score_delta.insert(
                 "manifest.provenance".to_string(),
@@ -7427,33 +7439,27 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
                     "explicit".to_string()
                 },
             );
-            let recorded = match &params.manifest_store {
-                Some(json) => {
-                    match serde_json::from_value::<
-                        scorestrata_storage::render_manifest::RenderManifestStore,
-                    >(json.clone())
-                    {
-                        Ok(mut store) => {
-                            store.record(manifest);
-                            score_delta.insert("manifest.recorded".to_string(), "true".to_string());
-                            true
-                        }
-                        Err(_) => {
-                            warnings.push(
-                                "Manifest produced but could not be recorded — invalid manifest_store payload"
-                                    .to_string(),
-                            );
-                            false
-                        }
-                    }
-                }
-                None => {
+            let recorded = if let Some(json) = &params.manifest_store {
+                if let Ok(mut store) = serde_json::from_value::<
+                    scorestrata_storage::render_manifest::RenderManifestStore,
+                >(json.clone())
+                {
+                    store.record(manifest);
+                    score_delta.insert("manifest.recorded".to_string(), "true".to_string());
+                    true
+                } else {
                     warnings.push(
-                        "Manifest produced but not persisted — supply a manifest_store payload to record it (see get_render_manifest)"
+                        "Manifest produced but could not be recorded — invalid manifest_store payload"
                             .to_string(),
                     );
                     false
                 }
+            } else {
+                warnings.push(
+                    "Manifest produced but not persisted — supply a manifest_store payload to record it (see get_render_manifest)"
+                        .to_string(),
+                );
+                false
             };
             let mut next_actions = vec![
                 "get_render_job".to_string(),
@@ -8076,7 +8082,7 @@ pub fn render_candidate_preview(params: &RenderCandidatePreviewParams) -> ToolRe
         .insert("render.job_status".to_string(), job_status);
     enriched
         .evidence_uris
-        .push(format!("render_jobs://{}", job_id));
+        .push(format!("render_jobs://{job_id}"));
     enriched
 }
 
@@ -8154,7 +8160,7 @@ pub fn get_render_job(params: &GetRenderJobParams) -> ToolReceipt {
             params.project_id,
             job.artifact_uri
                 .as_ref()
-                .map_or_else(|| String::new(), |u| format!(" — {u}"))
+                .map_or_else(String::new, |u| format!(" — {u}"))
         ),
         score_delta,
         evidence_uris: vec![format!("render_jobs://{}", job.id)],
@@ -8270,6 +8276,11 @@ pub fn cancel_render_job(params: &CancelRenderJobParams) -> ToolReceipt {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::float_cmp,
+    clippy::unwrap_used,
+    reason = "Tests assert exact float identities and unwrap fixtures"
+)]
 mod tests {
     use super::*;
     use scorestrata_core::domain::SegmentRole;
@@ -8680,18 +8691,18 @@ mod tests {
         project.config.genre = "house".to_string();
         // L3 defect in the SECOND segment's layer (kept alive — the first
         // segment's layers are cleared below for the L2 defect).
-        if let Some(second) = project.arrangement.segments.get_mut(1) {
-            if let Some(layer) = second.layers.first_mut() {
-                layer
-                    .pattern_instances
-                    .push(scorestrata_core::domain::PatternInstance {
-                        id: scorestrata_core::ids::PatternInstanceId::new(),
-                        pattern_id: scorestrata_core::ids::PatternId::new(),
-                        start_tick: scorestrata_core::domain::Tick::new(0),
-                        transpose: 0,
-                        velocity_multiplier: 1.0,
-                    });
-            }
+        if let Some(second) = project.arrangement.segments.get_mut(1)
+            && let Some(layer) = second.layers.first_mut()
+        {
+            layer
+                .pattern_instances
+                .push(scorestrata_core::domain::PatternInstance {
+                    id: scorestrata_core::ids::PatternInstanceId::new(),
+                    pattern_id: scorestrata_core::ids::PatternId::new(),
+                    start_tick: scorestrata_core::domain::Tick::new(0),
+                    transpose: 0,
+                    velocity_multiplier: 1.0,
+                });
         }
         // L2 defect: the first segment has no layers at all.
         if let Some(segment) = project.arrangement.segments.first_mut() {
@@ -8879,7 +8890,7 @@ mod tests {
         let pattern_id = project.patterns[0].id.to_string();
         let params = WritePatternNotesParams {
             project_id: project.id.to_string(),
-            pattern_id: pattern_id.clone(),
+            pattern_id,
             notes: vec![NoteSpec {
                 pitch: 60,
                 start: 0,
@@ -8920,7 +8931,7 @@ mod tests {
         let pattern_id = project.patterns[0].id.to_string();
         let params = WritePatternStepsParams {
             project_id: project.id.to_string(),
-            pattern_id: pattern_id.clone(),
+            pattern_id,
             steps: vec![StepSpec {
                 index: 0,
                 active: true,
@@ -8941,7 +8952,7 @@ mod tests {
         plant_note(&mut project, 60, 0);
         let params = ApplyMotivicVariationParams {
             project_id: project.id.to_string(),
-            pattern_id: pattern_id.clone(),
+            pattern_id,
             variation: "transpose".to_string(),
             semitones: 3,
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
@@ -9015,9 +9026,9 @@ mod tests {
         let pattern_id = project.patterns[0].id.to_string();
         let params = PlacePatternInSegmentParams {
             project_id: project.id.to_string(),
-            segment_id: segment_id.clone(),
-            layer_id: layer_id.clone(),
-            pattern_id: pattern_id.clone(),
+            segment_id,
+            layer_id,
+            pattern_id,
             start_tick: 0,
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
@@ -9033,8 +9044,8 @@ mod tests {
         let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
         let params = SetLayerInstrumentParams {
             project_id: project.id.to_string(),
-            segment_id: segment_id.clone(),
-            layer_id: layer_id.clone(),
+            segment_id,
+            layer_id,
             instrument: "supersaw".to_string(),
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
@@ -9055,7 +9066,7 @@ mod tests {
         let segment_id = project.arrangement.segments[0].id.to_string();
         let params = SetSegmentGoalsParams {
             project_id: project.id.to_string(),
-            segment_id: segment_id.clone(),
+            segment_id,
             target_energy: 0.8,
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
@@ -9072,7 +9083,7 @@ mod tests {
         let params = SetEnergyCurveParams {
             project_id: project.id.to_string(),
             curve: vec![EnergyPointSpec {
-                segment_id: segment_id.clone(),
+                segment_id,
                 target_energy: 0.6,
             }],
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
@@ -9126,8 +9137,8 @@ mod tests {
         let layer_id = project.arrangement.segments[0].layers[0].id.to_string();
         let params = AddDrumFillParams {
             project_id: project.id.to_string(),
-            segment_id: segment_id.clone(),
-            layer_id: layer_id.clone(),
+            segment_id,
+            layer_id,
             steps: 4,
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
@@ -9143,7 +9154,7 @@ mod tests {
         let segment_id = project.arrangement.segments[0].id.to_string();
         let params = IncreaseSegmentDensityParams {
             project_id: project.id.to_string(),
-            segment_id: segment_id.clone(),
+            segment_id,
             factor: 2,
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
@@ -9638,8 +9649,8 @@ mod tests {
         let layer_id = project.arrangement.segments[0].layers[1].id.to_string(); // Bass
         let params = SetLayerRegisterParams {
             project_id: project.id.to_string(),
-            segment_id: segment_id.clone(),
-            layer_id: layer_id.clone(),
+            segment_id,
+            layer_id,
             min_octave: 1,
             max_octave: 2,
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
@@ -9670,8 +9681,8 @@ mod tests {
         let layer_id = project.arrangement.segments[0].layers[1].id.to_string(); // Bass
         let params = WriteAutomationParams {
             project_id: project.id.to_string(),
-            segment_id: segment_id.clone(),
-            layer_id: layer_id.clone(),
+            segment_id,
+            layer_id,
             param: "cutoff".to_string(),
             points: vec![
                 scorestrata_core::domain::AutomationPointJson {
@@ -9729,8 +9740,8 @@ mod tests {
         };
         let params = SetTrackFxParams {
             project_id: project.id.to_string(),
-            segment_id: segment_id.clone(),
-            layer_id: layer_id.clone(),
+            segment_id,
+            layer_id,
             fx: serde_json::to_value(&fx).unwrap_or_default(),
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
@@ -9751,8 +9762,8 @@ mod tests {
         let layer_id = project.arrangement.segments[0].layers[1].id.to_string(); // Bass
         let params = SetTrackMixParams {
             project_id: project.id.to_string(),
-            segment_id: segment_id.clone(),
-            layer_id: layer_id.clone(),
+            segment_id,
+            layer_id,
             gain_db: Some(-6.0),
             pan: Some(0.2),
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
@@ -10120,7 +10131,7 @@ mod tests {
         let pattern_id = project.patterns[0].id.to_string();
         let params = ClonePatternTransposedParams {
             project_id: project.id.to_string(),
-            pattern_id: pattern_id.clone(),
+            pattern_id,
             semitones: 12,
             name: Some("Lead_Octave_Up".to_string()),
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
@@ -10151,7 +10162,7 @@ mod tests {
         let segment_id = project.arrangement.segments[0].id.to_string();
         let params = SoloSegmentParams {
             project_id: "proj_1".to_string(),
-            segment_id: segment_id.clone(),
+            segment_id,
             project: Some(serde_json::to_value(&project).unwrap_or_default()),
         };
         let receipt = solo_segment(&params);
@@ -11310,12 +11321,9 @@ mod tests {
             "receipt verifies matching artifact: {}",
             receipt.summary
         );
-        assert_eq!(
-            receipt.score_delta.get("render.sha256"),
-            Some(&checksum.clone())
-        );
-        assert!(receipt.score_delta.get("render.manifest_hash").is_some());
-        assert!(receipt.score_delta.get("render.cache_key").is_some());
+        assert_eq!(receipt.score_delta.get("render.sha256"), Some(&checksum));
+        assert!(receipt.score_delta.contains_key("render.manifest_hash"));
+        assert!(receipt.score_delta.contains_key("render.cache_key"));
         assert_eq!(
             receipt.score_delta.get("render.complete"),
             Some(&"true".to_string())
@@ -11695,8 +11703,7 @@ mod tests {
         let receipt = render_stems(&params);
         assert!(
             matches!(receipt.status, ToolStatus::Succeeded),
-            "stems render should succeed, got {:#?}",
-            receipt
+            "stems render should succeed, got {receipt:#?}"
         );
         assert!(receipt.summary.contains("stems"));
         assert!(receipt.score_delta.contains_key("render.stems"));
@@ -11734,8 +11741,7 @@ mod tests {
         let receipt = audit_layer_spectral(&params);
         assert!(
             matches!(receipt.status, ToolStatus::Succeeded),
-            "layer audit should succeed, got {:#?}",
-            receipt
+            "layer audit should succeed, got {receipt:#?}"
         );
         assert!(receipt.summary.contains("Audited"));
         assert!(
@@ -11789,8 +11795,7 @@ mod tests {
         let receipt = render_candidate_preview(&params);
         assert!(
             matches!(receipt.status, ToolStatus::Succeeded),
-            "preview render should succeed, got {:#?}",
-            receipt
+            "preview render should succeed, got {receipt:#?}"
         );
         assert_eq!(
             receipt

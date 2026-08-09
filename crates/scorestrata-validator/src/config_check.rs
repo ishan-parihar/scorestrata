@@ -234,7 +234,7 @@ mod tests {
         let project = project_with_config(
             ProjectConfig {
                 name: "t".to_string(),
-                genre: "".to_string(),
+                genre: String::new(),
                 bpm: 124,
                 key: "C minor".to_string(),
                 time_signature: TimeSignature::default(),

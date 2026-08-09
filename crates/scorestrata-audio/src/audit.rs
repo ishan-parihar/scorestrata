@@ -10,6 +10,22 @@
 //! All analysis is pure and deterministic (no RNG): the same samples always
 //! produce the same report bytes, per §17 determinism rules.
 
+// Audio analysis uses bounded integer-to-float casts for frame/bucket
+// indexing and f64 accumulation internally; both are intentional and the
+// values are bounded by buffer sizes, so the pedantic cast lints are
+// expected rather than suppressed blindly.
+#![expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::format_push_string,
+    clippy::items_after_statements,
+    clippy::needless_range_loop,
+    clippy::option_if_let_else,
+    reason = "Audit DSP uses bounded frame/bucket indexing and f64 internals; all values are bounded by buffer sizes"
+)]
+
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex;
 use serde::{Deserialize, Serialize};
@@ -91,9 +107,11 @@ impl AuditReport {
 }
 
 /// One layer's spectral audit entry — the per-layer "debug log" an agent
-/// iterates on. Unlike the master audit (a single blended graph), the layer
-/// view reports each instrument's footprint separately so a muddy bass or
-/// aliased hat is visible as *its own* deviation, not hidden in the mix.
+/// iterates on.
+///
+/// Unlike the master audit (a single blended graph), the layer view reports
+/// each instrument's footprint separately so a muddy bass or aliased hat is
+/// visible as *its own* deviation, not hidden in the mix.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayerAuditEntry {
     /// Layer name.
@@ -302,7 +320,7 @@ fn stft(samples: &[f32], frame_size: usize, hop: usize, sample_rate: u32) -> Stf
         .map(|i| {
             #[expect(clippy::cast_precision_loss, reason = "Window index conversion")]
             let t = i as f32 / (frame_size - 1) as f32;
-            0.5 - 0.5 * (2.0 * std::f32::consts::PI * t).cos()
+            0.5f32.mul_add(-(2.0 * std::f32::consts::PI * t).cos(), 0.5)
         })
         .collect();
 
@@ -346,7 +364,7 @@ fn time_domain(samples: &[f32]) -> (f32, f32, f32, u32, bool) {
     let mut clipped = 0u32;
     for &s in samples {
         sum += f64::from(s);
-        sum_sq += f64::from(s) * f64::from(s);
+        sum_sq = f64::from(s).mul_add(f64::from(s), sum_sq);
         let abs = s.abs();
         if abs > peak {
             peak = abs;
@@ -382,14 +400,10 @@ fn spectral_centroid(magnitude: &[f64], freq_per_bin: f32) -> f32 {
             reason = "FFT bin index and bin spacing fit in f64"
         )]
         let freq = bin as f64 * f64::from(freq_per_bin);
-        weighted += freq * mag;
+        weighted = freq.mul_add(mag, weighted);
         total += mag;
     }
     if total > 0.0 {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "Centroid computed in f64, returned as f32"
-        )]
         return (weighted / total) as f32;
     }
     0.0
@@ -418,7 +432,7 @@ fn spectral_rolloff(magnitude: &[f64], freq_per_bin: f32, fraction: f32) -> f32 
         clippy::cast_precision_loss,
         reason = "Bin count times bin spacing fits in f32"
     )]
-    let max_freq = (magnitude.len() as f32 * freq_per_bin) as f32;
+    let max_freq = magnitude.len() as f32 * freq_per_bin;
     max_freq
 }
 
@@ -455,10 +469,6 @@ fn band_energy(magnitude: &[f64], freq_per_bin: f32) -> (f32, Vec<BandEnergy>) {
     let mut bands = Vec::with_capacity(6);
     let labels = crate::analysis::band_labels();
     for (i, label) in labels.iter().enumerate() {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "Band energy share is a fraction, fits in f32"
-        )]
         let share = aliasing(
             f64::from(AUDIT_BAND_EDGES_HZ[i]),
             f64::from(AUDIT_BAND_EDGES_HZ[i + 1]),
@@ -470,10 +480,6 @@ fn band_energy(magnitude: &[f64], freq_per_bin: f32) -> (f32, Vec<BandEnergy>) {
             share,
         });
     }
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "Aliasing ratio is a fraction, fits in f32"
-    )]
     let aliasing_ratio = aliasing(16_000.0, f64::INFINITY) as f32;
     (aliasing_ratio, bands)
 }
@@ -494,15 +500,7 @@ fn magma_color(normalized: f32) -> (u8, u8, u8) {
         if v <= t1 {
             let span = (t1 - t0).max(1e-6);
             let t = (v - t0) / span;
-            let lerp = |a: u8, b: u8| {
-                #[expect(
-                    clippy::cast_precision_loss,
-                    clippy::cast_possible_truncation,
-                    reason = "Color channel interpolation"
-                )]
-                let channel = (f32::from(a) + (f32::from(b) - f32::from(a)) * t) as u8;
-                channel
-            };
+            let lerp = |a: u8, b: u8| (f32::from(b) - f32::from(a)).mul_add(t, f32::from(a)) as u8;
             return (lerp(c0.0, c1.0), lerp(c0.1, c1.1), lerp(c0.2, c1.2));
         }
     }
@@ -538,7 +536,7 @@ fn spectrogram_rows(
         .map(|i| {
             #[expect(clippy::cast_precision_loss, reason = "Window index conversion")]
             let t = i as f32 / (frame_size - 1) as f32;
-            0.5 - 0.5 * (2.0 * std::f32::consts::PI * t).cos()
+            0.5f32.mul_add(-(2.0 * std::f32::consts::PI * t).cos(), 0.5)
         })
         .collect();
 
@@ -550,11 +548,7 @@ fn spectrogram_rows(
             *slot = Complex::new(sample * window[i], 0.0);
         }
         fft.process(&mut buffer);
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "Decimation: frame index into width bucket"
-        )]
-        let column = (frame * width / frame_count) as usize;
+        let column = frame * width / frame_count;
         for bin in 0..=max_bin {
             let mag = buffer[bin].norm();
             rows[bin][column] += mag;
@@ -614,8 +608,10 @@ pub fn spectrogram_png(
     let root = BitMapBackend::new(
         out_path,
         (
-            u32::try_from(width).expect("spectrogram width fits u32"),
-            u32::try_from(height).expect("spectrogram height fits u32"),
+            u32::try_from(width)
+                .map_err(|_| AudioError::Visualization("spectrogram width overflow".into()))?,
+            u32::try_from(height)
+                .map_err(|_| AudioError::Visualization("spectrogram height overflow".into()))?,
         ),
     )
     .into_drawing_area();
@@ -652,7 +648,7 @@ pub fn waveform_png(samples: &[f32], out_path: &std::path::Path) -> Result<(), A
     let mid = height / 2;
     root.draw(&PathElement::new(
         vec![(0, mid), (width as i32, mid)],
-        &RGBColor(40, 44, 52),
+        RGBColor(40, 44, 52),
     ))
     .map_err(|e| AudioError::Visualization(e.to_string()))?;
 
@@ -682,7 +678,7 @@ pub fn waveform_png(samples: &[f32], out_path: &std::path::Path) -> Result<(), A
         let y_max = mid - (max.abs().min(1.0) * (height / 2) as f32) as i32;
         root.draw(&PathElement::new(
             vec![(column as i32, y_min), (column as i32, y_max)],
-            &RGBColor(64, 200, 255),
+            RGBColor(64, 200, 255),
         ))
         .map_err(|e| AudioError::Visualization(e.to_string()))?;
     }
@@ -848,7 +844,6 @@ pub fn write_audit_files(
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
-    clippy::unwrap_used,
     reason = "Tests assert audit invariants explicitly"
 )]
 mod tests {
@@ -960,8 +955,9 @@ mod tests {
         for i in 0..(48_000 * 2) {
             #[expect(clippy::cast_precision_loss, reason = "Test index")]
             let t = i as f32 / 48_000.0;
-            let value = (2.0 * std::f32::consts::PI * 4000.0 * t).sin() * 0.3
-                + (2.0 * std::f32::consts::PI * 9000.0 * t).sin() * 0.2;
+            let value = (2.0 * std::f32::consts::PI * 9000.0 * t)
+                .sin()
+                .mul_add(0.2, (2.0 * std::f32::consts::PI * 4000.0 * t).sin() * 0.3);
             bright.push(value);
         }
         let as_ambient = audit_mono(&bright, 48_000, Some("ambient"));
@@ -1007,8 +1003,9 @@ mod tests {
             .map(|i| {
                 #[expect(clippy::cast_precision_loss, reason = "Test index")]
                 let t = i as f32 / 48_000.0;
-                (2.0 * std::f32::consts::PI * 4000.0 * t).sin() * 0.3
-                    + (2.0 * std::f32::consts::PI * 9000.0 * t).sin() * 0.2
+                (2.0 * std::f32::consts::PI * 9000.0 * t)
+                    .sin()
+                    .mul_add(0.2, (2.0 * std::f32::consts::PI * 4000.0 * t).sin() * 0.3)
             })
             .collect();
         let layers = [("Bass", bass.as_slice()), ("Lead", bright.as_slice())];

@@ -229,6 +229,7 @@ fn build_scorecard(diagnostics: &[Diagnostic], profile: &ScoringProfile) -> Scor
 }
 
 #[cfg(test)]
+#[expect(clippy::float_cmp, reason = "Tests assert exact profile constants")]
 mod tests {
     use super::*;
     use scorestrata_core::diagnostic::MetricScope;

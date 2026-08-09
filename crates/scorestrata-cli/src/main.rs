@@ -333,16 +333,16 @@ enum AutomationAction {
 /// §11 G5 — mixer / FX actions.
 #[derive(Subcommand)]
 enum MixAction {
-    /// Set a layer's insert FX chain (serialized FxChain JSON)
+    /// Set a layer's insert FX chain (serialized `FxChain` JSON)
     Fx {
         /// Layer name (see `ss timeline`)
         track: String,
-        /// Serialized FxChain JSON, e.g. `{"high_pass_hz":40}`
+        /// Serialized `FxChain` JSON, e.g. `{"high_pass_hz":40}`
         fx: String,
     },
     /// Apply per-instrument production mix defaults for a genre
     Preset {
-        /// Genre (techno, melodic_techno, house, ambient)
+        /// Genre (techno, `melodic_techno`, house, ambient)
         genre: String,
     },
     /// Set the master bus (gain, limiter ceiling) — §8.6 `MixerState`
@@ -361,7 +361,7 @@ enum MixAction {
 enum TemplateAction {
     /// Apply a genre's section skeleton (intro → build → drop → …)
     Apply {
-        /// Genre (techno, melodic_techno, house, ambient)
+        /// Genre (techno, `melodic_techno`, house, ambient)
         genre: String,
         /// Total bars for the arrangement
         bars: u32,
@@ -392,11 +392,10 @@ fn main() -> Result<()> {
             mode,
             segment,
         } => handle_render(&path, &mode, segment.as_deref())?,
-        Commands::Analyze { path } => handle_analyze(&path)?,
+        Commands::Analyze { path } | Commands::Audit { path } => handle_analyze(&path)?,
         Commands::Arrangement { action } => match action {
             ArrangementAction::Plan { path } => handle_arrangement_plan(&path)?,
         },
-        Commands::Audit { path } => handle_analyze(&path)?,
         Commands::Timeline {
             path,
             segment,
@@ -736,6 +735,10 @@ fn handle_compile(path: &str, incremental: bool) -> Result<()> {
     println!("  Status: {}", "compiled".green().bold());
     Ok(())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI validation walks every scope plane with per-plane reporting"
+)]
 fn handle_validate(path: &str, scope: &str) -> Result<()> {
     use scorestrata_core::error::Severity;
 
@@ -816,7 +819,7 @@ fn handle_validate(path: &str, scope: &str) -> Result<()> {
                         changed.len(),
                         changed
                             .iter()
-                            .map(|id| id.to_string())
+                            .map(std::string::ToString::to_string)
                             .collect::<Vec<_>>()
                             .join(", ")
                     );
@@ -916,11 +919,13 @@ fn render_config_for(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI render composes isolation, render, mastering and audit in one flow"
+)]
 fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
-    let scope_note = match segment {
-        Some(s) => format!(" (segment: {s})"),
-        None => String::new(),
-    };
+    use scorestrata_compiler::timeline::EventKind;
+    let scope_note = segment.map_or_else(String::new, |s| format!(" (segment: {s})"));
     println!(
         "{}",
         format!("Rendering: {path} (mode: {mode}{scope_note})").cyan()
@@ -1004,7 +1009,6 @@ fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
     // G5 — per-layer FX / mix overrides (HPF, EQ, compressor, sends, faders).
     let fx = scorestrata_mcp::tools::render_fx_from_project(&project);
 
-    use scorestrata_compiler::timeline::EventKind;
     let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
         .events
         .iter()
@@ -1201,6 +1205,10 @@ fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
 /// artifact. Prints a listening index (paths + LUFS + dBTP + checksum) and
 /// fails with exit 1 if any gate fails, so "did the demos stay good" is
 /// scriptable.
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI demo renders and gate-checks every artifact in one scriptable flow"
+)]
 fn handle_demo(dir: &str) -> Result<()> {
     use scorestrata_audio::analysis::analyze_stereo;
     use scorestrata_audio::wav::read_wav_file;
@@ -1267,7 +1275,12 @@ fn handle_demo(dir: &str) -> Result<()> {
                 read_wav_file(wav).context("Failed to parse rendered WAV")?;
             let analysis = analyze_stereo(&left, &right);
             let duration = if sample_rate > 0 {
-                left.len() as f64 / f64::from(sample_rate)
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "Sample counts fit f64 for practical render durations"
+                )]
+                let len_f = left.len() as f64;
+                len_f / f64::from(sample_rate)
             } else {
                 0.0
             };
@@ -1305,7 +1318,8 @@ fn handle_demo(dir: &str) -> Result<()> {
     }
     println!(
         "\n{}",
-        format!("All demos rendered + validated (exit 0)")
+        "All demos rendered + validated (exit 0)"
+            .to_string()
             .green()
             .bold()
     );
@@ -1362,6 +1376,10 @@ fn handle_arrangement_plan(path: &str) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI analyze writes audit files, spectrograms and waveform PNGs in one flow"
+)]
 fn handle_analyze(path: &str) -> Result<()> {
     use scorestrata_audio::audit::write_audit_files;
     use scorestrata_audio::wav::read_wav_file;
@@ -1511,6 +1529,10 @@ fn handle_analyze(path: &str) -> Result<()> {
 /// registers, using the same derivation as the `get_timeline_view` MCP tool.
 /// `--segment` filters to one section (name or 1-based index) and `--layer`
 /// filters to one layer name — the §11 `ss timeline` flags.
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI timeline renders the ASCII grid and event legend in one flow"
+)]
 fn handle_timeline(
     path: &str,
     segment_filter: Option<&str>,
@@ -1534,8 +1556,7 @@ fn handle_timeline(
             .enumerate()
             .filter(|(idx, s)| {
                 s.name == filter
-                    || u32::try_from(idx + 1)
-                        .map_or(false, |one_based| one_based.to_string() == filter)
+                    || u32::try_from(idx + 1).is_ok_and(|one_based| one_based.to_string() == filter)
             })
             .map(|(_, s)| s)
             .collect();
@@ -1554,10 +1575,7 @@ fn handle_timeline(
         })
         .collect();
     if let Some(filter) = layer_filter {
-        kept_layers = kept_layers
-            .into_iter()
-            .filter(|l| l.name == filter || l.instrument == filter)
-            .collect();
+        kept_layers.retain(|l| l.name == filter || l.instrument == filter);
         if kept_layers.is_empty() {
             anyhow::bail!("Layer '{filter}' not found (see `ss timeline {path}`)");
         }
@@ -1585,12 +1603,14 @@ fn handle_timeline(
     let bar_width = 8usize;
     let mut ruler = String::from("      ");
     for bar in (0..view.total_bars).step_by(8) {
-        ruler.push_str(&format!("{bar:<width$}", width = bar_width));
+        use std::fmt::Write as _;
+        write!(ruler, "{bar:<bar_width$}").ok();
     }
     println!("{ruler}");
     let mut sec_line = String::from("  sec ");
     for section in &kept_sections {
-        sec_line.push_str(&format!("{:<width$}", section.name, width = bar_width));
+        use std::fmt::Write as _;
+        write!(sec_line, "{:<width$}", section.name, width = bar_width).ok();
     }
     println!("{}", sec_line.cyan());
     println!();
@@ -2347,7 +2367,8 @@ fn handle_tool(name: &str, params_json: Option<&str>) -> Result<()> {
 #[expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    reason = "Test code uses unwrap/expect for clarity"
+    clippy::float_cmp,
+    reason = "Test code uses unwrap/expect and asserts exact float config values"
 )]
 mod tests {
     use super::*;

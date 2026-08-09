@@ -16,6 +16,10 @@ use crate::policy::{PolicyCheckResult, PolicyProfile, PolicyRuleResult};
 /// This is the central registry that determines what level of permission
 /// a command requires.
 #[must_use]
+#[expect(
+    clippy::match_same_arms,
+    reason = "The explicit Write arm keeps the registry self-documenting; the wildcard is the safe default"
+)]
 pub fn safety_class_for_command(command_type: &str) -> SafetyClass {
     match command_type {
         "get_capabilities"
@@ -260,8 +264,10 @@ mod tests {
     #[test]
     fn destructive_commands_allowed_when_permitted() {
         let command = make_command("delete_project");
-        let mut policy = PolicyProfile::default();
-        policy.allow_destructive_commands = true;
+        let policy = PolicyProfile {
+            allow_destructive_commands: true,
+            ..Default::default()
+        };
         let result = evaluate_policy(&command, &policy);
         assert!(result.allowed);
     }
@@ -278,8 +284,10 @@ mod tests {
     fn dry_run_commands_always_pass() {
         let mut command = make_command("apply_patch");
         command.dry_run = true;
-        let mut policy = PolicyProfile::default();
-        policy.allow_destructive_commands = false;
+        let policy = PolicyProfile {
+            allow_destructive_commands: false,
+            ..Default::default()
+        };
         // Even a destructive dry-run should pass
         let mut destructive_command = make_command("delete_project");
         destructive_command.dry_run = true;

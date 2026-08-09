@@ -429,7 +429,6 @@ pub fn compute_metric_explanation(
         // 2 -> 0.875, 3 -> 0.9375, ...). Bounded and monotonic.
         #[expect(
             clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
             clippy::cast_possible_wrap,
             reason = "Root cause counts fit in i32 for the powi exponent"
         )]
@@ -750,11 +749,7 @@ fn first_scope_for_pattern(
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    clippy::too_many_lines,
-    reason = "Test fixtures use expect for clarity"
-)]
+#[expect(clippy::expect_used, reason = "Test fixtures use expect for clarity")]
 mod tests {
     use super::*;
 

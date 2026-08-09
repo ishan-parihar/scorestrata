@@ -6,6 +6,18 @@
 //! place, and returns a typed outcome — or a [`ProductionError`] describing
 //! exactly which lookup or argument was rejected. Keeping the logic here
 //! instead of inside each surface guarantees the CLI and the tools can never
+//!
+//! Pipeline mutators are large by design (one per production operation) and
+//! intentionally use checked integer math, so the pedantic size/doc/cast
+//! lints are expected for this module.
+#![expect(
+    clippy::cast_possible_wrap,
+    clippy::manual_checked_ops,
+    clippy::missing_errors_doc,
+    clippy::or_fun_call,
+    clippy::too_many_lines,
+    reason = "Production pipeline mutators are large one-per-operation functions with checked integer math and Result-returning helpers"
+)]
 //! drift apart.
 //!
 //! §11 of the production-pipeline-ux-plan: `set_layer_register` (G2),
@@ -320,10 +332,10 @@ fn distribute_bars(sections: &[crate::resources::SectionTemplate], total: u64) -
     let leftover = total.saturating_sub(allocated);
     // Hand the remainder to the section with the largest archetype share (the
     // drop), preserving proportions and hitting exactly total_bars.
-    if leftover > 0 {
-        if let Some((idx, _)) = sections.iter().enumerate().max_by_key(|(_, s)| s.bars) {
-            bars[idx] += leftover;
-        }
+    if leftover > 0
+        && let Some((idx, _)) = sections.iter().enumerate().max_by_key(|(_, s)| s.bars)
+    {
+        bars[idx] += leftover;
     }
     bars
 }
@@ -781,6 +793,11 @@ pub fn fx_summary(fx: &FxChain) -> String {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::float_cmp,
+    reason = "Tests assert exact EQ/filter values and unwrap fixture chains"
+)]
 mod tests {
     use super::*;
 

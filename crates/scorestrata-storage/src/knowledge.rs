@@ -263,7 +263,7 @@ impl KnowledgeGraph {
             })
             .filter_map(|(id, targets)| self.nodes.get(&id).map(|node| (node, targets.len())))
             .collect();
-        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        ranked.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         ranked
     }
 
@@ -358,7 +358,7 @@ impl KnowledgeGraph {
 
     /// Total edge count.
     #[must_use]
-    pub fn edge_count(&self) -> usize {
+    pub const fn edge_count(&self) -> usize {
         self.edges.len()
     }
 }

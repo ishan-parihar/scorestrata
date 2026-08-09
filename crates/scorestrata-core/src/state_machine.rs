@@ -35,6 +35,10 @@ pub struct TransitionRule {
 /// Build the complete set of transition rules.
 ///
 /// Called once via [`OnceLock`] to avoid repeated allocation.
+#[expect(
+    clippy::too_many_lines,
+    reason = "The transition table is a data table by design"
+)]
 fn build_transitions() -> Vec<TransitionRule> {
     use ProjectStatus::{
         Archived, ArrangementPlanned, AwaitingHumanDecision, BriefReceived, Calibrating, Compiling,

@@ -201,8 +201,8 @@ impl LessonStore {
     ///   (failure-pattern memory) so the same patch is not tried again.
     ///
     /// When no lesson matches the key, the incoming lesson is inserted and the
-    /// creating occurrence counts as its first outcome (success_count or
-    /// failure_count starts at 1); the declared confidence is kept as-is.
+    /// creating occurrence counts as its first outcome (`success_count` or
+    /// `failure_count` starts at 1); the declared confidence is kept as-is.
     /// Returns the stored lesson — the existing one after merging, or the
     /// newly inserted one.
     pub fn upsert(&mut self, lesson: StoredLesson) -> Option<&StoredLesson> {

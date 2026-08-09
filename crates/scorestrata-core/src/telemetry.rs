@@ -50,7 +50,6 @@ pub struct TelemetrySnapshot {
 
 impl TelemetrySnapshot {
     /// Create a new empty snapshot.
-    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -61,7 +60,7 @@ impl TelemetrySnapshot {
     }
 
     /// Record a patch attempt.
-    pub fn record_patch_attempt(&mut self, successful: bool) {
+    pub const fn record_patch_attempt(&mut self, successful: bool) {
         self.total_patches += 1;
         if successful {
             self.successful_patches += 1;
@@ -70,6 +69,10 @@ impl TelemetrySnapshot {
 
     /// Compute the success rate of patches (0.0–1.0).
     #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Telemetry ratios are bounded counts fitted to f32"
+    )]
     pub fn patch_success_rate(&self) -> f32 {
         if self.total_patches == 0 {
             return 0.0;
@@ -79,6 +82,10 @@ impl TelemetrySnapshot {
 
     /// Compute the escalation rate (escalations per iteration).
     #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Telemetry ratios are bounded counts fitted to f32"
+    )]
     pub fn escalation_rate(&self) -> f32 {
         if self.iteration_count == 0 {
             return 0.0;
@@ -88,6 +95,10 @@ impl TelemetrySnapshot {
 
     /// Compute the rollback rate (rollbacks per iteration).
     #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Telemetry ratios are bounded counts fitted to f32"
+    )]
     pub fn rollback_rate(&self) -> f32 {
         if self.iteration_count == 0 {
             return 0.0;
@@ -97,6 +108,10 @@ impl TelemetrySnapshot {
 
     /// Compute the regression rate (regressions per iteration).
     #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Telemetry ratios are bounded counts fitted to f32"
+    )]
     pub fn regression_rate(&self) -> f32 {
         if self.iteration_count == 0 {
             return 0.0;
@@ -112,7 +127,7 @@ impl TelemetrySnapshot {
             .iter()
             .map(|(k, v)| (k.as_str(), *v))
             .collect();
-        tools.sort_by(|a, b| b.1.cmp(&a.1));
+        tools.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
         tools.into_iter().take(n).collect()
     }
 

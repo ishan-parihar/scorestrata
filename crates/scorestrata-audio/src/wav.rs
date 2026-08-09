@@ -8,6 +8,13 @@
 //! The writer supports 16-bit PCM; the reader supports 8/16-bit PCM and
 //! 32-bit float, mono or stereo.
 
+// WAV byte offsets and sample counts are bounded by the file size, so the
+// integer/f32 casts used for chunk sizes and frame math are intentional.
+#![expect(
+    clippy::expect_used,
+    reason = "WAV chunk parsing uses guarded try_into with safe slices"
+)]
+
 use crate::error::AudioError;
 
 /// Write a stereo WAV file from interleaved L/R f32 sample slices.
@@ -124,7 +131,7 @@ fn write_u16_le(buf: &mut Vec<u8>, value: u16) {
     buf.extend_from_slice(&value.to_le_bytes());
 }
 
-/// Decode a WAV file from bytes into (left, right, sample_rate) f32 buffers.
+/// Decode a WAV file from bytes into (left, right, `sample_rate`) f32 buffers.
 ///
 /// Supports 8/16-bit PCM and 32-bit float, mono or stereo. Mono input is
 /// mirrored to both channels. Returns an error for malformed headers or
@@ -134,8 +141,18 @@ fn write_u16_le(buf: &mut Vec<u8>, value: u16) {
 ///
 /// Returns [`AudioError::InvalidWav`] when the bytes are not a parseable
 /// WAV in a supported encoding.
+///
+/// # Panics
+///
+/// Panics only if a malicious header advertises a chunk size larger than the
+/// remaining buffer while the guard loop still permits slicing — a defensive
+/// invariant of this parser.
+#[expect(
+    clippy::too_many_lines,
+    reason = "WAV parsing walks fmt/data chunks linearly; splitting would obscure the header grammar"
+)]
 pub fn read_wav_stereo(bytes: &[u8]) -> Result<(Vec<f32>, Vec<f32>, u32), AudioError> {
-    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+    if bytes.len() < 12 || bytes.get(0..4) != Some(b"RIFF") || bytes.get(8..12) != Some(b"WAVE") {
         return Err(AudioError::InvalidWav(
             "missing RIFF/WAVE header".to_string(),
         ));
@@ -241,7 +258,7 @@ pub fn read_wav_stereo(bytes: &[u8]) -> Result<(Vec<f32>, Vec<f32>, u32), AudioE
         }
     }
     if channels == 1 {
-        right = left.clone();
+        right.clone_from(&left);
     }
     Ok((left, right, sample_rate))
 }
@@ -333,7 +350,11 @@ mod tests {
         let mut with_list = wav[..data_pos].to_vec();
         let list_body = b"LISTTEST"; // 8 bytes, even — still exercises skipping
         with_list.extend_from_slice(b"LIST");
-        with_list.extend_from_slice(&(list_body.len() as u32).to_le_bytes());
+        with_list.extend_from_slice(
+            &u32::try_from(list_body.len())
+                .expect("8-byte LIST body fits u32")
+                .to_le_bytes(),
+        );
         with_list.extend_from_slice(list_body);
         with_list.extend_from_slice(&wav[data_pos..]);
 
@@ -378,8 +399,8 @@ mod tests {
         wav.extend_from_slice(&i16::MAX.to_le_bytes());
 
         let (l, _r, _rate) = read_wav_stereo(&wav).expect("decodes manual WAV");
-        assert_eq!(l[0], -1.0, "i16::MIN clamps to -1.0");
-        assert_eq!(l[1], 1.0, "i16::MAX reads as 1.0");
+        assert!((l[0] + 1.0).abs() < 1e-6, "i16::MIN clamps to -1.0");
+        assert!((l[1] - 1.0).abs() < 1e-6, "i16::MAX reads as 1.0");
     }
 
     #[test]

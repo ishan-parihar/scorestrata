@@ -451,7 +451,7 @@ impl Default for SendLevels {
 /// Deterministic, sample-rate-aware DSP lives in `scorestrata_audio::fx`;
 /// this is the serializable configuration the tools write and the renderer
 /// reads. `None` FX on a layer = clean insert (only the static mix gain/pan).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FxChain {
     /// High-pass cutoff in Hz (e.g. 30 / 100 / 120); `None` = no HPF.
@@ -466,20 +466,9 @@ pub struct FxChain {
     pub sends: SendLevels,
 }
 
-impl Default for FxChain {
-    fn default() -> Self {
-        Self {
-            high_pass_hz: None,
-            eq: Vec::new(),
-            compressor: None,
-            sidechain_from_kick: false,
-            sends: SendLevels::default(),
-        }
-    }
-}
-
-/// The master-bus state of the project's mixer (§8.1 / §8.6, G5) — the
-/// controls the renderer applies to the *final mix fold*, distinct from
+/// The master-bus state of the project's mixer (§8.1 / §8.6, G5).
+///
+/// Controls the renderer applies to the *final mix fold*, distinct from
 /// per-layer insert FX ([`Layer::fx`]) and per-layer faders
 /// ([`Layer::mix_gain_db`] / [`Layer::mix_pan`]).
 ///
@@ -610,8 +599,12 @@ impl Automation {
             let (a, b) = (pair[0], pair[1]);
             if tick >= a.tick.0 && tick <= b.tick.0 {
                 let span = (b.tick.0 - a.tick.0).max(1);
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "Automation interpolation fraction fits f32 for practical spans"
+                )]
                 let frac = (tick - a.tick.0) as f32 / span as f32;
-                return a.value + (b.value - a.value) * frac;
+                return (b.value - a.value).mul_add(frac, a.value);
             }
         }
         last.value
@@ -619,6 +612,11 @@ impl Automation {
 
     /// The MIDI CC value (0–127) at `tick`, for timeline emission.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "Value is clamped to 0..=1 then scaled to 0..=127, so the u8 cast is lossless"
+    )]
     pub fn cc_value_at(&self, tick: Tick) -> u8 {
         (self.value_at(tick).clamp(0.0, 1.0) * 127.0).round() as u8
     }
@@ -636,7 +634,7 @@ impl Register {
 
     /// Whether a MIDI note falls inside this register.
     #[must_use]
-    pub fn contains_note(&self, pitch: MidiNote) -> bool {
+    pub const fn contains_note(&self, pitch: MidiNote) -> bool {
         let octave = pitch.octave();
         octave >= self.min_octave && octave <= self.max_octave
     }

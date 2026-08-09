@@ -6,6 +6,16 @@
 //! invoke any tool over the wire by name without knowing its Rust signature.
 //!
 //! Three shapes of tool exist:
+//!
+//! The dispatcher is a single large match over every registered tool, with
+//! bounded wire-type casts, so the pedantic size/cast/doc lints are expected.
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::needless_pass_by_value,
+    clippy::option_if_let_else,
+    clippy::too_many_lines,
+    reason = "Dispatcher is one large match over every registered tool; wire-level casts are bounded"
+)]
 //! - **Standard** (56 tools): `fn(&XParams) -> ToolReceipt` — deserialized from
 //!   the JSON params and forwarded.
 //! - **No-param** (3 tools): `get_contracts`, `get_onboarding_packet`,
@@ -579,9 +589,10 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
 /// Wrap the capability manifest into a `Succeeded` receipt for `get_capabilities`.
 fn capabilities_receipt() -> ToolReceipt {
     let caps = crate::capabilities::get_capabilities();
-    let summary = serde_json::to_string(&caps)
-        .map(|json| format!("Capabilities manifest: {json}"))
-        .unwrap_or_else(|_| "Capabilities manifest (serialization failed)".to_string());
+    let summary = serde_json::to_string(&caps).map_or_else(
+        |_| "Capabilities manifest (serialization failed)".to_string(),
+        |json| format!("Capabilities manifest: {json}"),
+    );
     ToolReceipt {
         tool: "get_capabilities".to_string(),
         status: ToolStatus::Succeeded,

@@ -241,12 +241,22 @@ pub fn drum_pattern_four_on_floor() -> Pattern {
 }
 
 /// A simple bass pattern on the root and fifth of the given key.
+///
+/// # Panics
+///
+/// Panics if `key` does not parse into a known scale — callers pass
+/// fixture keys that are validated by the golden corpus.
 #[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "Fixture helpers panic loudly on invalid keys so test failures are obvious"
+)]
 pub fn bass_pattern(key: &str) -> Pattern {
     let scale = scorestrata_theory::key::Key::parse(key)
         .map(|k| k.to_scale())
         .expect("valid key");
     let tones = scale.notes_in_range(MidiNote::new(24), MidiNote::new(48));
+    #[expect(clippy::expect_used, reason = "Fixture scale always has notes")]
     let root = *tones.first().expect("scale has notes");
     let fifth = tones.get(4).copied().unwrap_or(root);
 
@@ -429,11 +439,11 @@ fn parse_brief_hints(text: &str) -> (String, u32, String, u32) {
 
     let bars = text
         .split(|c: char| !c.is_ascii_alphanumeric() && c != ' ')
-        .filter_map(|t| {
+        .find_map(|t| {
             let t = t.trim();
             if t.ends_with("bar") || t.ends_with("bars") {
                 t.chars()
-                    .take_while(|c| c.is_ascii_digit())
+                    .take_while(char::is_ascii_digit)
                     .collect::<String>()
                     .parse::<u32>()
                     .ok()
@@ -441,7 +451,6 @@ fn parse_brief_hints(text: &str) -> (String, u32, String, u32) {
                 None
             }
         })
-        .next()
         .unwrap_or(8);
 
     (genre, bpm, key, bars)
@@ -458,8 +467,7 @@ fn extract_key(lower: &str) -> Option<String> {
             let prefix = &lower[..idx];
             let root = prefix
                 .split(|c: char| !c.is_ascii_alphabetic() && c != '#')
-                .filter(|s| !s.is_empty())
-                .last();
+                .rfind(|s| !s.is_empty());
             if let Some(root) = root
                 && ROOTS.contains(&root)
             {
@@ -497,23 +505,19 @@ pub fn write_sample_projects(dir: &std::path::Path) -> std::io::Result<()> {
     ];
     for (name, project) in fixtures {
         let project_dir = dir.join(name);
-        init_project_bundle(&project_dir).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("bundle init for '{name}': {e}"),
-            )
-        })?;
-        save_project(&project, &project_dir).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("bundle save for '{name}': {e}"),
-            )
-        })?;
+        init_project_bundle(&project_dir)
+            .map_err(|e| std::io::Error::other(format!("bundle init for '{name}': {e}")))?;
+        save_project(&project, &project_dir)
+            .map_err(|e| std::io::Error::other(format!("bundle save for '{name}': {e}")))?;
     }
     Ok(())
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "Test fixtures unwrap bundle writes and project loads"
+)]
 mod tests {
     use super::*;
 

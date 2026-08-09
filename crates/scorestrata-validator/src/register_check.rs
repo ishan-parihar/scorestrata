@@ -39,8 +39,8 @@ pub fn check_layer_registers(project: &Project) -> Vec<Diagnostic> {
                 let transpose = instance.transpose;
                 for note in &pattern.notes {
                     #[expect(
-                        clippy::cast_possible_wrap,
-                        reason = "MIDI notes 0-127 plus bounded transpose stay in safe range"
+                        clippy::cast_sign_loss,
+                        reason = "MIDI notes 0-127 plus bounded transpose are clamped non-negative before narrowing to u8"
                     )]
                     let pitch =
                         (i64::from(note.pitch.0) + i64::from(transpose)).clamp(0, 127) as u8;
@@ -95,6 +95,10 @@ pub fn check_layer_registers(project: &Project) -> Vec<Diagnostic> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "Tests unwrap fixture registers and notes"
+)]
 mod tests {
     use super::*;
     use scorestrata_core::domain::{MidiNote, Note, Register, Tick, Velocity};

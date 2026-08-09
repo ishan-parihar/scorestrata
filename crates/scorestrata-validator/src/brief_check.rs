@@ -80,13 +80,13 @@ pub fn check_brief_compliance(
     arrangement: &Arrangement,
     weights: &BriefWeights,
 ) -> BriefComplianceReport {
-    let mut dimensions = Vec::new();
-
-    dimensions.push(check_genre_fit(brief, config));
-    dimensions.push(check_mood_fit(brief, config));
-    dimensions.push(check_duration_fit(brief, config, arrangement));
-    dimensions.push(check_structure_fit(brief, arrangement));
-    dimensions.push(check_delivery_fit(brief, config));
+    let dimensions = vec![
+        check_genre_fit(brief, config),
+        check_mood_fit(brief, config),
+        check_duration_fit(brief, config, arrangement),
+        check_structure_fit(brief, arrangement),
+        check_delivery_fit(brief, config),
+    ];
 
     let overall_score = compute_weighted_score(&dimensions, weights);
     let fully_compliant = dimensions.iter().all(|d| d.passed);
@@ -102,6 +102,10 @@ pub fn check_brief_compliance(
 /// Check genre fit: brief genre vs config genre.
 fn check_genre_fit(brief: &Brief, config: &ProjectConfig) -> DimensionResult {
     let mut diagnostics = Vec::new();
+    #[expect(
+        clippy::option_if_let_else,
+        reason = "None arm is a flat default while Some arm builds diagnostics; match reads clearer"
+    )]
     let score = match &brief.genre {
         Some(brief_genre) => {
             let config_genre = config.genre.to_lowercase();
@@ -245,6 +249,7 @@ fn check_duration_fit(
 
     // Check config duration bars
     if config.duration_bars != arrangement.total_bars {
+        #[expect(clippy::cast_precision_loss, reason = "Duration bar counts fit in f32")]
         let delta = (config.duration_bars as f32 - arrangement.total_bars as f32).abs();
         #[expect(clippy::cast_precision_loss, reason = "Duration bar count fits in f32")]
         let max_expected = config.duration_bars.max(arrangement.total_bars) as f32;
@@ -415,6 +420,10 @@ fn check_structure_fit(brief: &Brief, arrangement: &Arrangement) -> DimensionRes
 fn check_delivery_fit(brief: &Brief, config: &ProjectConfig) -> DimensionResult {
     let diagnostics = Vec::new();
 
+    #[expect(
+        clippy::option_if_let_else,
+        reason = "None arm is a flat default; match reads clearer than map_or for the two-valued target"
+    )]
     let score: f32 = match &brief.delivery_target {
         Some(brief_target) => {
             if *brief_target == config.delivery_target {
@@ -449,7 +458,7 @@ fn compute_weighted_score(dimensions: &[DimensionResult], weights: &BriefWeights
             "delivery" => weights.delivery,
             _ => 0.1,
         };
-        weighted_sum += dim.score * weight;
+        weighted_sum = dim.score.mul_add(weight, weighted_sum);
         total_weight += weight;
     }
 

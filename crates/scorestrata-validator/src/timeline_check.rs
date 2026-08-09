@@ -223,6 +223,10 @@ fn check_layer_automation(project: &Project) -> Vec<Diagnostic> {
 
 /// Check 4b — FX chain send levels (G5) must stay within 0.0–1.0 and HPF
 /// cutoffs must be non-negative (sane insert chains).
+#[expect(
+    clippy::too_many_lines,
+    reason = "FX insert-chain validation enumerates every segment/layer; splitting would fragment the diagnostic walk"
+)]
 fn check_layer_fx(project: &Project) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for segment in &project.arrangement.segments {
@@ -396,6 +400,10 @@ fn check_absolute_timing(project: &Project) -> Vec<Diagnostic> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "Tests unwrap fixture timelines and patterns"
+)]
 mod tests {
     use super::*;
     use scorestrata_core::domain::{Duration, Note, PatternInstance, Tick, Velocity};
@@ -526,7 +534,7 @@ mod tests {
             .iter()
             .find(|d| d.code == "TIMELINE_UNRESOLVED_PATTERN")
             .expect("diagnostic present");
-        assert!(diag.severity == Severity::Error);
+        assert_eq!(diag.severity, Severity::Error);
     }
 
     #[test]
@@ -549,7 +557,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::unwrap_used, reason = "Test should panic on unexpected error")]
     fn overlapping_same_pitch_notes_are_flagged() {
         let mut project = scorestrata_testkit::melodic_techno_project();
         let pattern = project

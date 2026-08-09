@@ -4,6 +4,13 @@
 //! patches mutate the project model and return receipts with actual score
 //! deltas computed by re-running the validator on the affected scope
 //! (per §13.2: dry-run → scoped compile → scoped validate → score delta).
+//!
+//! Patch handlers validate scopes with local const tables, so the
+//! items-after-statements lint is expected.
+#![expect(
+    clippy::items_after_statements,
+    reason = "Patch handlers declare scoped validation tables after early-return guards"
+)]
 
 use scorestrata_core::diagnostic::SuggestedPatch;
 use scorestrata_core::domain::{Layer, Pattern, Project};
@@ -571,9 +578,10 @@ fn apply_set_segment_bars(params: &ApplyPatchParams, project: &mut Project) -> T
         .get("bars")
         .and_then(serde_json::Value::as_u64)
         .and_then(|b| u32::try_from(b).ok());
-    let target = requested
-        .map(|b| b.clamp(MIN_BARS, MAX_BARS))
-        .unwrap_or_else(|| segment.bars.clamp(MIN_BARS, MAX_BARS));
+    let target = requested.map_or_else(
+        || segment.bars.clamp(MIN_BARS, MAX_BARS),
+        |b| b.clamp(MIN_BARS, MAX_BARS),
+    );
 
     let before = segment.bars;
     if before == target {
@@ -607,7 +615,7 @@ fn apply_set_segment_bars(params: &ApplyPatchParams, project: &mut Project) -> T
     let mut score_delta = BTreeMap::new();
     score_delta.insert(
         "structure.segment_bars".to_string(),
-        format!("{} → {}", before, target),
+        format!("{before} → {target}"),
     );
 
     ToolReceipt {

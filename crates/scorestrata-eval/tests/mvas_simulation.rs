@@ -23,8 +23,12 @@
 #![expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::assertions_on_constants,
-    reason = "Integration test asserts the full slice explicitly"
+    clippy::float_cmp,
+    clippy::items_after_statements,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unnecessary_get_then_check,
+    reason = "Integration test asserts the full slice explicitly; helper fns are long by design"
 )]
 
 use scorestrata_core::ids::ProjectId;
@@ -65,9 +69,9 @@ fn mvas_steps_1_to_5_build_an_8_bar_loop() {
     // ── 4. Compile to timeline IR ───────────────────────────────────
     // Build a real project from the plan (segments, layers, patterns).
     let mut project = scorestrata_testkit::minimal_project();
-    project.config = config.clone();
+    project.config = config;
     project.arrangement = plan.arrangement.clone();
-    project.patterns = plan.patterns.clone();
+    project.patterns = plan.patterns;
     project.status = scorestrata_core::domain::ProjectStatus::ConfigApproved;
 
     let timeline = scorestrata_compiler::compile_project(&project)
@@ -122,7 +126,7 @@ fn mvas_steps_6_to_9_repair_loop_proves_improvement() {
     let mut quantized = 0usize;
     {
         let key = scorestrata_theory::key::Key::parse("C minor").expect("config key parses");
-        let before = layer_out_of_scale_count(&lead_layer(&project), &project.patterns, &key);
+        let before = layer_out_of_scale_count(lead_layer(&project), &project.patterns, &key);
         assert!(before > 0, "lead layer starts out of scale");
 
         let params = ApplyPatchParams {
@@ -132,7 +136,7 @@ fn mvas_steps_6_to_9_repair_loop_proves_improvement() {
             dry_run: false,
             scope: Some(PatchScope {
                 segment_id: Some(seg_id.clone()),
-                layer_id: Some(layer_id.clone()),
+                layer_id: Some(layer_id),
             }),
             project: None,
         };
@@ -153,7 +157,7 @@ fn mvas_steps_6_to_9_repair_loop_proves_improvement() {
         quantized += 1;
 
         // Verify the fix actually landed.
-        let after = layer_out_of_scale_count(&lead_layer(&project), &project.patterns, &key);
+        let after = layer_out_of_scale_count(lead_layer(&project), &project.patterns, &key);
         assert_eq!(after, 0, "all lead notes are now in scale");
     }
 
@@ -346,7 +350,7 @@ fn mvas_steps_10_to_11_snapshot_rollback_and_evidence() {
     };
     for _ in 0..2 {
         let result = kernel.run_iteration(
-            &[diagnosis.clone()],
+            std::slice::from_ref(&diagnosis),
             &["quantize_layer_to_scale".to_string()],
             &[("loudness_lufs".to_string(), -14.0)],
         );
@@ -684,8 +688,8 @@ fn mvas_step_15_debug_plane_and_learning_loop() {
     let segment_id = project.arrangement.segments[0].id.to_string();
     let solo = scorestrata_mcp::tools::solo_segment(&SoloSegmentParams {
         project_id: project_id.clone(),
-        segment_id: segment_id.clone(),
-        project: Some(project_json.clone()),
+        segment_id,
+        project: Some(project_json),
     });
     assert!(matches!(solo.status, ToolStatus::Succeeded));
     assert!(solo.summary.contains("bars"));
@@ -693,7 +697,7 @@ fn mvas_step_15_debug_plane_and_learning_loop() {
 
     // ── 15e. Explain a metric with root causes ──────────────────────
     // Build a degraded project so the metric has root causes to report.
-    let mut degraded = project.clone();
+    let mut degraded = project;
     for pattern in &mut degraded.patterns {
         for note in &mut pattern.notes {
             note.pitch = scorestrata_core::domain::MidiNote::new(61);
@@ -751,7 +755,7 @@ fn mvas_step_15_debug_plane_and_learning_loop() {
     assert!(query.summary.contains("quantize_layer_to_scale"));
 
     let templates = scorestrata_mcp::tools::get_repair_templates(&GetRepairTemplatesParams {
-        project_id: project_id.clone(),
+        project_id,
         lesson_store: Some(serde_json::from_str(updated_store).expect("updated store re-parses")),
     });
     assert!(matches!(templates.status, ToolStatus::Succeeded));
@@ -817,7 +821,7 @@ fn mvas_step_16_human_escalation_workflow() {
                 score_delta: -0.05,
                 iteration: 7,
             }],
-            project: Some(project_json.clone()),
+            project: Some(project_json),
         });
     assert!(
         matches!(packet.status, ToolStatus::Succeeded),
@@ -939,8 +943,7 @@ fn mvas_step_17_orientation_and_validation_drill_down() {
     });
     assert!(
         matches!(roots.status, ToolStatus::Succeeded),
-        "root-cause attribution succeeds for a measured metric: {:#?}",
-        roots
+        "root-cause attribution succeeds for a measured metric: {roots:#?}"
     );
     assert!(roots.score_delta.contains_key("metric.value"));
 
@@ -972,7 +975,7 @@ fn mvas_step_17_orientation_and_validation_drill_down() {
         candidate_a: "clean".to_string(),
         candidate_b: "broken".to_string(),
         project_a: Some(clean_json.clone()),
-        project_b: Some(broken_json.clone()),
+        project_b: Some(broken_json),
     });
     assert!(matches!(compared.status, ToolStatus::Succeeded));
     assert!(compared.score_delta.contains_key("diff.metrics_compared"));
@@ -983,11 +986,11 @@ fn mvas_step_17_orientation_and_validation_drill_down() {
 
     // ── 17f. Dry-run a patch before committing to it ────────────────
     let dry_run = scorestrata_mcp::tools::dry_run_patch(&DryRunPatchParams {
-        project_id: project_id.clone(),
+        project_id,
         op: "quantize_layer_to_scale".to_string(),
         params: serde_json::json!({"strength": 1.0}),
         scope: None,
-        project: Some(clean_json.clone()),
+        project: Some(clean_json),
     });
     assert!(matches!(dry_run.status, ToolStatus::DryRunCompleted));
     assert!(dry_run.dry_run);
@@ -1018,13 +1021,12 @@ fn mvas_step_18_render_jobs_and_engineering_plane() {
     let preview = scorestrata_mcp::tools::render_candidate_preview(&RenderCandidatePreviewParams {
         project_id: project_id.clone(),
         candidate_id: "cand_a".to_string(),
-        project: Some(project_json.clone()),
+        project: Some(project_json),
         jobs: Some(serde_json::json!({})),
     });
     assert!(
         matches!(preview.status, ToolStatus::Succeeded),
-        "candidate preview should render, got {:#?}",
-        preview
+        "candidate preview should render, got {preview:#?}"
     );
     assert_eq!(
         preview
@@ -1160,7 +1162,7 @@ fn mvas_step_18_render_jobs_and_engineering_plane() {
     // ── 18d. Calibration update ─────────────────────────────────────
     let calibration =
         scorestrata_mcp::tools::update_calibration_profile(&UpdateCalibrationProfileParams {
-            project_id: project_id.clone(),
+            project_id,
             genre: "melodic_techno".to_string(),
             target_lufs: -10.0,
             profile: Some(serde_json::json!({})),
@@ -1252,8 +1254,7 @@ fn mvas_step_19_composition_and_patch_mutations() {
     });
     assert!(
         matches!(varied.status, ToolStatus::Succeeded),
-        "motivic variation should succeed, got {:#?}",
-        varied
+        "motivic variation should succeed, got {varied:#?}"
     );
 
     // ── 19b. Arrangement: place pattern, retarget instrument ─────────
@@ -1261,7 +1262,7 @@ fn mvas_step_19_composition_and_patch_mutations() {
         project_id: project_id.clone(),
         segment_id: segment_id.clone(),
         layer_id: layer_id.clone(),
-        pattern_id: pattern_id.clone(),
+        pattern_id,
         start_tick: 0,
         project: Some(project_json.clone()),
     });
@@ -1306,14 +1307,13 @@ fn mvas_step_19_composition_and_patch_mutations() {
     });
     assert!(
         matches!(harmonized.status, ToolStatus::Succeeded),
-        "harmonize should succeed on populated layer, got {:#?}",
-        harmonized
+        "harmonize should succeed on populated layer, got {harmonized:#?}"
     );
 
     let fill = scorestrata_mcp::tools::add_drum_fill(&AddDrumFillParams {
         project_id: project_id.clone(),
         segment_id: segment_id.clone(),
-        layer_id: layer_id.clone(),
+        layer_id,
         steps: 4,
         project: Some(project_json.clone()),
     });
@@ -1329,16 +1329,16 @@ fn mvas_step_19_composition_and_patch_mutations() {
 
     let demasked = scorestrata_mcp::tools::reduce_masking(&ReduceMaskingParams {
         project_id: project_id.clone(),
-        segment_id: segment_id.clone(),
+        segment_id,
         amount: 0.15,
         project: Some(project_json.clone()),
     });
     assert!(matches!(demasked.status, ToolStatus::Succeeded));
 
     let loud = scorestrata_mcp::tools::normalize_loudness_target(&NormalizeLoudnessTargetParams {
-        project_id: project_id.clone(),
+        project_id,
         target_lufs: Some(-10.0),
-        project: Some(project_json.clone()),
+        project: Some(project_json),
     });
     assert!(matches!(loud.status, ToolStatus::Succeeded));
     assert!(loud.summary.contains("LUFS"));
@@ -1395,8 +1395,8 @@ fn mvas_step_20_mcp_dispatcher_wire_protocol() {
     let validation = dispatch_tool(
         "run_validation",
         serde_json::json!({
-            "project_id": project_id.clone(),
-            "project": project_json.clone(),
+            "project_id": project_id,
+            "project": project_json,
             "level": 2,
         }),
     );
@@ -1409,10 +1409,10 @@ fn mvas_step_20_mcp_dispatcher_wire_protocol() {
     let notes = dispatch_tool(
         "write_pattern_notes",
         serde_json::json!({
-            "project_id": project_id.clone(),
-            "pattern_id": pattern_id.clone(),
+            "project_id": project_id,
+            "pattern_id": pattern_id,
             "notes": [{"pitch": 62, "start": 480, "duration": 480, "velocity": 90}],
-            "project": project_json.clone(),
+            "project": project_json,
         }),
     );
     assert_eq!(notes.tool, "write_pattern_notes");
@@ -1425,11 +1425,11 @@ fn mvas_step_20_mcp_dispatcher_wire_protocol() {
     let motif = dispatch_tool(
         "apply_motivic_variation",
         serde_json::json!({
-            "project_id": project_id.clone(),
-            "pattern_id": pattern_id.clone(),
+            "project_id": project_id,
+            "pattern_id": pattern_id,
             "variation": "retrograde",
             "semitones": 0,
-            "project": project_json.clone(),
+            "project": project_json,
         }),
     );
     assert_eq!(motif.tool, "apply_motivic_variation");
@@ -1442,21 +1442,21 @@ fn mvas_step_20_mcp_dispatcher_wire_protocol() {
     // ── 20d. Render + engineering over the wire ─────────────────────
     let render = dispatch_tool(
         "get_render_job",
-        serde_json::json!({ "project_id": project_id.clone(), "job_id": "job_1" }),
+        serde_json::json!({ "project_id": project_id, "job_id": "job_1" }),
     );
     assert_eq!(render.tool, "get_render_job");
     assert!(!render.summary.is_empty());
 
     let task = dispatch_tool(
         "get_next_task",
-        serde_json::json!({ "project_id": project_id.clone() }),
+        serde_json::json!({ "project_id": project_id }),
     );
     assert_eq!(task.tool, "get_next_task");
 
     // ── 20e. Learning over the wire ─────────────────────────────────
     let lessons = dispatch_tool(
         "get_lessons",
-        serde_json::json!({ "project_id": project_id.clone() }),
+        serde_json::json!({ "project_id": project_id }),
     );
     assert_eq!(lessons.tool, "get_lessons");
     assert!(matches!(
@@ -1708,7 +1708,7 @@ fn mvas_step_23_learning_loop_accumulates_confidence() {
 }
 
 /// §11.2 L3 timeline validation over the wire: a layer referencing a missing
-/// pattern must surface as TIMELINE_UNRESOLVED_PATTERN at level 3 through the
+/// pattern must surface as `TIMELINE_UNRESOLVED_PATTERN` at level 3 through the
 /// dispatcher, and must be absent at level 2 (plane gating).
 #[test]
 fn mvas_step_24_timeline_validation_over_the_wire() {
@@ -1941,7 +1941,7 @@ fn mvas_step_27_golden_harness_over_the_wire() {
     project.patterns = plan.patterns;
     project.status = scorestrata_core::domain::ProjectStatus::ConfigApproved;
     project.brief.raw_text = brief.to_string();
-    project.brief.genre = Some(config.genre.clone());
+    project.brief.genre = Some(config.genre);
 
     // L6 validation over the wire (dispatcher).
     let receipt = scorestrata_mcp::dispatch::dispatch_tool(
@@ -2091,7 +2091,7 @@ fn mvas_step_28_genre_calibration_feeds_l6_scoring() {
     project.patterns = plan.patterns;
     project.status = scorestrata_core::domain::ProjectStatus::ConfigApproved;
     project.brief.raw_text = brief.to_string();
-    project.brief.genre = Some(config.genre.clone());
+    project.brief.genre = Some(config.genre);
 
     let receipt = scorestrata_mcp::dispatch::dispatch_tool(
         "run_validation",
@@ -2303,7 +2303,7 @@ fn mvas_step_30_task_completion_triggers_drive_level_advancement() {
     ];
 
     let result = kernel
-        .run_iteration(&[hard.clone()], &templates, &metrics)
+        .run_iteration(std::slice::from_ref(&hard), &templates, &metrics)
         .expect("iteration runs");
     assert!(result.improved, "L0 repair iteration improves");
     assert_eq!(
@@ -2318,7 +2318,7 @@ fn mvas_step_30_task_completion_triggers_drive_level_advancement() {
     // active because the hard failure has not been cleared.
     for _ in 0..2 {
         let result = kernel
-            .run_iteration(&[hard.clone()], &templates, &metrics)
+            .run_iteration(std::slice::from_ref(&hard), &templates, &metrics)
             .expect("iteration runs");
         assert!(result.improved);
     }
@@ -2340,7 +2340,7 @@ fn mvas_step_30_task_completion_triggers_drive_level_advancement() {
         evidence_uri: None,
     };
     let result = kernel
-        .run_iteration(&[soft.clone()], &templates, &metrics)
+        .run_iteration(std::slice::from_ref(&soft), &templates, &metrics)
         .expect("iteration runs");
     assert!(result.improved);
     assert_eq!(
@@ -2366,7 +2366,7 @@ fn mvas_step_30_task_completion_triggers_drive_level_advancement() {
         "high-severity issue keeps L2 active"
     );
     assert!(
-        at_l2.level_task_complete(&[soft.clone()]),
+        at_l2.level_task_complete(std::slice::from_ref(&soft)),
         "low-severity issues complete L2"
     );
 
@@ -2463,7 +2463,7 @@ fn mvas_step_31_segment_fixes_close_the_repair_loop() {
             params: serde_json::json!({}),
             dry_run: false,
             scope: Some(PatchScope {
-                segment_id: Some(segment_id.clone()),
+                segment_id: Some(segment_id),
                 layer_id: None,
             }),
             project: None,
@@ -2646,7 +2646,7 @@ fn mvas_step_32_provenance_manifests_drive_reproducibility() {
 /// Step 33 — deterministic replay & time travel capabilities (§9.4, §15.3).
 ///
 /// "If an agent cannot replay a failure exactly, it cannot reliably learn
-/// from it." This step proves the ReplayEngine capabilities over a real
+/// from it." This step proves the `ReplayEngine` capabilities over a real
 /// journal: replay until failure pinpoints the exact failing command,
 /// snapshot bisect finds it in O(log n), event reconstruction recovers the
 /// observable outcome stream, and substituted-policy replay shows whether a
@@ -3398,7 +3398,7 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
     project
 }
 
-/// The (segment_id, layer_id) string scope of the lead layer.
+/// The (`segment_id`, `layer_id`) string scope of the lead layer.
 ///
 /// The lead lives in the chorus (segment 1) as its second layer.
 fn lead_scope(project: &scorestrata_core::domain::Project) -> (String, String) {
@@ -3433,7 +3433,7 @@ fn audio_plan_ss_analyze_flow_produces_audit_artifacts() {
     );
     let plan = scorestrata_compiler::plan::plan_project(&config);
     let mut project = scorestrata_testkit::minimal_project();
-    project.config = config.clone();
+    project.config = config;
     project.arrangement = plan.arrangement;
     project.patterns = plan.patterns;
 

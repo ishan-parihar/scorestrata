@@ -243,7 +243,7 @@ impl ProjectMemory {
     #[must_use]
     pub fn top_failure_patterns(&self, n: usize) -> Vec<&FailurePattern> {
         let mut patterns: Vec<&FailurePattern> = self.semantic.failure_patterns.values().collect();
-        patterns.sort_by(|a, b| b.count.cmp(&a.count));
+        patterns.sort_by_key(|p| std::cmp::Reverse(p.count));
         patterns.into_iter().take(n).collect()
     }
 

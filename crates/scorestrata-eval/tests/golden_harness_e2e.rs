@@ -8,9 +8,9 @@
 //! pyramid requires.
 
 #![expect(
-    clippy::unwrap_used,
     clippy::expect_used,
-    reason = "Integration test asserts the golden pipeline explicitly"
+    clippy::cast_precision_loss,
+    reason = "Integration test asserts the golden pipeline explicitly; metric ratios fit f32"
 )]
 
 use scorestrata_eval::golden::{
@@ -33,7 +33,7 @@ fn build_planned_project(name: &str, brief: &str) -> scorestrata_core::domain::P
     project.patterns = plan.patterns;
     project.status = scorestrata_core::domain::ProjectStatus::ConfigApproved;
     project.brief.raw_text = brief.to_string();
-    project.brief.genre = Some(config.genre.clone());
+    project.brief.genre = Some(config.genre);
     project
 }
 
@@ -360,7 +360,7 @@ fn eval_harness_reports_real_metrics() {
     );
     let plan = scorestrata_compiler::plan::plan_project(&config);
     let mut project = scorestrata_testkit::minimal_project();
-    project.config = config.clone();
+    project.config = config;
     project.arrangement = plan.arrangement;
     project.patterns = plan.patterns;
     project.status = scorestrata_core::domain::ProjectStatus::ConfigApproved;
@@ -404,7 +404,7 @@ fn eval_harness_reports_real_metrics() {
     };
     for _ in 0..3 {
         let _ = kernel.run_iteration(
-            &[diagnosis.clone()],
+            std::slice::from_ref(&diagnosis),
             &["quantize_layer_to_scale".to_string()],
             &[("loudness_lufs".to_string(), -14.0)],
         );

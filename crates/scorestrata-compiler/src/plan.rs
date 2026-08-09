@@ -1118,7 +1118,7 @@ fn dnb_drum_pattern(ids: &mut IdSeq) -> Pattern {
     })
 }
 
-/// 1-bar DnB bass: rolling root-fifth eighths with a sub feel.
+/// 1-bar `DnB` bass: rolling root-fifth eighths with a sub feel.
 fn dnb_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
     let [root, _, fifth, _] = chord_tones_in_range(scale, 24, 48);
     let eighth = u64::from(PPQ) / 2;
@@ -1150,7 +1150,7 @@ fn dnb_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
     }
 }
 
-/// 1-bar DnB lead: airy stabs over the break.
+/// 1-bar `DnB` lead: airy stabs over the break.
 fn dnb_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
     let [_root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
     let eighth = u64::from(PPQ) / 2;
@@ -1177,7 +1177,7 @@ fn dnb_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
     }
 }
 
-/// 1-bar DnB pads: deep sustained chords.
+/// 1-bar `DnB` pads: deep sustained chords.
 fn dnb_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
     let [root, third, fifth, _] = chord_tones_in_range(scale, 48, 72);
     let note = |pitch: MidiNote, velocity: u8, ids: &mut IdSeq| Note {
@@ -1830,7 +1830,7 @@ fn build_layers(
         Genre::House => house_layers(patterns, role, segment_bars, ids),
         Genre::Ambient => ambient_layers(patterns, role, segment_bars, ids),
         Genre::Rock => rock_layers(patterns, role, segment_bars, ids),
-        Genre::Jazz => band_layers(
+        Genre::Jazz | Genre::Pop | Genre::Funk | Genre::Blues => band_layers(
             patterns,
             role,
             segment_bars,
@@ -1841,94 +1841,19 @@ fn build_layers(
             "pad_synth",
             false,
         ),
-        Genre::HipHop => band_layers(
-            patterns,
-            role,
-            segment_bars,
-            ids,
-            "Lead",
-            "lead_synth",
-            "Pads",
-            "pad_synth",
-            true,
-        ),
-        Genre::DnB => band_layers(
-            patterns,
-            role,
-            segment_bars,
-            ids,
-            "Lead",
-            "lead_synth",
-            "Pads",
-            "pad_synth",
-            true,
-        ),
-        Genre::Cinematic => band_layers(
-            patterns,
-            role,
-            segment_bars,
-            ids,
-            "Lead",
-            "lead_synth",
-            "Pads",
-            "pad_synth",
-            true,
-        ),
-        Genre::Pop => band_layers(
-            patterns,
-            role,
-            segment_bars,
-            ids,
-            "Lead",
-            "lead_synth",
-            "Pads",
-            "pad_synth",
-            false,
-        ),
-        Genre::Funk => band_layers(
-            patterns,
-            role,
-            segment_bars,
-            ids,
-            "Lead",
-            "lead_synth",
-            "Pads",
-            "pad_synth",
-            false,
-        ),
-        Genre::Blues => band_layers(
-            patterns,
-            role,
-            segment_bars,
-            ids,
-            "Lead",
-            "lead_synth",
-            "Pads",
-            "pad_synth",
-            false,
-        ),
-        Genre::Synthwave => band_layers(
-            patterns,
-            role,
-            segment_bars,
-            ids,
-            "Lead",
-            "lead_synth",
-            "Pads",
-            "pad_synth",
-            true,
-        ),
-        Genre::LoFi => band_layers(
-            patterns,
-            role,
-            segment_bars,
-            ids,
-            "Lead",
-            "lead_synth",
-            "Pads",
-            "pad_synth",
-            true,
-        ),
+        Genre::HipHop | Genre::DnB | Genre::Cinematic | Genre::Synthwave | Genre::LoFi => {
+            band_layers(
+                patterns,
+                role,
+                segment_bars,
+                ids,
+                "Lead",
+                "lead_synth",
+                "Pads",
+                "pad_synth",
+                true,
+            )
+        }
         Genre::Techno | Genre::Other => techno_layers(patterns, role, segment_bars, ids),
     }
 }
@@ -2268,16 +2193,9 @@ fn make_layer(
             None
         } else {
             let semis = transpose;
-            #[expect(
-                clippy::cast_possible_wrap,
-                reason = "MIDI pitches plus bounded transpose stay in safe range"
-            )]
             let lo = i64::from(min_pitch) + i64::from(semis);
-            #[expect(
-                clippy::cast_possible_wrap,
-                reason = "MIDI pitches plus bounded transpose stay in safe range"
-            )]
             let hi = i64::from(max_pitch) + i64::from(semis);
+            #[expect(clippy::cast_possible_truncation, reason = "MIDI octave -1..9 fits i8")]
             let oct_of = |midi: i64| (midi.clamp(0, 127) / 12 - 1) as i8;
             Some(Register::new(oct_of(lo), oct_of(hi)))
         }
@@ -2416,7 +2334,9 @@ mod tests {
             layer_names.contains(&"Guitar") && layer_names.contains(&"Lead"),
             "chorus has guitar + lead: {layer_names:?}"
         );
-        let guitar_layer = chorus.layers.iter().find(|l| l.name == "Guitar").unwrap();
+        let guitar_layer = chorus.layers.iter().find(|l| l.name == "Guitar");
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let guitar_layer = guitar_layer.unwrap();
         assert_eq!(guitar_layer.instrument, "distorted_guitar");
     }
 
@@ -2640,6 +2560,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Test enumerates 13 genre cases; splitting would hide the matrix shape"
+    )]
     fn s3_genres_each_have_distinct_pattern_sets() {
         // The S3 genre families must each produce their own pattern names —
         // jazz, hip-hop, dnb, cinematic, pop, funk, blues, synthwave, lo-fi

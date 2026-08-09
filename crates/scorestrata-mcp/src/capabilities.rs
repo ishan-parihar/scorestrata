@@ -6,6 +6,13 @@
 //! Implements §10.5's full tool catalog with contract metadata (stability,
 //! side effects, safety class, dry-run support, budget class) so agents can
 //! discover valid actions, avoid unsafe calls, and understand costs.
+//!
+//! The catalog is a single flat function enumerating every tool/resource, so
+//! the size lint is expected.
+#![expect(
+    clippy::too_many_lines,
+    reason = "Capability catalog enumerates every tool and resource in one flat listing"
+)]
 
 use serde::{Deserialize, Serialize};
 
@@ -769,7 +776,7 @@ mod tests {
     fn tool_catalog_covers_all_categories() {
         let caps = get_capabilities();
         let mut categories: Vec<&str> = caps.tools.iter().map(|t| t.category).collect();
-        categories.sort();
+        categories.sort_unstable();
         categories.dedup();
         for expected in [
             "governance",
@@ -794,7 +801,7 @@ mod tests {
         let caps = get_capabilities();
         let mut names: Vec<&str> = caps.tools.iter().map(|t| t.name).collect();
         let original = names.len();
-        names.sort();
+        names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), original, "tool names must be unique");
     }

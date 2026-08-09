@@ -82,9 +82,16 @@ impl ValidationGates {
     #[must_use]
     pub fn declares_audio_gates(&self) -> bool {
         let defaults = Self::default();
-        self.max_true_peak_dbtp != defaults.max_true_peak_dbtp
+        // Exact equality against the curated defaults: any deviation is a
+        // deliberate gate declaration, so tolerance-free comparison is right.
+        #[expect(
+            clippy::float_cmp,
+            reason = "Deviations from curated defaults are exact by construction"
+        )]
+        let deviates = self.max_true_peak_dbtp != defaults.max_true_peak_dbtp
             || self.min_lufs != defaults.min_lufs
-            || self.max_lufs != defaults.max_lufs
+            || self.max_lufs != defaults.max_lufs;
+        deviates
     }
 }
 
@@ -99,6 +106,10 @@ pub struct MetricRange {
 
 /// Expected outputs from a golden test.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Golden expectation flags mirror the brief-complianace dimensions one-to-one"
+)]
 pub struct ExpectedOutputs {
     /// Expected number of segments.
     pub segment_count: u32,
@@ -150,6 +161,10 @@ pub struct GoldenRunResult {
 /// structural assertions cannot see: diagnostic severity budgets, scorecard
 /// metric ranges, and render loudness/peak limits.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Golden validation walks every gate plane sequentially; splitting would fragment the assertion list"
+)]
 pub fn run_validation_golden_assertions(
     config: &GoldenConfig,
     diagnostics: &[scorestrata_core::diagnostic::Diagnostic],
@@ -163,10 +178,18 @@ pub fn run_validation_golden_assertions(
     let mut assertions = Vec::new();
 
     // Validation plane: diagnostic severity budgets.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Diagnostic counts fit u32 for realistic project sizes"
+    )]
     let errors_total = diagnostics
         .iter()
         .filter(|d| matches!(d.severity, Severity::Error | Severity::Critical))
         .count() as u32;
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Diagnostic counts fit u32 for realistic project sizes"
+    )]
     let warnings = diagnostics
         .iter()
         .filter(|d| d.severity == Severity::Warning)
@@ -213,8 +236,7 @@ pub fn run_validation_golden_assertions(
             expected: format!("[{}, {}]", range.min, range.max),
             actual: scorecard
                 .find_metric(metric_name)
-                .map(|m| format!("{:.3}", m.value))
-                .unwrap_or_else(|| "missing".to_string()),
+                .map_or_else(|| "missing".to_string(), |m| format!("{:.3}", m.value)),
             error: if passed {
                 None
             } else {
@@ -277,11 +299,17 @@ pub fn run_validation_golden_assertions(
 
     let passed = assertions.iter().all(|a| a.passed);
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Render durations fit u64 milliseconds for practical projects"
+    )]
+    let duration_ms = start.elapsed().as_millis() as u64;
+
     GoldenRunResult {
         project_name: config.name.clone(),
         assertions,
         passed,
-        duration_ms: start.elapsed().as_millis() as u64,
+        duration_ms,
     }
 }
 
@@ -306,6 +334,12 @@ pub fn load_golden_config(path: &Path) -> Result<GoldenConfig, ScorestrataError>
 /// Compares the actual project state against the expected outputs
 /// defined in the golden config.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    reason = "Golden assertions compare each expected output field explicitly; splitting would hide a missing comparison"
+)]
 pub fn run_golden_assertions(
     config: &GoldenConfig,
     actual_segments: u32,
@@ -424,15 +458,25 @@ pub fn run_golden_assertions(
 
     let passed = assertions.iter().all(|a| a.passed);
 
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Render durations fit u64 milliseconds for practical projects"
+    )]
+    let duration_ms = start.elapsed().as_millis() as u64;
     GoldenRunResult {
         project_name: config.name.clone(),
         assertions,
         passed,
-        duration_ms: start.elapsed().as_millis() as u64,
+        duration_ms,
     }
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::float_cmp,
+    reason = "Tests unwrap fixture configs and assert exact gate constants"
+)]
 mod tests {
     use super::*;
 

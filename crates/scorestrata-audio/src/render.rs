@@ -12,6 +12,18 @@
 //! - deterministic summing order (per-layer accumulation in event order),
 //! - no wall-clock dependence.
 
+// The renderer converts tick counts and sample counts between u64/u32 and
+// f32/f64 for timing math; durations are bounded by practical project
+// lengths, so the pedantic cast lints are expected.
+#![expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::float_cmp,
+    clippy::missing_errors_doc,
+    reason = "Render timing math casts bounded tick/sample counts; durations fit practical ranges; width/level guards are exact-DSP comparisons"
+)]
+
 use scorestrata_core::domain::PPQ;
 use scorestrata_core::error::ScorestrataError;
 
@@ -184,7 +196,7 @@ impl RenderAutomation {
             if tick >= a.0 && tick <= b.0 {
                 let span = (b.0 - a.0).max(1) as f32;
                 let frac = (tick - a.0) as f32 / span;
-                return Some(a.1 + (b.1 - a.1) * frac);
+                return Some((b.1 - a.1).mul_add(frac, a.1));
             }
         }
         Some(last.1)
@@ -229,11 +241,6 @@ pub struct Stem {
 
 /// Convert ticks to sample index at the given BPM and sample rate.
 #[must_use]
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss,
-    reason = "Render durations bounded in practice"
-)]
 pub fn tick_to_sample(tick: u64, bpm: u32, sample_rate: u32) -> u64 {
     let seconds = tick_to_seconds(tick, bpm);
     (seconds * f64::from(sample_rate)) as u64
@@ -309,6 +316,10 @@ pub fn render_notes_with_automation(
 /// Per-layer insert chains (HPF/EQ/compressor/sends) and gain/pan overrides
 /// are applied deterministically after each layer buffer is synthesized,
 /// then mixed with the static gain staging unless overridden.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Full render pipeline composes ~30 deterministic steps; splitting adds indirection without behavior change"
+)]
 pub fn render_notes_full(
     notes: &[RenderNote],
     bpm: u32,
@@ -497,6 +508,10 @@ pub fn render_stems_with_automation(
 }
 
 /// Render stems with automation **and** per-layer FX / mix (G5).
+#[expect(
+    clippy::too_many_lines,
+    reason = "Stem pipeline mirrors render_notes_full; splitting would duplicate the deterministic chain"
+)]
 pub fn render_stems_full(
     notes: &[RenderNote],
     bpm: u32,
@@ -684,11 +699,11 @@ fn render_layer_buffer(
         // filter, volume scales the rendered body. Both are deterministic
         // linear interpolations of the layer's lanes.
         let mut note_params = params.clone();
-        if let Some(lane) = cutoff_lane {
-            if let Some(value) = lane.value_at(note.start_tick) {
-                // 0.0 → darkest (0.05), 1.0 → fully open (1.0).
-                note_params.filter_cutoff = 0.05 + value.clamp(0.0, 1.0) * 0.95;
-            }
+        if let Some(lane) = cutoff_lane
+            && let Some(value) = lane.value_at(note.start_tick)
+        {
+            // 0.0 → darkest (0.05), 1.0 → fully open (1.0).
+            note_params.filter_cutoff = value.clamp(0.0, 1.0).mul_add(0.95, 0.05);
         }
         let volume = volume_lane
             .and_then(|lane| lane.value_at(note.start_tick))
@@ -737,7 +752,7 @@ fn render_layer_buffer(
 #[must_use]
 pub fn midi_to_frequency(midi: u8) -> f32 {
     // A4 = 440 Hz = MIDI 69
-    440.0 * 2.0f32.powf((f32::from(midi) - 69.0) / 12.0)
+    440.0 * ((f32::from(midi) - 69.0) / 12.0).exp2()
 }
 
 /// Compute the SHA-256 hex digest of bytes.
@@ -751,13 +766,10 @@ pub fn sha256_hex(data: &[u8]) -> String {
 #[must_use]
 pub fn waveform_for_instrument(instrument: &str) -> Waveform {
     match instrument {
-        "bass" => Waveform::Saw,
         "lead" | "synth" | "pluck" => Waveform::Square,
         "pad" | "strings" | "keys" => Waveform::Triangle,
-        "guitar" | "distorted_guitar" => Waveform::Saw,
-        "bell" => Waveform::Sine,
-        "brass" => Waveform::Saw,
-        "drums" | "percussion" => Waveform::Sine,
+        "bell" | "drums" | "percussion" => Waveform::Sine,
+        // bass, guitars, brass and everything else default to saw.
         _ => Waveform::Saw,
     }
 }
@@ -811,6 +823,10 @@ pub fn is_percussion_instrument(instrument: &str) -> bool {
 /// a detuned square with a cutoff sweep and vibrato, pads are slow-attack
 /// detuned triangles with air, guitars are heavily driven saws.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Voice preset table maps ~10 instrument families to full SynthParams; splitting adds indirection"
+)]
 pub fn voice_params_for_instrument(instrument: &str) -> SynthParams {
     match instrument_family(instrument) {
         "drums" => SynthParams {
@@ -1026,9 +1042,9 @@ mod tests {
     #[test]
     fn tick_conversion_is_consistent() {
         // 1 quarter note at 120 BPM = 0.5 s
-        let seconds = tick_to_seconds(PPQ as u64, 120);
+        let seconds = tick_to_seconds(u64::from(PPQ), 120);
         assert!((seconds - 0.5).abs() < 1e-6);
-        let samples = tick_to_sample(PPQ as u64, 120, 48_000);
+        let samples = tick_to_sample(u64::from(PPQ), 120, 48_000);
         assert_eq!(samples, 24_000);
     }
 
@@ -1052,7 +1068,7 @@ mod tests {
         ];
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let result = render_notes(&notes, 120, 48_000, &[]).unwrap();
-        assert!(&result.wav_bytes[0..4] == b"RIFF");
+        assert_eq!(&result.wav_bytes[0..4], b"RIFF");
         assert!(!result.checksum.is_empty());
         assert!(result.duration_seconds > 0.4);
     }
@@ -1287,8 +1303,8 @@ mod tests {
             let mut left_energy = 0.0f64;
             let mut right_energy = 0.0f64;
             for i in 0..frames {
-                let l = i16::from_le_bytes([data[i * 4], data[i * 4 + 1]]) as f64 / 32768.0;
-                let r = i16::from_le_bytes([data[i * 4 + 2], data[i * 4 + 3]]) as f64 / 32768.0;
+                let l = f64::from(i16::from_le_bytes([data[i * 4], data[i * 4 + 1]])) / 32768.0;
+                let r = f64::from(i16::from_le_bytes([data[i * 4 + 2], data[i * 4 + 3]])) / 32768.0;
                 left_energy += l * l;
                 right_energy += r * r;
             }
@@ -1358,7 +1374,7 @@ mod tests {
         assert_eq!(stems.len(), 2);
         assert_eq!(stems[0].layer_name, "Drums");
         assert_eq!(stems[1].layer_name, "Bass");
-        assert!(&stems[0].wav_bytes[0..4] == b"RIFF");
+        assert_eq!(&stems[0].wav_bytes[0..4], b"RIFF");
         assert!(!stems[0].checksum.is_empty());
         assert_eq!(
             master.analysis.integrated_lufs.to_bits(),
@@ -1454,8 +1470,8 @@ mod tests {
         let mut left_energy = 0.0f64;
         let mut right_energy = 0.0f64;
         for i in 0..frames {
-            let l = i16::from_le_bytes([data[i * 4], data[i * 4 + 1]]) as f64 / 32768.0;
-            let r = i16::from_le_bytes([data[i * 4 + 2], data[i * 4 + 3]]) as f64 / 32768.0;
+            let l = f64::from(i16::from_le_bytes([data[i * 4], data[i * 4 + 1]])) / 32768.0;
+            let r = f64::from(i16::from_le_bytes([data[i * 4 + 2], data[i * 4 + 3]])) / 32768.0;
             left_energy += l * l;
             right_energy += r * r;
         }
@@ -1555,10 +1571,12 @@ mod tests {
         let voices = build_voices(&[("Bass", "bass_synth"), ("Lead", "lead_synth")]);
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let (stems, _) = render_stems(&notes, 120, 48_000, &voices).unwrap();
+        #[expect(clippy::expect_used, reason = "Test assertions")]
         let bass = stems
             .iter()
             .find(|s| s.layer_name == "Bass")
             .expect("bass stem");
+        #[expect(clippy::expect_used, reason = "Test assertions")]
         let lead = stems
             .iter()
             .find(|s| s.layer_name == "Lead")
@@ -1629,7 +1647,8 @@ mod tests {
             layer_name: "Drums".to_string(),
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
-        let (drum_stems, _) = render_stems(&[note.clone()], 120, 48_000, &drums).unwrap();
+        let (drum_stems, _) =
+            render_stems(std::slice::from_ref(&note), 120, 48_000, &drums).unwrap();
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let (tone_stems, _) = render_stems(&[note], 120, 48_000, &synthy).unwrap();
         // Compare late in the note (250-270 ms): the kick body has decayed

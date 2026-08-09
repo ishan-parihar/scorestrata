@@ -54,7 +54,7 @@ impl DrumSampler {
             let gain = velocity * sample.base_velocity;
             for (i, out) in output.iter_mut().enumerate() {
                 if i < sample.data.len() {
-                    *out += sample.data[i] * gain;
+                    *out = sample.data[i].mul_add(gain, *out);
                 }
             }
         }

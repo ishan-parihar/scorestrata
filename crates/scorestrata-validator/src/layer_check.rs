@@ -45,38 +45,38 @@ pub fn check_layer(layer: &Layer) -> Option<Diagnostic> {
 
     // A declared register must be sane: min <= max (the discipline the
     // compiler enforces by clamping notes into the band).
-    if let Some(register) = &layer.register {
-        if register.min_octave > register.max_octave {
-            return Some(Diagnostic {
-                id: DiagnosticId::new(),
-                code: "LAYER_INVALID_REGISTER".to_string(),
-                metric: "structure.layer_register".to_string(),
-                severity: Severity::Error,
-                scope: MetricScope {
-                    segment_id: None,
-                    layer_id: Some(layer.id),
-                    bar_range: None,
-                },
-                evidence_uris: vec![format!("project://layers/{}", layer.id)],
-                message: format!(
-                    "Layer '{}' declares an inverted register ({} > {})",
-                    layer.name, register.min_octave, register.max_octave
-                ),
-                root_causes: vec!["register min exceeds max".to_string()],
-                suggested_patches: vec![SuggestedPatch {
-                    op: "set_layer_register".to_string(),
-                    params: serde_json::json!({
-                        "layer_id": layer.id,
-                        "min_octave": register.max_octave,
-                        "max_octave": register.max_octave,
-                    }),
-                    expected_delta: Some("+0.20".to_string()),
-                    confidence: 0.95,
-                }],
-                expected_delta: None,
+    if let Some(register) = &layer.register
+        && register.min_octave > register.max_octave
+    {
+        return Some(Diagnostic {
+            id: DiagnosticId::new(),
+            code: "LAYER_INVALID_REGISTER".to_string(),
+            metric: "structure.layer_register".to_string(),
+            severity: Severity::Error,
+            scope: MetricScope {
+                segment_id: None,
+                layer_id: Some(layer.id),
+                bar_range: None,
+            },
+            evidence_uris: vec![format!("project://layers/{}", layer.id)],
+            message: format!(
+                "Layer '{}' declares an inverted register ({} > {})",
+                layer.name, register.min_octave, register.max_octave
+            ),
+            root_causes: vec!["register min exceeds max".to_string()],
+            suggested_patches: vec![SuggestedPatch {
+                op: "set_layer_register".to_string(),
+                params: serde_json::json!({
+                    "layer_id": layer.id,
+                    "min_octave": register.max_octave,
+                    "max_octave": register.max_octave,
+                }),
+                expected_delta: Some("+0.20".to_string()),
                 confidence: 0.95,
-            });
-        }
+            }],
+            expected_delta: None,
+            confidence: 0.95,
+        });
     }
 
     // A layer with neither pattern instances nor automation is silent —
@@ -129,6 +129,10 @@ pub fn check_layers(project: &Project) -> Vec<Diagnostic> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "Tests unwrap fixture layers and lookups"
+)]
 mod tests {
     use super::*;
     use scorestrata_core::domain::{
@@ -208,7 +212,7 @@ mod tests {
     #[test]
     fn layer_without_instrument_is_diagnosed() {
         let mut layer = layer_named("bass");
-        layer.instrument = "".to_string();
+        layer.instrument = String::new();
         let d = check_layer(&layer).expect("diagnoses");
         assert_eq!(d.code, "LAYER_NO_INSTRUMENT");
         assert_eq!(d.suggested_patches[0].op, "set_layer_instrument");
@@ -252,7 +256,7 @@ mod tests {
     fn check_layers_aggregates_across_segments() {
         let good = layer_named("lead");
         let mut bad = layer_named("bass");
-        bad.instrument = "".to_string();
+        bad.instrument = String::new();
         let project = project_with_layers(vec![good, bad]);
         let diagnostics = check_layers(&project);
         assert!(diagnostics.iter().any(|d| d.code == "LAYER_NO_INSTRUMENT"));

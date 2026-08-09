@@ -14,7 +14,7 @@ use scorestrata_core::ids::{LayerId, PatternId, SegmentId, TrackId};
 /// deterministic: the same project always produces the same timeline
 /// (per §17 determinism rules).
 #[must_use]
-fn track_id_for_layer(layer_id: &LayerId) -> TrackId {
+const fn track_id_for_layer(layer_id: &LayerId) -> TrackId {
     TrackId::from_uuid(*layer_id.as_uuid())
 }
 
@@ -41,6 +41,10 @@ use crate::timeline::{EventKind, TimelineEvent, TimelineIR};
 /// orchestrators — [`compile_project`] and the §7.3 incremental path —
 /// renumber them into global ids afterwards, so both emit byte-identical
 /// timelines for the same project.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Segment event compilation walks lanes then instances; splitting obscures the ordering invariant"
+)]
 pub(crate) fn compile_segment_events(
     project: &Project,
     expanded_segment: &ExpandedSegment,
@@ -86,7 +90,7 @@ pub(crate) fn compile_segment_events(
                     entity_id: instance.pattern_id.to_string(),
                 })?;
 
-            let instance_start = u64::from(instance.start_tick.0);
+            let instance_start = instance.start_tick.0;
             let transpose = i64::from(instance.transpose);
 
             // Note-based patterns (melody, bass, pads).
@@ -94,6 +98,10 @@ pub(crate) fn compile_segment_events(
                 let abs_tick = segment_start_tick + instance_start + note.start.0;
                 // Note pitch 0-127 plus bounded transpose stays in i64 range;
                 // the clamp makes the narrowing cast provably lossless.
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "Pitch clamped to 0-127 before narrowing to u8"
+                )]
                 let mut pitch = (i64::from(note.pitch.0) + transpose).clamp(0, 127) as u8;
                 // G2 — enforce the layer's declared octave register: notes
                 // outside it are clamped into the band so a transposed
@@ -185,7 +193,7 @@ pub(crate) fn compile_segment_events(
 /// Compile a project into a deterministic timeline IR.
 ///
 /// The pipeline:
-/// 1. Validate project status is at least ConfigApproved.
+/// 1. Validate project status is at least `ConfigApproved`.
 /// 2. Expand the arrangement into concrete segment boundaries.
 /// 3. Instantiate every pattern instance into absolute-tick NoteOn/NoteOff events.
 /// 4. Sort events by tick (deterministic ordering).

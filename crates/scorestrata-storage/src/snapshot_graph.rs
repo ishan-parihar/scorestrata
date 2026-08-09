@@ -49,7 +49,7 @@ impl SnapshotGraph {
     pub fn from_snapshots(snapshots: Vec<Snapshot>) -> Self {
         let mut graph = Self::new();
         let mut sorted = snapshots;
-        sorted.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+        sorted.sort_by_key(|a| a.created_at);
 
         let mut prev_id: Option<SnapshotId> = None;
         for snap in sorted {

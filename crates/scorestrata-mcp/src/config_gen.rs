@@ -6,6 +6,14 @@
 //!
 //! The parser is deliberately conservative: it only claims what it can
 //! reliably detect, and falls back to sensible defaults otherwise.
+//!
+//! The generator walks several lookahead passes over the brief text with
+//! local const tables, so the size/items-after-statements lints are expected.
+#![expect(
+    clippy::items_after_statements,
+    clippy::too_many_lines,
+    reason = "Config generator runs const-table lookahead passes over brief text; local tables read naturally in place"
+)]
 
 use scorestrata_core::domain::{DeliveryTarget, ProjectConfig, TimeSignature};
 
@@ -174,7 +182,7 @@ fn detect_bpm(text: &str) -> Option<u32> {
     for token in lower.split(|c: char| !c.is_ascii_alphanumeric() && c != ' ') {
         let token = token.trim();
         if token.ends_with("bpm") {
-            let num: String = token.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let num: String = token.chars().take_while(char::is_ascii_digit).collect();
             if let Ok(n) = num.parse::<u32>()
                 && (40..=240).contains(&n)
             {
@@ -200,10 +208,11 @@ fn detect_bpm(text: &str) -> Option<u32> {
         if let Ok(n) = token.parse::<u32>() {
             let rest = lower[i..].trim_start_matches([' ', '-', '_', '\n', '\t']);
             let is_bar_count = rest.starts_with("bar");
-            if !is_bar_count && (100..=240).contains(&n) {
-                if best.is_none_or(|b| !(100..=240).contains(&b)) {
-                    best = Some(n);
-                }
+            if !is_bar_count
+                && (100..=240).contains(&n)
+                && best.is_none_or(|b| !(100..=240).contains(&b))
+            {
+                best = Some(n);
             }
         }
     }
@@ -232,8 +241,7 @@ fn detect_key(text: &str) -> Option<String> {
             let prefix = &lower[..idx];
             let root = prefix
                 .split(|c: char| !c.is_ascii_alphabetic() && c != '#')
-                .filter(|s| !s.is_empty())
-                .last();
+                .rfind(|s| !s.is_empty());
             if let Some(root) = root
                 && ROOTS.contains(&root)
             {
@@ -307,7 +315,7 @@ fn detect_duration_bars(text: &str) -> Option<u32> {
             continue;
         }
         if token.ends_with("bar") {
-            let num: String = token.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let num: String = token.chars().take_while(char::is_ascii_digit).collect();
             if let Ok(n) = num.parse::<u32>()
                 && (1..=256).contains(&n)
             {
@@ -331,12 +339,11 @@ fn detect_duration_bars(text: &str) -> Option<u32> {
 /// Detect time signature hints like "3/4" or "7/8".
 fn detect_time_sig(text: &str) -> Option<u32> {
     for token in text.split(|c: char| !c.is_ascii_alphanumeric() && c != '/') {
-        if let Some((num, _den)) = token.split_once('/') {
-            if let Ok(n) = num.trim().parse::<u32>()
-                && (1..=12).contains(&n)
-            {
-                return Some(n);
-            }
+        if let Some((num, _den)) = token.split_once('/')
+            && let Ok(n) = num.trim().parse::<u32>()
+            && (1..=12).contains(&n)
+        {
+            return Some(n);
         }
     }
     None
@@ -363,7 +370,7 @@ pub fn generate_config(project_name: &str, brief_text: &str) -> ProjectConfig {
 
     // Sensible genre-default BPM/key mapping when not detected.
     let (default_bpm, default_key) = match hints.genre.as_deref() {
-        Some("techno") | Some("melodic_techno") => (124, "C minor"),
+        Some("techno" | "melodic_techno") => (124, "C minor"),
         Some("house") => (122, "G minor"),
         Some("ambient") => (80, "A minor"),
         Some("cinematic") => (90, "D minor"),

@@ -38,7 +38,7 @@ pub fn record_patch_attempt(successful: bool) {
 ///
 /// Returns a clone of the shared snapshot, so callers get a consistent view
 /// without holding the lock.
-#[must_use]
+#[must_use = "callers should consume the telemetry snapshot"]
 pub fn snapshot() -> TelemetrySnapshot {
     registry()
         .lock()
@@ -72,7 +72,6 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// merits. Serialization is unchanged: this is a test-only lock, so a poisoned
 /// writer adds no safety concern.
 #[cfg(test)]
-#[must_use]
 pub(crate) fn test_lock_guard() -> std::sync::MutexGuard<'static, ()> {
     TEST_LOCK
         .lock()
@@ -127,7 +126,7 @@ mod tests {
         reset();
         let snap = snapshot();
         assert_eq!(snap.total_tool_calls(), 0);
-        assert_eq!(snap.patch_success_rate(), 0.0);
+        assert!((snap.patch_success_rate() - 0.0).abs() < f32::EPSILON);
         assert!(snap.top_tools(5).is_empty());
     }
 }

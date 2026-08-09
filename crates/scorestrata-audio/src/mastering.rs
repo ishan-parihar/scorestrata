@@ -52,13 +52,17 @@ pub fn apply_limiter(samples: &mut [f32], config: &LimiterConfig) {
         }
         let u = ((abs - knee_bottom) / (1.0 - knee_bottom)).clamp(0.0, 1.0);
         // smoothstep: continuous value and zero slope at the knee entry.
-        let shaped = u * u * (3.0 - 2.0 * u);
-        let out_abs = knee_bottom + (ceiling - knee_bottom) * shaped;
+        let shaped = u * u * 2.0f32.mul_add(-u, 3.0);
+        let out_abs = (ceiling - knee_bottom).mul_add(shaped, knee_bottom);
         *sample = x.signum() * out_abs;
     }
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Test sample indices stay well within f32's exact integer range"
+)]
 mod tests {
     use super::*;
 
@@ -98,8 +102,10 @@ mod tests {
         let mut samples: Vec<f32> = (0..48_000)
             .map(|i| {
                 let t = i as f32 / 48_000.0;
-                let s = (std::f32::consts::TAU * 110.0 * t).sin()
-                    + 0.6 * (std::f32::consts::TAU * 220.0 * t).sin();
+                let s = 0.6f32.mul_add(
+                    (std::f32::consts::TAU * 220.0 * t).sin(),
+                    (std::f32::consts::TAU * 110.0 * t).sin(),
+                );
                 s * 1.2
             })
             .collect();

@@ -80,6 +80,10 @@ pub fn check_segment_bar_count(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "Tests unwrap fixture segments and layers"
+)]
 mod tests {
     use super::*;
     use scorestrata_core::domain::{Layer, SegmentRole};

@@ -19,7 +19,7 @@ pub struct TraceabilityEntry {
     pub phase: String,
     /// Engineering task IDs that implement this feature.
     pub tasks: Vec<String>,
-    /// Source modules that implement this feature (crate::module).
+    /// Source modules that implement this feature (`crate::module`).
     pub code: Vec<String>,
     /// Test identifiers covering this feature.
     pub tests: Vec<String>,

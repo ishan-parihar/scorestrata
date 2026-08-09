@@ -62,8 +62,8 @@ impl Mixer {
             let left_gain = channel.gain * (pan_norm * std::f32::consts::FRAC_PI_2).cos();
             let right_gain = channel.gain * (pan_norm * std::f32::consts::FRAC_PI_2).sin();
             for (i, &sample) in channel.data.iter().enumerate() {
-                left[i] += sample * left_gain;
-                right[i] += sample * right_gain;
+                left[i] = sample.mul_add(left_gain, left[i]);
+                right[i] = sample.mul_add(right_gain, right[i]);
             }
         }
 

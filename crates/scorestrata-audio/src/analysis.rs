@@ -190,9 +190,9 @@ fn calculate_stereo_correlation(left: &[f32], right: &[f32]) -> f32 {
     let mut sum_left_sq = 0.0f32;
     let mut sum_right_sq = 0.0f32;
     for i in 0..len {
-        sum_lr += left[i] * right[i];
-        sum_left_sq += left[i] * left[i];
-        sum_right_sq += right[i] * right[i];
+        sum_lr = left[i].mul_add(right[i], sum_lr);
+        sum_left_sq = left[i].mul_add(left[i], sum_left_sq);
+        sum_right_sq = right[i].mul_add(right[i], sum_right_sq);
     }
     let denom = (sum_left_sq * sum_right_sq).sqrt();
     if denom > 0.0 {
@@ -208,7 +208,7 @@ pub const AUDIT_BAND_EDGES_HZ: [f32; 7] = [0.0, 100.0, 250.0, 500.0, 2000.0, 600
 
 /// Human-readable labels for the six audit bands.
 #[must_use]
-pub fn band_labels() -> [&'static str; 6] {
+pub const fn band_labels() -> [&'static str; 6] {
     ["sub", "bass", "lo-mid", "mid", "hi-mid", "air"]
 }
 
@@ -236,7 +236,7 @@ impl GenreFingerprint {
     /// Matching is case-insensitive and substring-based (e.g. `techno` and
     /// `melodic_techno` both resolve to the techno fingerprint).
     #[must_use]
-    pub fn for_genre(genre: &str) -> Option<&'static GenreFingerprint> {
+    pub fn for_genre(genre: &str) -> Option<&'static Self> {
         let lower = genre.to_lowercase();
         if lower.contains("house") {
             Some(&HOUSE_FINGERPRINT)
@@ -491,10 +491,15 @@ mod tests {
             ("drum_and_bass", "cinematic"),
         ];
         for (a, b) in pairs {
+            #[expect(clippy::expect_used, reason = "Test assertions")]
             let fa = GenreFingerprint::for_genre(a).expect("a");
+            #[expect(clippy::expect_used, reason = "Test assertions")]
             let fb = GenreFingerprint::for_genre(b).expect("b");
-            assert_ne!(
-                fa.band_energy_expected, fb.band_energy_expected,
+            assert!(
+                fa.band_energy_expected
+                    .iter()
+                    .zip(&fb.band_energy_expected)
+                    .any(|(x, y)| (x - y).abs() > 1e-9),
                 "'{a}' and '{b}' must have distinct band profiles"
             );
             assert!(

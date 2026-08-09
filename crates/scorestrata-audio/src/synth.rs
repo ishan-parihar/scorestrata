@@ -27,7 +27,9 @@
 // Buffer sizes are bounded and precision loss is acceptable for f32 audio math.
 #![expect(
     clippy::cast_precision_loss,
-    reason = "DSP code uses integer-to-float casts for sample indexing, buffer sizes are bounded and precision loss is acceptable for f32 audio math"
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "DSP code uses integer-to-float and float-to-index casts for sample indexing; buffer sizes are bounded and precision loss is acceptable for f32 audio math"
 )]
 
 use serde::{Deserialize, Serialize};
@@ -154,7 +156,7 @@ pub enum DrumKind {
 /// (`drum_pitch_for_velocity`: kick=36, snare=38, hat=42), so percussion
 /// layers render as real drums instead of tone-frequency buzzes.
 #[must_use]
-pub fn drum_kind_for_pitch(pitch: u8) -> Option<DrumKind> {
+pub const fn drum_kind_for_pitch(pitch: u8) -> Option<DrumKind> {
     match pitch {
         35 | 36 => Some(DrumKind::Kick),
         38 | 40 => Some(DrumKind::Snare),
@@ -165,7 +167,7 @@ pub fn drum_kind_for_pitch(pitch: u8) -> Option<DrumKind> {
     }
 }
 
-/// PolyBLEP residual for a discontinuity at phase `t` given phase increment `dt`.
+/// `PolyBLEP` residual for a discontinuity at phase `t` given phase increment `dt`.
 ///
 /// `t` is the distance in phase from the discontinuity (0..1). The classic
 /// correction is a second-order polynomial that removes the leading aliasing
@@ -176,7 +178,7 @@ fn poly_blep(t: f32, dt: f32) -> f32 {
         2.0f32.mul_add(x, -(x * x)) - 1.0
     } else if t > 1.0 - dt {
         let x = (t - 1.0) / dt;
-        x * x + 2.0 * x + 1.0
+        2.0f32.mul_add(x, x * x) + 1.0
     } else {
         0.0
     }
@@ -209,7 +211,7 @@ pub fn oscillator(waveform: Waveform, phase: f32, phase_inc: f32) -> f32 {
             // at the zero crossings are derivative discontinuities, far
             // quieter than the naive triangle's corner aliasing.
             let saw = 2.0f32.mul_add(phase, -1.0) - poly_blep(phase, phase_inc);
-            2.0 * saw.abs() - 1.0
+            2.0f32.mul_add(saw.abs(), -1.0)
         }
     }
 }
@@ -224,7 +226,7 @@ pub fn apply_low_pass_filter(buffer: &mut [f32], cutoff: f32, resonance: f32, sa
         return;
     }
     let cutoff_hz = 20.0 * 1000.0f32.powf(cutoff.clamp(0.0, 0.99));
-    let q = 0.5 + resonance.clamp(0.0, 1.0) * 7.5;
+    let q = resonance.clamp(0.0, 1.0).mul_add(7.5, 0.5);
     let w0 = std::f32::consts::TAU * cutoff_hz / sample_rate.max(1.0);
     let alpha = w0.sin() / (2.0 * q);
     let cos_w0 = w0.cos();
@@ -268,7 +270,7 @@ struct DynamicLowPass {
 }
 
 impl DynamicLowPass {
-    fn new(q: f32, sample_rate: f32) -> Self {
+    const fn new(q: f32, sample_rate: f32) -> Self {
         Self {
             x1: 0.0,
             x2: 0.0,
@@ -300,9 +302,14 @@ impl DynamicLowPass {
     /// Process one sample through the biquad (Direct Form I, matching
     /// [`apply_low_pass_filter`] sample-for-sample).
     fn process(&mut self, x: f32) -> f32 {
-        let y = self.b0 * x + self.b1 * self.x1 + self.b2 * self.x2
-            - self.a1 * self.y1
-            - self.a2 * self.y2;
+        let y = self.a2.mul_add(
+            -self.y2,
+            self.a1.mul_add(
+                -self.y1,
+                self.b2
+                    .mul_add(self.x2, self.b1.mul_add(self.x1, self.b0 * x)),
+            ),
+        );
         self.x2 = self.x1;
         self.x1 = x;
         self.y2 = self.y1;
@@ -311,14 +318,20 @@ impl DynamicLowPass {
     }
 }
 
-/// The layered voice renderer: primary + detuned second oscillator + sine
-/// sub-oscillator + deterministic noise, through a drive stage, a resonant
-/// low-pass whose cutoff can sweep with an envelope, and a vibrato LFO on
-/// the pitch. The amp ADSR is applied at the very end (VCA).
+/// The layered voice renderer.
+///
+/// Primary + detuned second oscillator + sine sub-oscillator + deterministic
+/// noise, through a drive stage, a resonant low-pass whose cutoff can sweep
+/// with an envelope, and a vibrato LFO on the pitch. The amp ADSR is applied
+/// at the very end (VCA).
 ///
 /// When every new parameter is at its neutral value (0.0) the note is
 /// rendered through [`render_note_legacy`] — the exact pre-upgrade path —
 /// so existing voices and golden renders stay byte-identical.
+#[expect(
+    clippy::too_many_lines,
+    reason = "Layered voice DSP composes oscillators, drive, filter, LFO and ADSR; splitting risks subtle state bugs"
+)]
 pub fn render_note(
     params: &SynthParams,
     frequency: f32,
@@ -353,13 +366,13 @@ pub fn render_note(
         release_start.saturating_add((params.release.max(0.0) * sample_rate) as usize);
 
     let phase_inc = frequency / sample_rate.max(1.0);
-    let detune_ratio = 2.0f32.powf(params.detune_cents / 1200.0);
+    let detune_ratio = (params.detune_cents / 1200.0).exp2();
     // Deterministic noise seed derived from the note's frequency so identical
     // inputs produce identical bytes (per §17 determinism rules). Forced odd
     // so xorshift32 never sees a zero state.
     let mut noise_state = (frequency.to_bits() ^ 0x9E37_79B9) | 1;
 
-    let q = 0.5 + params.filter_resonance.clamp(0.0, 1.0) * 7.5;
+    let q = params.filter_resonance.clamp(0.0, 1.0).mul_add(7.5, 0.5);
     let filter_bypass = params.filter_cutoff >= 0.99 && params.filter_env_amount <= 0.0;
     let base_cutoff_hz = if filter_bypass {
         20_000.0
@@ -377,7 +390,7 @@ pub fn render_note(
             .max(0.0);
     let env_decay = params.filter_env_decay.max(0.001);
 
-    let drive_gain = 1.0 + params.drive.clamp(0.0, 1.0) * 8.0;
+    let drive_gain = params.drive.clamp(0.0, 1.0).mul_add(8.0, 1.0);
     let drive_norm = drive_gain.tanh().max(1e-6);
     let vib_ratio = params.vibrato_depth / 1200.0;
     let vib_rate = params.vibrato_rate_hz.max(0.001);
@@ -411,7 +424,10 @@ pub fn render_note(
             if decay_end == attack_end {
                 sustain
             } else {
-                1.0 - (1.0 - sustain) * ((i - attack_end) as f32 / (decay_end - attack_end) as f32)
+                (1.0 - sustain).mul_add(
+                    -((i - attack_end) as f32 / (decay_end - attack_end) as f32),
+                    1.0,
+                )
             }
         } else if i < release_start {
             sustain
@@ -432,7 +448,7 @@ pub fn render_note(
         } else {
             0.0
         };
-        let inc = phase_inc * 2.0f32.powf(vib);
+        let inc = phase_inc * vib.exp2();
 
         let mut x = if oversample {
             // Two oversampled sub-samples per output sample; keep the second
@@ -454,8 +470,8 @@ pub fn render_note(
                 // output Nyquist that the drive created.
                 decimated = os_filter.process(sub_x);
                 phase = (phase + inc * os_inc_scale) % 1.0;
-                phase2 = (phase2 + inc * os_inc_scale * detune_ratio) % 1.0;
-                sub_phase = (sub_phase + inc * os_inc_scale * 0.5) % 1.0;
+                phase2 = (inc * os_inc_scale).mul_add(detune_ratio, phase2) % 1.0;
+                sub_phase = (inc * os_inc_scale).mul_add(0.5, sub_phase) % 1.0;
             }
             decimated
         } else {
@@ -480,7 +496,7 @@ pub fn render_note(
         if !filter_bypass {
             if params.filter_env_amount > 0.0 {
                 let env = (-t / env_decay).exp();
-                let cutoff_hz = base_cutoff_hz + (open_cutoff_hz - base_cutoff_hz) * env;
+                let cutoff_hz = (open_cutoff_hz - base_cutoff_hz).mul_add(env, base_cutoff_hz);
                 filter.set_cutoff(cutoff_hz);
             }
             x = filter.process(x);
@@ -522,8 +538,10 @@ fn drive_sample(
         0.0
     };
     let mix_sum = 1.0 + params.osc2_mix + params.sub_mix + params.noise_mix;
-    let mut x = (o1 + params.osc2_mix * o2 + params.sub_mix * sub + params.noise_mix * noise)
-        / mix_sum.max(1.0);
+    let mut x = params.noise_mix.mul_add(
+        noise,
+        params.sub_mix.mul_add(sub, params.osc2_mix.mul_add(o2, o1)),
+    ) / mix_sum.max(1.0);
 
     // Drive: tanh soft saturation adds the harmonic richness a bare
     // oscillator lacks (normalized so drive ≈ unity at low levels).
@@ -564,7 +582,10 @@ fn render_note_legacy(
             if decay_end == attack_end {
                 sustain
             } else {
-                1.0 - (1.0 - sustain) * ((i - attack_end) as f32 / (decay_end - attack_end) as f32)
+                (1.0 - sustain).mul_add(
+                    -((i - attack_end) as f32 / (decay_end - attack_end) as f32),
+                    1.0,
+                )
             }
         } else if i < release_start {
             sustain
@@ -618,7 +639,7 @@ pub fn render_drum_note(kind: DrumKind, velocity: f32, sample_rate: f32, output:
             let mut click_state = 0xBEAD_5EEDu32;
             for (i, s) in output.iter_mut().enumerate() {
                 let t = i as f32 / sample_rate;
-                let freq = 45.0 + 75.0 * (-t / 0.08).exp();
+                let freq = 75.0f32.mul_add((-t / 0.08).exp(), 45.0);
                 phase = (phase + freq / sample_rate) % 1.0;
                 let amp = (-t / 0.22).exp();
                 let body = (phase * std::f32::consts::TAU).sin() * amp;
@@ -646,8 +667,8 @@ pub fn render_drum_note(kind: DrumKind, velocity: f32, sample_rate: f32, output:
                 let n = xorshift32(&mut state);
                 let diff = n - prev;
                 prev = n;
-                hp += 0.4 * (diff - hp);
-                *s = (hp * 2.4 * amp + tone) * velocity;
+                hp = 0.4f32.mul_add(diff - hp, hp);
+                *s = (hp * 2.4).mul_add(amp, tone) * velocity;
             }
         }
         DrumKind::Hat | DrumKind::OpenHat => {
@@ -668,7 +689,7 @@ pub fn render_drum_note(kind: DrumKind, velocity: f32, sample_rate: f32, output:
                 let n = xorshift32(&mut state);
                 let hp = n - prev;
                 prev = n;
-                lp += 0.28 * (hp - lp);
+                lp = 0.28f32.mul_add(hp - lp, lp);
                 *s = lp * 2.2 * amp * velocity;
             }
         }
@@ -724,26 +745,34 @@ mod tests {
         // Accumulates in f64: the residual signals are small (near-cancelling
         // differences of ~0.5-magnitude saws), so f32 accumulation loses the
         // discriminating digits.
+        #[expect(
+            clippy::items_after_statements,
+            reason = "Nested test helper reads naturally in place"
+        )]
         fn band_energy(samples: &[f32], sr: f32, f_lo: f32, f_hi: f32) -> f32 {
             const SEG: usize = 4096;
             let mut total = 0.0f64;
             let mut bins = 0u32;
             let mut f = f64::from(f_lo);
             let sr64 = f64::from(sr);
+            #[expect(
+                clippy::while_float,
+                reason = "Frequency sweep in fixed 500 Hz steps is intentionally float-driven"
+            )]
             while f < f64::from(f_hi) {
                 let w = std::f64::consts::TAU * f / sr64;
                 let mut re = 0.0f64;
                 let mut im = 0.0f64;
                 for chunk in samples.chunks(SEG).take(8) {
                     for (i, &x) in chunk.iter().enumerate() {
-                        let hann =
-                            0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / SEG as f64).cos();
+                        let hann = 0.5f64
+                            .mul_add(-(std::f64::consts::TAU * i as f64 / SEG as f64).cos(), 0.5);
                         let ph = w * i as f64;
-                        re += f64::from(x) * hann * ph.cos();
-                        im -= f64::from(x) * hann * ph.sin();
+                        re = (f64::from(x) * hann).mul_add(ph.cos(), re);
+                        im = (f64::from(x) * hann).mul_add(-ph.sin(), im);
                     }
                 }
-                total += re * re + im * im;
+                total += im.mul_add(im, re * re);
                 bins += 1;
                 f += 500.0;
             }
@@ -763,8 +792,8 @@ mod tests {
             let phase = (i as f32 * phase_inc) % 1.0;
             let mut v = 0.0f32;
             for k in 1..=kmax {
-                v -= (2.0 / (std::f32::consts::PI * k as f32))
-                    * (std::f32::consts::TAU * k as f32 * phase).sin();
+                v = (2.0 / (std::f32::consts::PI * k as f32))
+                    .mul_add(-(std::f32::consts::TAU * k as f32 * phase).sin(), v);
             }
             *ref_s = v;
         }
@@ -838,12 +867,12 @@ mod tests {
             // Hann window over the buffer length (one full window period),
             // NOT at the probe frequency — a probe-frequency window would
             // cancel the very bin it is trying to measure.
-            let win = 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n).cos();
+            let win = 0.5f32.mul_add(-(std::f32::consts::TAU * i as f32 / n).cos(), 0.5);
             let ph = w * i as f32;
-            re += x * win * ph.cos();
-            im -= x * win * ph.sin();
+            re = (x * win).mul_add(ph.cos(), re);
+            im = (x * win).mul_add(-ph.sin(), im);
         }
-        (re * re + im * im).sqrt()
+        re.hypot(im)
     }
 
     /// RMS of a buffer — the flat-ADSR envelope proxy for the beating test.
@@ -985,7 +1014,7 @@ mod tests {
         };
         let mut plain = vec![0.0; note_len];
         render_note(&base, 220.0, 1.0, sample_rate, note_len, &mut plain);
-        let mut with_sub = base.clone();
+        let mut with_sub = base;
         with_sub.sub_mix = 1.0;
         let mut out = vec![0.0; note_len];
         render_note(&with_sub, 220.0, 1.0, sample_rate, note_len, &mut out);
