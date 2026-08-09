@@ -331,6 +331,17 @@ pub fn run_validation_with_project(
         // flag as `LAYER_NOTE_OUTSIDE_REGISTER` (the production register
         // discipline).
         diagnostics.extend(scorestrata_validator::register_check::check_layer_registers(project));
+        // Phase F — polyphony budget + anti-masking: dense segments over the
+        // voice ceiling flag `POLYPHONY_BUDGET_EXCEEDED`, and layer pairs
+        // sharing ≥ 2 octaves flag `MASKING_REGISTER_OVERLAP` (real
+        // `ReduceMasking` at the symbolic plane).
+        diagnostics.extend(scorestrata_validator::polyphony::check_polyphony_budget(
+            project,
+            scorestrata_validator::polyphony::DEFAULT_POLYPHONY_BUDGET,
+        ));
+        diagnostics.extend(scorestrata_validator::polyphony::check_masking_overlap(
+            project,
+        ));
     }
 
     if level >= 4 {

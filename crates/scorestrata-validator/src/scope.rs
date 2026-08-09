@@ -35,6 +35,8 @@ pub enum ValidationScope {
     Harmony,
     /// Rhythm: drum density.
     Rhythm,
+    /// Polyphony: voice budget + register anti-masking.
+    Polyphony,
     /// Everything the symbolic planes can see without a render.
     Full,
     /// Only segments whose compile-cache dependency hash changed (§7.3).
@@ -57,6 +59,7 @@ impl ValidationScope {
             "mix" => Some(Self::Mix),
             "harmony" => Some(Self::Harmony),
             "rhythm" => Some(Self::Rhythm),
+            "polyphony" => Some(Self::Polyphony),
             "full" => Some(Self::Full),
             "diff" => Some(Self::Diff),
             _ => None,
@@ -75,6 +78,7 @@ impl ValidationScope {
             "mix",
             "harmony",
             "rhythm",
+            "polyphony",
             "full",
             "diff",
         ]
@@ -92,6 +96,7 @@ impl ValidationScope {
             Self::Mix => "mix",
             Self::Harmony => "harmony",
             Self::Rhythm => "rhythm",
+            Self::Polyphony => "polyphony",
             Self::Full => "full",
             Self::Diff => "diff",
         }
@@ -183,6 +188,14 @@ pub fn validate_symbolic(project: &Project, scope: ValidationScope) -> Vec<Diagn
             }
             diagnostics
         }
+        ValidationScope::Polyphony => {
+            let mut diagnostics = crate::polyphony::check_polyphony_budget(
+                project,
+                crate::polyphony::DEFAULT_POLYPHONY_BUDGET,
+            );
+            diagnostics.extend(crate::polyphony::check_masking_overlap(project));
+            diagnostics
+        }
         ValidationScope::Full => {
             let mut diagnostics = crate::config_check::check_config(project);
             diagnostics.extend(validate_symbolic(project, ValidationScope::Arrangement));
@@ -190,6 +203,7 @@ pub fn validate_symbolic(project: &Project, scope: ValidationScope) -> Vec<Diagn
             diagnostics.extend(validate_symbolic(project, ValidationScope::Transition));
             diagnostics.extend(validate_symbolic(project, ValidationScope::Harmony));
             diagnostics.extend(validate_symbolic(project, ValidationScope::Rhythm));
+            diagnostics.extend(validate_symbolic(project, ValidationScope::Polyphony));
             diagnostics
         }
         // These planes need the caller's audio engine / compile cache.

@@ -11,6 +11,7 @@ pub mod chord_check;
 pub mod config_check;
 pub mod density;
 pub mod layer_check;
+pub mod polyphony;
 pub mod register_check;
 pub mod regression_check;
 pub mod report;
