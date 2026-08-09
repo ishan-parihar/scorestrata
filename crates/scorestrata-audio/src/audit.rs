@@ -137,6 +137,10 @@ pub fn layer_audit_reports(
 /// reported separately, so the agent sees exactly which layer is muddy,
 /// thin, or aliased and can patch that layer in place.
 ///
+/// Layer names must be unique; duplicate names would collapse to a single
+/// stem upstream (`render_stems_full` dedupes by first-seen name), so this
+/// writer iterates the input slice once and never re-looks-up by name.
+///
 /// # Errors
 ///
 /// Returns [`AudioError::Io`] on filesystem errors and
@@ -148,17 +152,19 @@ pub fn write_layer_audit_files(
     dir: &std::path::Path,
 ) -> Result<Vec<LayerAuditEntry>, AudioError> {
     std::fs::create_dir_all(dir)?;
-    let mut entries = layer_audit_reports(layers, sample_rate, genre);
-    for entry in &mut entries {
-        let samples = layers
-            .iter()
-            .find(|(name, _)| *name == entry.layer_name)
-            .map_or(&[][..], |(_, samples)| *samples);
-        let safe = entry.layer_name.replace([' ', '/', '\\'], "_");
+    let mut entries = Vec::with_capacity(layers.len());
+    for (layer_name, samples) in layers {
+        let report = audit_mono(samples, sample_rate, genre);
+        let safe = layer_name.replace([' ', '/', '\\'], "_");
         let png_path = dir.join(format!("{safe}.png"));
         spectrogram_png(samples, sample_rate, &png_path)?;
-        entry.spectrogram_path = Some(png_path.display().to_string());
+        entries.push(LayerAuditEntry {
+            layer_name: (*layer_name).to_string(),
+            report,
+            spectrogram_path: Some(png_path.display().to_string()),
+        });
     }
+    entries.sort_by(|a, b| a.layer_name.cmp(&b.layer_name));
     Ok(entries)
 }
 

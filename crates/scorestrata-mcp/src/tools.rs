@@ -7077,52 +7077,18 @@ pub(crate) fn render_timeline_to_analysis(
 /// footprint (centroid, rolloff, band energies, genre deviation) so an agent
 /// can see which layer is muddy, thin, or aliased — the master graph alone
 /// hides that.
-pub fn render_project_to_layer_audit(
-    project: &scorestrata_core::domain::Project,
-) -> Result<
-    (
-        Vec<scorestrata_audio::audit::LayerAuditEntry>,
-        scorestrata_audio::render::RenderResult,
-    ),
-    String,
-> {
-    let timeline = scorestrata_compiler::compile_project(project).map_err(|e| e.to_string())?;
-    let (notes, voices, automation, fx) = timeline_render_inputs(&timeline, project);
-    let (stems, master) = scorestrata_audio::render::render_stems_full(
-        &notes,
-        timeline.bpm,
-        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        &voices,
-        &automation,
-        &fx,
-        &scorestrata_audio::render::RenderConfig::default(),
-    )
-    .map_err(|e| e.to_string())?;
-
-    let genre = Some(project.config.genre.as_str());
-    let layers: Vec<(&str, &[f32])> = stems
-        .iter()
-        .map(|s| (s.layer_name.as_str(), s.samples.as_slice()))
-        .collect();
-    // In-memory reports (no file writes here — the CLI writes the PNGs);
-    // spectrogram_path is filled by the CLI's file-writing step.
-    let entries = scorestrata_audio::audit::layer_audit_reports(
-        &layers,
-        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        genre,
-    );
-    Ok((entries, master))
-}
-
-/// Like [`render_project_to_layer_audit`] but also writes a per-layer
-/// spectrogram PNG into `dir` (the CLI's `ss audit` path).
+///
+/// When `png_dir` is `Some`, a per-layer spectrogram PNG is written into
+/// that directory (the CLI `ss audit` path); when `None`, reports are
+/// computed in memory only (the MCP tool path). The render uses the
+/// project-derived config so the audited stems match what the agent hears.
 ///
 /// # Errors
 ///
 /// Returns an error if compilation, rendering, or PNG writing fails.
-pub fn render_project_to_layer_audit_files(
+pub fn render_project_to_layer_audit(
     project: &scorestrata_core::domain::Project,
-    dir: &std::path::Path,
+    png_dir: Option<&std::path::Path>,
 ) -> Result<
     (
         Vec<scorestrata_audio::audit::LayerAuditEntry>,
@@ -7139,7 +7105,7 @@ pub fn render_project_to_layer_audit_files(
         &voices,
         &automation,
         &fx,
-        &scorestrata_audio::render::RenderConfig::default(),
+        &render_config_from_project(project),
     )
     .map_err(|e| e.to_string())?;
 
@@ -7148,14 +7114,44 @@ pub fn render_project_to_layer_audit_files(
         .iter()
         .map(|s| (s.layer_name.as_str(), s.samples.as_slice()))
         .collect();
-    let entries = scorestrata_audio::audit::write_layer_audit_files(
-        &layers,
-        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        genre,
-        dir,
-    )
-    .map_err(|e| e.to_string())?;
+    let entries = match png_dir {
+        Some(dir) => scorestrata_audio::audit::write_layer_audit_files(
+            &layers,
+            scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+            genre,
+            dir,
+        )
+        .map_err(|e| e.to_string())?,
+        None => scorestrata_audio::audit::layer_audit_reports(
+            &layers,
+            scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+            genre,
+        ),
+    };
     Ok((entries, master))
+}
+
+/// Build the render config from the project's mixer state (G5), mirroring
+/// the CLI's `render_config_for` so every render path — master, stems, and
+/// the layer audit — uses the same limiter ceiling, master gain, and stereo
+/// width. The layer audit must analyze what the agent actually hears.
+#[must_use]
+pub fn render_config_from_project(
+    project: &scorestrata_core::domain::Project,
+) -> scorestrata_audio::render::RenderConfig {
+    let limiter = project.mixer.limiter_ceiling_db.map(|ceiling_db| {
+        let knee_db = scorestrata_audio::mastering::LimiterConfig::default().knee_db;
+        scorestrata_audio::mastering::LimiterConfig {
+            ceiling_db,
+            knee_db,
+        }
+    });
+    scorestrata_audio::render::RenderConfig {
+        stereo: true,
+        limiter,
+        master_gain_db: project.mixer.master_gain_db,
+        stereo_width: project.mixer.stereo_width,
+    }
 }
 
 /// Build [`RenderAutomation`] lanes from a timeline's CC events (G4).
@@ -7810,7 +7806,7 @@ pub fn audit_layer_spectral(params: &AuditLayerSpectralParams) -> ToolReceipt {
             }
         };
 
-    match render_project_to_layer_audit(&project) {
+    match render_project_to_layer_audit(&project, None) {
         Ok((entries, master)) => {
             let layer_summary = entries
                 .iter()

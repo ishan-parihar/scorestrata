@@ -1483,7 +1483,7 @@ fn handle_analyze(path: &str) -> Result<()> {
     // deviation) with a per-layer spectrogram PNG. The master graph alone
     // hides which layer is muddy, thin, or aliased.
     let layers_dir = render_dir.join("audit").join("layers");
-    match scorestrata_mcp::tools::render_project_to_layer_audit_files(&project, &layers_dir) {
+    match scorestrata_mcp::tools::render_project_to_layer_audit(&project, Some(&layers_dir)) {
         Ok((layer_entries, _)) => {
             println!("\n  Layer-wise spectral audit (per-layer stems):");
             print!(

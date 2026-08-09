@@ -1964,6 +1964,8 @@ fn band_layers(
         layers.push(make_layer("Bass", "bass_synth", p, 0, segment_bars, ids));
     }
     if pads_always {
+        // Pad-heavy families (hip-hop, dnb, cinematic, synthwave, lo-fi)
+        // carry the pad bed in every segment — including intro/outro.
         if let Some(p) = pads {
             layers.push(make_layer(
                 pad_name,
@@ -1976,21 +1978,7 @@ fn band_layers(
         }
     }
     match role {
-        SegmentRole::Intro | SegmentRole::Outro => {
-            // Pads ride through the intro/outro for pad-heavy families too.
-            if pads_always && !layers.iter().any(|l| l.name == pad_name) {
-                if let Some(p) = pads {
-                    layers.push(make_layer(
-                        pad_name,
-                        pad_instrument,
-                        p,
-                        0,
-                        segment_bars,
-                        ids,
-                    ));
-                }
-            }
-        }
+        SegmentRole::Intro | SegmentRole::Outro => {}
         SegmentRole::Verse | SegmentRole::Build | SegmentRole::Breakdown | SegmentRole::Bridge => {
             if let Some(p) = lead {
                 layers.push(make_layer(

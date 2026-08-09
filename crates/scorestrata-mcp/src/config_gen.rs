@@ -44,7 +44,10 @@ fn detect_genre(text: &str) -> Option<String> {
             &["cinematic", "film score", "orchestral", "epic trailer"],
         ),
         ("trance", &["trance", "psytrance", "uplifting"]),
-        ("dubstep", &["dubstep", "bass music", "riddim", "brostep"]),
+        // "riddim" intentionally omitted: it is a Jamaican rhythm term and
+        // matches reggae/dancehall briefs; "riddim dubstep" still matches
+        // via the "dubstep" keyword below.
+        ("dubstep", &["dubstep", "bass music", "brostep"]),
         ("lo-fi", &["lo-fi", "lofi", "chill hop", "study beats"]),
         (
             "drum_and_bass",
@@ -110,13 +113,26 @@ fn detect_genre(text: &str) -> Option<String> {
             "classical",
             &["classical", "baroque", "romantic", "piano sonata"],
         ),
-        ("reggae", &["reggae", "dub music", "dancehall"]),
-        ("country", &["country", "bluegrass", "americana"]),
-        ("folk", &["folk", "acoustic", "singer-songwriter"]),
+        // Latin must precede reggae: "reggaeton" contains the substring
+        // "reggae", so a reggaeton brief would otherwise land on reggae.
         (
             "latin",
-            &["latin", "salsa", "reggaeton", "flamenco", "tango", "samba"],
+            &[
+                "latin",
+                "salsa",
+                "reggaeton",
+                "flamenco",
+                "tango",
+                "samba",
+                "cumbia",
+            ],
         ),
+        (
+            "reggae",
+            &["reggae", "dub", "dub music", "dancehall", "riddim", "ska"],
+        ),
+        ("country", &["country", "bluegrass", "americana"]),
+        ("folk", &["folk", "acoustic", "singer-songwriter"]),
         ("gospel", &["gospel", "worship", "choir"]),
         (
             "electronic",
@@ -540,6 +556,16 @@ mod tests {
                 "brief '{brief}' should default to {expected_bpm} BPM"
             );
         }
+    }
+
+    #[test]
+    fn reggaeton_detects_as_latin_not_reggae() {
+        // "reggaeton" contains the substring "reggae"; the latin keyword
+        // must win (latin precedes reggae in the candidate table).
+        let config = generate_config("Perreo", "reggaeton party track, 100 bpm");
+        assert_eq!(config.genre, "latin", "reggaeton is a latin genre");
+        let plain = generate_config("Dub", "reggae dub riddim");
+        assert_eq!(plain.genre, "reggae");
     }
 
     #[test]
