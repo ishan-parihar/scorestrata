@@ -16,6 +16,10 @@ every run):
 python3 scripts/gen_lp_golden.py
 ```
 
+> **Canonical demo:** this committed project (`demos/lp_nu_metal/`) is the
+> canonical gold-standard. The older `lp_demo/` at the repo root is gitignored
+> scratch from the Phase G stress test — this demo supersedes it.
+
 Render / export:
 
 ```bash
@@ -104,8 +108,14 @@ Intro −16.4 → Verse −9.9 → Build −8.6 → Chorus −7.1 → Bridge −
 
 ## Validation results (2026-08-10)
 
-- Master: 137.4 s, −14.0 LUFS, −6.1 dBTP, crest 7.2 dB, sha256 `894167a8`.
+- Master: 137.4 s, −14.0 LUFS, −6.1 dBTP, crest 7.2 dB, sha256 `908dc0cc`.
 - Stems: Guitar −7.3 · Bass −10.6 · Lead −10.2 · Epiano −17.6 · Drums −22.1 LUFS.
+- Finale fade-out: **volume automation** (CC 7) on all four finale layers
+  ramps the last 4 bars to 20% — audible in the mastered mix (−11.2 →
+  −13.4 dBFS), unlike a velocity taper which the master chain compensates.
 - MIDI export: `lp_nu_metal.mid` (16 KB) — load in any DAW (FL Studio,
   Reaper, LMMS) to compare the arrangement against the reference songs in
   `docs/planning/music-reference-catalog.md`.
+- Pinned by `golden_lp_nu_metal_demo_passes_full_gates` in
+  `crates/scorestrata-eval/tests/golden_harness_e2e.rs` — compile, full L6
+  validation, and SF2 render gates run in CI.

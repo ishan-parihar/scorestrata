@@ -1,8 +1,8 @@
 {
   "id": "d628296e-a6bd-5712-8cd1-b32bbab5d645",
   "name": "lp_nu_metal",
-  "created_at": "2026-08-09T23:10:29.957511+00:00",
-  "modified_at": "2026-08-09T23:10:29.957511+00:00",
+  "created_at": "2026-08-09T23:22:25.500567+00:00",
+  "modified_at": "2026-08-09T23:22:25.500567+00:00",
   "brief": {
     "raw_text": "Rock nu-metal at 105 BPM in A minor, 60 bars \u2014 Linkin Park-style: palm-muted power-chord guitars on i-VI-III-VII, driving root/octave bass, backbeat-to-syncopated drums, epiano intro hook, quiet verses building to wall-of-sound choruses",
     "genre": "nu_metal",
@@ -2068,25 +2068,44 @@
                 "pattern_id": "9ffea216-7d7e-539e-b2f3-3f1faa47d4d0",
                 "start_tick": 9600,
                 "transpose": 0,
-                "velocity_multiplier": 0.8
+                "velocity_multiplier": 1.0
               },
               {
                 "id": "ab197a28-f97d-5dd1-b728-a26affb2db56",
                 "pattern_id": "9ffea216-7d7e-539e-b2f3-3f1faa47d4d0",
                 "start_tick": 11520,
                 "transpose": 0,
-                "velocity_multiplier": 0.6
+                "velocity_multiplier": 1.0
               },
               {
                 "id": "057193a1-1cf1-5079-9d40-c02805e023da",
                 "pattern_id": "9ffea216-7d7e-539e-b2f3-3f1faa47d4d0",
                 "start_tick": 13440,
                 "transpose": 0,
-                "velocity_multiplier": 0.45
+                "velocity_multiplier": 1.0
               }
             ],
             "register": null,
-            "automation": [],
+            "automation": [
+              {
+                "layer_id": "5d8a412a-08c4-58aa-9a31-0be47a579d8e",
+                "param": "Volume",
+                "points": [
+                  {
+                    "tick": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 7680,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 15360,
+                    "value": 0.2
+                  }
+                ]
+              }
+            ],
             "fx": null,
             "mix_gain_db": null,
             "mix_pan": null,
@@ -2137,28 +2156,47 @@
                 "pattern_id": "e36347d5-fe90-5cd6-8e9e-48e5b21817eb",
                 "start_tick": 9600,
                 "transpose": -4,
-                "velocity_multiplier": 0.8
+                "velocity_multiplier": 1.0
               },
               {
                 "id": "9f8642a9-0176-5cd3-8912-0279051bc92e",
                 "pattern_id": "e36347d5-fe90-5cd6-8e9e-48e5b21817eb",
                 "start_tick": 11520,
                 "transpose": 3,
-                "velocity_multiplier": 0.6
+                "velocity_multiplier": 1.0
               },
               {
                 "id": "a2209f16-4226-5b75-80fa-bfc9f2234101",
                 "pattern_id": "e36347d5-fe90-5cd6-8e9e-48e5b21817eb",
                 "start_tick": 13440,
                 "transpose": -2,
-                "velocity_multiplier": 0.45
+                "velocity_multiplier": 1.0
               }
             ],
             "register": {
               "min_octave": 1,
               "max_octave": 3
             },
-            "automation": [],
+            "automation": [
+              {
+                "layer_id": "f067e874-c242-5006-9942-a878de663831",
+                "param": "Volume",
+                "points": [
+                  {
+                    "tick": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 7680,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 15360,
+                    "value": 0.2
+                  }
+                ]
+              }
+            ],
             "fx": null,
             "mix_gain_db": -1.5,
             "mix_pan": null,
@@ -2209,28 +2247,47 @@
                 "pattern_id": "9f8debbc-781d-50ac-98b6-21d3feb91c33",
                 "start_tick": 9600,
                 "transpose": -4,
-                "velocity_multiplier": 0.8
+                "velocity_multiplier": 1.0
               },
               {
                 "id": "61c8a7cb-157a-5efd-ae47-cb4c3695062e",
                 "pattern_id": "9f8debbc-781d-50ac-98b6-21d3feb91c33",
                 "start_tick": 11520,
                 "transpose": 3,
-                "velocity_multiplier": 0.6
+                "velocity_multiplier": 1.0
               },
               {
                 "id": "a2b8bea5-7c83-575c-a636-d537085a28f1",
                 "pattern_id": "9f8debbc-781d-50ac-98b6-21d3feb91c33",
                 "start_tick": 13440,
                 "transpose": -2,
-                "velocity_multiplier": 0.45
+                "velocity_multiplier": 1.0
               }
             ],
             "register": {
               "min_octave": 2,
               "max_octave": 3
             },
-            "automation": [],
+            "automation": [
+              {
+                "layer_id": "4655c229-78b6-5021-a53f-98871ac8c877",
+                "param": "Volume",
+                "points": [
+                  {
+                    "tick": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 7680,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 15360,
+                    "value": 0.2
+                  }
+                ]
+              }
+            ],
             "fx": null,
             "mix_gain_db": -2.0,
             "mix_pan": -0.2,
@@ -2281,28 +2338,47 @@
                 "pattern_id": "69e4c54b-40a3-5df0-9200-f3abf642177d",
                 "start_tick": 9600,
                 "transpose": -4,
-                "velocity_multiplier": 0.8
+                "velocity_multiplier": 1.0
               },
               {
                 "id": "f1c8cbc6-2722-599b-a95c-bc55fa9c6cf3",
                 "pattern_id": "69e4c54b-40a3-5df0-9200-f3abf642177d",
                 "start_tick": 11520,
                 "transpose": 3,
-                "velocity_multiplier": 0.6
+                "velocity_multiplier": 1.0
               },
               {
                 "id": "00f2edeb-6064-5d93-9819-5c8b3979c029",
                 "pattern_id": "69e4c54b-40a3-5df0-9200-f3abf642177d",
                 "start_tick": 13440,
                 "transpose": -2,
-                "velocity_multiplier": 0.45
+                "velocity_multiplier": 1.0
               }
             ],
             "register": {
               "min_octave": 4,
               "max_octave": 5
             },
-            "automation": [],
+            "automation": [
+              {
+                "layer_id": "d2235262-e748-564a-9cb4-1924b48f53a9",
+                "param": "Volume",
+                "points": [
+                  {
+                    "tick": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 7680,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 15360,
+                    "value": 0.2
+                  }
+                ]
+              }
+            ],
             "fx": null,
             "mix_gain_db": -3.0,
             "mix_pan": 0.25,

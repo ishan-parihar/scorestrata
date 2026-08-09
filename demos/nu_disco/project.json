@@ -1,0 +1,2399 @@
+{
+  "id": "d628296e-a6bd-5712-8cd1-b32bbab5d645",
+  "name": "nu_disco",
+  "created_at": "2026-08-09T23:22:25.538902+00:00",
+  "modified_at": "2026-08-09T23:22:25.538902+00:00",
+  "brief": {
+    "raw_text": "Nu-disco at 116 BPM in B Dorian, 44 bars \u2014 Daft Punk Get Lucky-style: 4-on-floor kick with open-hat disco pocket, octave-bounce bass on Bm7-D-F#m7-E, off-beat guitar stabs, epiano chord comps, pentatonic lead riff in the chorus",
+    "genre": "funk",
+    "mood": [
+      "upbeat",
+      "groovy"
+    ],
+    "references": [],
+    "delivery_target": "streaming",
+    "constraints": [],
+    "confidence": 0.8
+  },
+  "config": {
+    "name": "nu_disco",
+    "genre": "funk",
+    "bpm": 116,
+    "key": "B minor",
+    "time_signature": {
+      "numerator": 4,
+      "denominator": 4
+    },
+    "duration_bars": 44,
+    "delivery_target": "streaming",
+    "mood": [
+      "upbeat",
+      "groovy"
+    ],
+    "references": []
+  },
+  "arrangement": {
+    "total_bars": 44,
+    "time_signature": {
+      "numerator": 4,
+      "denominator": 4
+    },
+    "segments": [
+      {
+        "id": "809fef35-c308-5480-b951-910b6fdb8e33",
+        "name": "Intro",
+        "role": "intro",
+        "start_bar": 0,
+        "bars": 4,
+        "layers": [
+          {
+            "id": "2966d4f4-fd06-57ef-ae30-b417efc4c37f",
+            "name": "Epiano",
+            "instrument": "epiano_bell",
+            "pattern_instances": [
+              {
+                "id": "a1a1fd52-df7c-5d27-895a-45b850f29967",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "301d11b5-0938-5098-a859-863d39574d51",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "2c9e81b2-74cc-5c95-9175-7deeba22921c",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "200f3a5e-2628-568a-b63f-98706b4b5614",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.7
+              }
+            ],
+            "register": {
+              "min_octave": 3,
+              "max_octave": 4
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -7.0,
+            "mix_pan": 0.3,
+            "group": null
+          },
+          {
+            "id": "52741afd-c180-5a60-baa8-97615fbdf6a6",
+            "name": "Drums",
+            "instrument": "drum_sampler",
+            "pattern_instances": [
+              {
+                "id": "2a37ca90-9c21-52c2-9a26-e7516d43e7cd",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 3840,
+                "transpose": 0,
+                "velocity_multiplier": 0.75
+              },
+              {
+                "id": "2a0bff97-959e-54cc-bc8e-e242dfccc74d",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 5760,
+                "transpose": 0,
+                "velocity_multiplier": 0.75
+              }
+            ],
+            "register": null,
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": null,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "46a01b9e-aa47-5882-9fa1-13ed8983098e",
+            "name": "Bass",
+            "instrument": "bass_synth",
+            "pattern_instances": [
+              {
+                "id": "080c4f44-47f9-5001-ba7e-e6cd1ad079f3",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "bcecbe2d-5ac6-5529-ba9a-408bc082cf89",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.8
+              }
+            ],
+            "register": {
+              "min_octave": 1,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -1.5,
+            "mix_pan": null,
+            "group": null
+          }
+        ]
+      },
+      {
+        "id": "9a4a9dfe-633a-5b5a-a4f8-e267704d5fbf",
+        "name": "Verse",
+        "role": "verse",
+        "start_bar": 4,
+        "bars": 8,
+        "layers": [
+          {
+            "id": "86c46ff4-9d65-5bf1-8c55-793f093d7fa3",
+            "name": "Drums",
+            "instrument": "drum_sampler",
+            "pattern_instances": [
+              {
+                "id": "69d83441-c896-5afd-91c1-70adf09f0e98",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "58187569-3861-5cc9-bdeb-00c7ffcb8975",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 1920,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "ce52cff1-11d5-5d82-aa94-97148e44f19f",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 3840,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "3b04e6ec-b27c-506d-b67a-a078c69ab346",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 5760,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "7fa148a6-9989-50e2-b33d-589046433810",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "a7db1e1a-072f-5564-a806-609d48bb8f3b",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 9600,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "7c679de5-1d53-5d93-89cc-e80d8c525ee5",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 11520,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "a6a3215b-7e0d-5c72-8469-e06c5a5e3305",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 13440,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              }
+            ],
+            "register": null,
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": null,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "16bfd5d6-d6cc-53b9-88f3-d3b38730c15c",
+            "name": "Bass",
+            "instrument": "bass_synth",
+            "pattern_instances": [
+              {
+                "id": "2f8274e3-a267-5794-a816-e53046bf8e8d",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "aca8a84e-99bc-59b9-a66d-4cead5cfaeef",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "ac0ab120-888b-5205-ba76-b93e4b5e6a86",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "222ccdd0-4d66-502d-98f6-1cbd1e348566",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "bc256796-3828-566f-ba78-ba4efd15a5a8",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "d899db3d-4461-5d3d-bdc8-d631b613747d",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "dd71545a-d092-5629-b2e9-a94a0db6d0cd",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "35c48764-ee0c-5ea0-b308-e03008e19a7d",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.9
+              }
+            ],
+            "register": {
+              "min_octave": 1,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -1.5,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "d38e2dc7-3cba-5144-8a42-6d51eca96b69",
+            "name": "Guitar",
+            "instrument": "distorted_guitar",
+            "pattern_instances": [
+              {
+                "id": "707a3e58-e9b9-5ca5-bcf6-5f58479772b5",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "cbf53c36-3f21-584e-b220-053f8fa48d63",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "e7f0da26-2953-58ae-a4f6-469f443ce6ab",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "33d50d93-1e54-5d71-a94b-d265e2ea4c5f",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "bff448e6-048f-58b5-8f0a-a3d83aa5427d",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "f97eb92c-3868-562a-b608-7611255077fe",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "7ff85138-0a03-53b4-a742-96902a16073b",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "6a027b06-5dcb-5938-8363-ad1efe11ce84",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.8
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": -0.2,
+            "group": null
+          },
+          {
+            "id": "6d57aeeb-884e-59af-9a02-12f207daf2f0",
+            "name": "Epiano",
+            "instrument": "epiano_bell",
+            "pattern_instances": [
+              {
+                "id": "922453f9-7f6e-5ba9-ba10-687734a0533f",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "fe091241-7ec2-55a6-881d-7b1385f2a53d",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "fd11f00c-963e-5f9e-9209-03541aa2954d",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "7a42b2e9-eb70-5379-b0e0-bc9093d1b0bc",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "206ada6f-6a26-5571-b449-0a8828950546",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "c02c7ec9-e612-5790-8c98-647b676194de",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "e427bf86-2ec6-5909-a886-29e1d20747fa",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "8e30eabb-d90b-5519-8dea-5c5485e00cb2",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.6
+              }
+            ],
+            "register": {
+              "min_octave": 3,
+              "max_octave": 4
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -7.0,
+            "mix_pan": 0.3,
+            "group": null
+          }
+        ]
+      },
+      {
+        "id": "8fe7b8a5-fec2-5dc7-9069-1ad49612dbcf",
+        "name": "Break",
+        "role": "build",
+        "start_bar": 12,
+        "bars": 4,
+        "layers": [
+          {
+            "id": "e2b83f1f-c0c1-5788-900c-7f66024984ab",
+            "name": "Drums",
+            "instrument": "drum_sampler",
+            "pattern_instances": [
+              {
+                "id": "dd8369a8-736e-555c-9327-e01f57cc4190",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.95
+              },
+              {
+                "id": "28926287-367a-5c64-b35c-fe5f3f8211fa",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 1920,
+                "transpose": 0,
+                "velocity_multiplier": 0.95
+              },
+              {
+                "id": "9e18d94f-f09e-5bf9-99dc-b1e8984cae45",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 3840,
+                "transpose": 0,
+                "velocity_multiplier": 0.95
+              },
+              {
+                "id": "8c4fbbee-3c65-5285-9e77-90cf023efea2",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 5760,
+                "transpose": 0,
+                "velocity_multiplier": 0.95
+              }
+            ],
+            "register": null,
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": null,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "d037409f-60e7-51ab-af59-ea4ae8b1be64",
+            "name": "Epiano",
+            "instrument": "epiano_bell",
+            "pattern_instances": [
+              {
+                "id": "47100b81-52dc-5489-a69c-0bc6ab556a31",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "9d2da03b-e7bc-5714-a162-5ff7322dafef",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "fe893f0b-ae8e-5ba9-98b7-87e71b957502",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "0fc82ff5-da7d-53d3-911d-d091f6866531",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.9
+              }
+            ],
+            "register": {
+              "min_octave": 3,
+              "max_octave": 4
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -7.0,
+            "mix_pan": 0.3,
+            "group": null
+          }
+        ]
+      },
+      {
+        "id": "9d9369f8-2c9d-5026-a8fe-618df7113864",
+        "name": "Chorus",
+        "role": "chorus",
+        "start_bar": 16,
+        "bars": 8,
+        "layers": [
+          {
+            "id": "92818650-8f3b-594d-b19f-5f5446256f07",
+            "name": "Drums",
+            "instrument": "drum_sampler",
+            "pattern_instances": [
+              {
+                "id": "3ccaead3-4916-5a43-81c1-2a96b3a3f165",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "81779dd3-6418-57c2-afb2-b497aa4db9ff",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 1920,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "2fb1c2a2-fbed-5d0d-a506-4ee773307a0f",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 3840,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "f1c68379-ab77-52a3-88ea-52c23a04b393",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 5760,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "7a0ddc82-ef0e-50f5-8401-c9eb100de6f4",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "3e0d1b9f-0626-5538-abac-dd30cc25f99e",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 9600,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "c4bf483a-5545-5de5-b75e-51ac8acf1a35",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 11520,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "34c977df-7b17-5e50-b577-32c8e337b34c",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 13440,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": null,
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": null,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "bb326356-14ec-507d-b07e-dce89bd04fb8",
+            "name": "Bass",
+            "instrument": "bass_synth",
+            "pattern_instances": [
+              {
+                "id": "73109095-d155-5518-948c-25431a559a29",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "685131bc-7631-5007-b2cc-3aabf7312e51",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "8f875397-64ca-55d3-99e0-6428f96115ec",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "2c2e1ca4-9920-547c-8e9c-60eef8a03fc0",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "f17b5142-69d0-5488-9b63-41982ccf0a58",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "1f2d28cd-2714-56d5-b9db-755dc918b696",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "8dedc00a-fc49-5501-bcf8-c62ed44bca6c",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "099ef4a0-e38e-552d-9ea0-35eb6a1b758d",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": {
+              "min_octave": 1,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -1.5,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "5fef050b-04f6-5c1c-b39e-3c0a9fd5292a",
+            "name": "Guitar",
+            "instrument": "distorted_guitar",
+            "pattern_instances": [
+              {
+                "id": "a3d01ff0-2ea3-5f63-8745-d5a7fdcdb1d9",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "2b389ab9-e265-5f0e-a2c5-c1f78bcbeed3",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "29e329e9-6491-522d-ae3f-ccf87d492e70",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "1778a04e-f333-5955-8a9b-b3254e26a5ae",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "c0c8a6a4-11de-5179-902e-c2bd62dd4470",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "fa1dd00c-b88b-5c3b-b874-9322625f6793",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "bce05dad-6180-5fc6-a94d-1dd65c7fb366",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "c63ec79b-71d5-5ba2-8854-0a53514b03b0",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": -0.2,
+            "group": null
+          },
+          {
+            "id": "0761c83f-7b00-5af3-9a2b-125592a1dc5b",
+            "name": "Epiano",
+            "instrument": "epiano_bell",
+            "pattern_instances": [
+              {
+                "id": "871f3ff0-427f-518b-b0c7-fe3bf6323d1f",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "806bf867-d8e4-5b20-8d9d-d086db46d415",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "2cd811de-7d82-5ef3-aaee-9ecdcca8d736",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "62aaf31e-ab23-54b3-9105-1db16e65de47",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "15d4b6bd-1fee-56e1-9e13-13539c2ed2c4",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "b6ae560c-9606-5b72-929b-c1af91ffb2ea",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "1186e4b6-66ee-5eb7-a806-1db29a0fa0e5",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "fe515e40-20d5-5796-a9b1-8fdfae7972d9",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.7
+              }
+            ],
+            "register": {
+              "min_octave": 3,
+              "max_octave": 4
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -7.0,
+            "mix_pan": 0.3,
+            "group": null
+          },
+          {
+            "id": "d651648c-91a6-5f5c-88d1-07d235f20414",
+            "name": "Lead",
+            "instrument": "lead_synth",
+            "pattern_instances": [
+              {
+                "id": "68a8873b-2180-52aa-aded-e29b2279b56e",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "0b36d459-c789-5c64-ae24-6a7f0fcabd57",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "79908df7-f84c-57a5-99af-1159213311c5",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "66a108e7-ca3d-5e11-b1a0-92e3ab488345",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "4c96ab4c-45d8-5d31-bdb7-f9664afc1881",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "69b340ec-ccfd-50a1-a622-3f78d8791af9",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "0bb8f3aa-206c-5a7a-9ffa-796a6a56224a",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "467a7bc2-e505-565e-b6cf-eed64476a33a",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.9
+              }
+            ],
+            "register": {
+              "min_octave": 4,
+              "max_octave": 5
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -3.0,
+            "mix_pan": 0.25,
+            "group": null
+          }
+        ]
+      },
+      {
+        "id": "abb9b232-804a-52a5-bddb-397c2a3e969e",
+        "name": "Verse",
+        "role": "verse",
+        "start_bar": 24,
+        "bars": 8,
+        "layers": [
+          {
+            "id": "86c46ff4-9d65-5bf1-8c55-793f093d7fa3",
+            "name": "Drums",
+            "instrument": "drum_sampler",
+            "pattern_instances": [
+              {
+                "id": "69d83441-c896-5afd-91c1-70adf09f0e98",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "58187569-3861-5cc9-bdeb-00c7ffcb8975",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 1920,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "ce52cff1-11d5-5d82-aa94-97148e44f19f",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 3840,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "3b04e6ec-b27c-506d-b67a-a078c69ab346",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 5760,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "7fa148a6-9989-50e2-b33d-589046433810",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "a7db1e1a-072f-5564-a806-609d48bb8f3b",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 9600,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "7c679de5-1d53-5d93-89cc-e80d8c525ee5",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 11520,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "a6a3215b-7e0d-5c72-8469-e06c5a5e3305",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 13440,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              }
+            ],
+            "register": null,
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": null,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "16bfd5d6-d6cc-53b9-88f3-d3b38730c15c",
+            "name": "Bass",
+            "instrument": "bass_synth",
+            "pattern_instances": [
+              {
+                "id": "2f8274e3-a267-5794-a816-e53046bf8e8d",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "aca8a84e-99bc-59b9-a66d-4cead5cfaeef",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "ac0ab120-888b-5205-ba76-b93e4b5e6a86",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "222ccdd0-4d66-502d-98f6-1cbd1e348566",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "bc256796-3828-566f-ba78-ba4efd15a5a8",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "d899db3d-4461-5d3d-bdc8-d631b613747d",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "dd71545a-d092-5629-b2e9-a94a0db6d0cd",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "35c48764-ee0c-5ea0-b308-e03008e19a7d",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.9
+              }
+            ],
+            "register": {
+              "min_octave": 1,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -1.5,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "d38e2dc7-3cba-5144-8a42-6d51eca96b69",
+            "name": "Guitar",
+            "instrument": "distorted_guitar",
+            "pattern_instances": [
+              {
+                "id": "707a3e58-e9b9-5ca5-bcf6-5f58479772b5",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "cbf53c36-3f21-584e-b220-053f8fa48d63",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "e7f0da26-2953-58ae-a4f6-469f443ce6ab",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "33d50d93-1e54-5d71-a94b-d265e2ea4c5f",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "bff448e6-048f-58b5-8f0a-a3d83aa5427d",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "f97eb92c-3868-562a-b608-7611255077fe",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "7ff85138-0a03-53b4-a742-96902a16073b",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "6a027b06-5dcb-5938-8363-ad1efe11ce84",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.8
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": -0.2,
+            "group": null
+          },
+          {
+            "id": "6d57aeeb-884e-59af-9a02-12f207daf2f0",
+            "name": "Epiano",
+            "instrument": "epiano_bell",
+            "pattern_instances": [
+              {
+                "id": "922453f9-7f6e-5ba9-ba10-687734a0533f",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "fe091241-7ec2-55a6-881d-7b1385f2a53d",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "fd11f00c-963e-5f9e-9209-03541aa2954d",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "7a42b2e9-eb70-5379-b0e0-bc9093d1b0bc",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "206ada6f-6a26-5571-b449-0a8828950546",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "c02c7ec9-e612-5790-8c98-647b676194de",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "e427bf86-2ec6-5909-a886-29e1d20747fa",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.6
+              },
+              {
+                "id": "8e30eabb-d90b-5519-8dea-5c5485e00cb2",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.6
+              }
+            ],
+            "register": {
+              "min_octave": 3,
+              "max_octave": 4
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -7.0,
+            "mix_pan": 0.3,
+            "group": null
+          }
+        ]
+      },
+      {
+        "id": "2d661489-4862-5a82-ad2e-eeac778349a7",
+        "name": "Chorus",
+        "role": "chorus",
+        "start_bar": 32,
+        "bars": 8,
+        "layers": [
+          {
+            "id": "92818650-8f3b-594d-b19f-5f5446256f07",
+            "name": "Drums",
+            "instrument": "drum_sampler",
+            "pattern_instances": [
+              {
+                "id": "3ccaead3-4916-5a43-81c1-2a96b3a3f165",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "81779dd3-6418-57c2-afb2-b497aa4db9ff",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 1920,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "2fb1c2a2-fbed-5d0d-a506-4ee773307a0f",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 3840,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "f1c68379-ab77-52a3-88ea-52c23a04b393",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 5760,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "7a0ddc82-ef0e-50f5-8401-c9eb100de6f4",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "3e0d1b9f-0626-5538-abac-dd30cc25f99e",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 9600,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "c4bf483a-5545-5de5-b75e-51ac8acf1a35",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 11520,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "34c977df-7b17-5e50-b577-32c8e337b34c",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 13440,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": null,
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": null,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "bb326356-14ec-507d-b07e-dce89bd04fb8",
+            "name": "Bass",
+            "instrument": "bass_synth",
+            "pattern_instances": [
+              {
+                "id": "73109095-d155-5518-948c-25431a559a29",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "685131bc-7631-5007-b2cc-3aabf7312e51",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "8f875397-64ca-55d3-99e0-6428f96115ec",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "2c2e1ca4-9920-547c-8e9c-60eef8a03fc0",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "f17b5142-69d0-5488-9b63-41982ccf0a58",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "1f2d28cd-2714-56d5-b9db-755dc918b696",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "8dedc00a-fc49-5501-bcf8-c62ed44bca6c",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "099ef4a0-e38e-552d-9ea0-35eb6a1b758d",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": {
+              "min_octave": 1,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -1.5,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "5fef050b-04f6-5c1c-b39e-3c0a9fd5292a",
+            "name": "Guitar",
+            "instrument": "distorted_guitar",
+            "pattern_instances": [
+              {
+                "id": "a3d01ff0-2ea3-5f63-8745-d5a7fdcdb1d9",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "2b389ab9-e265-5f0e-a2c5-c1f78bcbeed3",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "29e329e9-6491-522d-ae3f-ccf87d492e70",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "1778a04e-f333-5955-8a9b-b3254e26a5ae",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "c0c8a6a4-11de-5179-902e-c2bd62dd4470",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "fa1dd00c-b88b-5c3b-b874-9322625f6793",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "bce05dad-6180-5fc6-a94d-1dd65c7fb366",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "c63ec79b-71d5-5ba2-8854-0a53514b03b0",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": -0.2,
+            "group": null
+          },
+          {
+            "id": "0761c83f-7b00-5af3-9a2b-125592a1dc5b",
+            "name": "Epiano",
+            "instrument": "epiano_bell",
+            "pattern_instances": [
+              {
+                "id": "871f3ff0-427f-518b-b0c7-fe3bf6323d1f",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "806bf867-d8e4-5b20-8d9d-d086db46d415",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "2cd811de-7d82-5ef3-aaee-9ecdcca8d736",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "62aaf31e-ab23-54b3-9105-1db16e65de47",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "15d4b6bd-1fee-56e1-9e13-13539c2ed2c4",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "b6ae560c-9606-5b72-929b-c1af91ffb2ea",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "1186e4b6-66ee-5eb7-a806-1db29a0fa0e5",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "fe515e40-20d5-5796-a9b1-8fdfae7972d9",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.7
+              }
+            ],
+            "register": {
+              "min_octave": 3,
+              "max_octave": 4
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -7.0,
+            "mix_pan": 0.3,
+            "group": null
+          },
+          {
+            "id": "d651648c-91a6-5f5c-88d1-07d235f20414",
+            "name": "Lead",
+            "instrument": "lead_synth",
+            "pattern_instances": [
+              {
+                "id": "68a8873b-2180-52aa-aded-e29b2279b56e",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "0b36d459-c789-5c64-ae24-6a7f0fcabd57",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "79908df7-f84c-57a5-99af-1159213311c5",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "66a108e7-ca3d-5e11-b1a0-92e3ab488345",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "4c96ab4c-45d8-5d31-bdb7-f9664afc1881",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 7680,
+                "transpose": 0,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "69b340ec-ccfd-50a1-a622-3f78d8791af9",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 9600,
+                "transpose": 3,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "0bb8f3aa-206c-5a7a-9ffa-796a6a56224a",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 11520,
+                "transpose": -5,
+                "velocity_multiplier": 0.9
+              },
+              {
+                "id": "467a7bc2-e505-565e-b6cf-eed64476a33a",
+                "pattern_id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+                "start_tick": 13440,
+                "transpose": -7,
+                "velocity_multiplier": 0.9
+              }
+            ],
+            "register": {
+              "min_octave": 4,
+              "max_octave": 5
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -3.0,
+            "mix_pan": 0.25,
+            "group": null
+          }
+        ]
+      },
+      {
+        "id": "771383fd-f59f-5a9a-a46a-16e72850eb3b",
+        "name": "Outro",
+        "role": "outro",
+        "start_bar": 40,
+        "bars": 4,
+        "layers": [
+          {
+            "id": "c2cf5d49-cd08-5674-b6aa-49153d552ca0",
+            "name": "Drums",
+            "instrument": "drum_sampler",
+            "pattern_instances": [
+              {
+                "id": "5343558e-085e-5a0c-8907-507a3a89bc2a",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "c95aeca7-a245-5de4-bc76-0795565f9787",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 1920,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "c24c6e9d-ea33-51b5-8a44-655c5a34bed5",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 3840,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "a4fe3ac3-24c9-5685-acf2-874148d2aadc",
+                "pattern_id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+                "start_tick": 5760,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": null,
+            "automation": [
+              {
+                "layer_id": "c2cf5d49-cd08-5674-b6aa-49153d552ca0",
+                "param": "Volume",
+                "points": [
+                  {
+                    "tick": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 7680,
+                    "value": 0.2
+                  }
+                ]
+              }
+            ],
+            "fx": null,
+            "mix_gain_db": null,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "a09212e7-1f2e-5aaa-848e-5e0821c3f4f1",
+            "name": "Bass",
+            "instrument": "bass_synth",
+            "pattern_instances": [
+              {
+                "id": "4503f9cd-7140-57fa-9043-558d312b16bd",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "5588a794-61db-59b2-82e6-106b88c3029b",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "9491b3b4-ffd8-5dff-950a-5dd8d25350e9",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "b684682b-1691-5499-84cc-c43cea8cee45",
+                "pattern_id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": {
+              "min_octave": 1,
+              "max_octave": 3
+            },
+            "automation": [
+              {
+                "layer_id": "a09212e7-1f2e-5aaa-848e-5e0821c3f4f1",
+                "param": "Volume",
+                "points": [
+                  {
+                    "tick": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 7680,
+                    "value": 0.2
+                  }
+                ]
+              }
+            ],
+            "fx": null,
+            "mix_gain_db": -1.5,
+            "mix_pan": null,
+            "group": null
+          },
+          {
+            "id": "b57f8a76-fe52-55f5-8bc4-f9b219082368",
+            "name": "Guitar",
+            "instrument": "distorted_guitar",
+            "pattern_instances": [
+              {
+                "id": "6ee70164-56a6-5fe2-b2c8-88d7e0f7d39d",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "25881773-ef4f-5294-a770-84f5f6235b01",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "b877cc64-975a-55d4-b70c-9d69b018f882",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "fffde6aa-e093-56ae-a539-655097b09e98",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [
+              {
+                "layer_id": "b57f8a76-fe52-55f5-8bc4-f9b219082368",
+                "param": "Volume",
+                "points": [
+                  {
+                    "tick": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 7680,
+                    "value": 0.2
+                  }
+                ]
+              }
+            ],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": -0.2,
+            "group": null
+          },
+          {
+            "id": "3ed7362c-e29b-5483-bf5f-81f6ee29db80",
+            "name": "Epiano",
+            "instrument": "epiano_bell",
+            "pattern_instances": [
+              {
+                "id": "600ef7c2-b647-523b-94e2-e9edc8edabd4",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 0,
+                "transpose": 0,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "d4ddf262-143c-5ce9-bbc6-cc07a53b0269",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 1920,
+                "transpose": 3,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "3f4bf21d-ce0f-5304-8fbf-4689b2ab1c5e",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 3840,
+                "transpose": -5,
+                "velocity_multiplier": 0.7
+              },
+              {
+                "id": "cdf81058-178f-511e-b795-e085b7851b23",
+                "pattern_id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+                "start_tick": 5760,
+                "transpose": -7,
+                "velocity_multiplier": 0.7
+              }
+            ],
+            "register": {
+              "min_octave": 3,
+              "max_octave": 4
+            },
+            "automation": [
+              {
+                "layer_id": "3ed7362c-e29b-5483-bf5f-81f6ee29db80",
+                "param": "Volume",
+                "points": [
+                  {
+                    "tick": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 7680,
+                    "value": 0.2
+                  }
+                ]
+              }
+            ],
+            "fx": null,
+            "mix_gain_db": -7.0,
+            "mix_pan": 0.3,
+            "group": null
+          }
+        ]
+      }
+    ],
+    "energy_curve": []
+  },
+  "tracks": [],
+  "patterns": [
+    {
+      "id": "2ab78ed8-c16c-5e5e-b28d-ff699471023b",
+      "name": "Drums_Disco",
+      "bars": 1,
+      "time_signature": {
+        "numerator": 4,
+        "denominator": 4
+      },
+      "notes": [
+        {
+          "id": "da86bea0-a507-5cc6-9da2-81e7e07edd35",
+          "pitch": 36,
+          "start": 0,
+          "duration": 160,
+          "velocity": 112,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "ec260d36-1ecc-57de-affb-e2ec8e88eae9",
+          "pitch": 36,
+          "start": 480,
+          "duration": 160,
+          "velocity": 112,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "3e833989-a4e8-543e-a224-3687876753bf",
+          "pitch": 36,
+          "start": 960,
+          "duration": 160,
+          "velocity": 112,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "1e9ef249-76d8-5a25-8e35-c527a8f763c9",
+          "pitch": 36,
+          "start": 1440,
+          "duration": 160,
+          "velocity": 112,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "c00bedd2-0017-57ca-9a40-b209a0830715",
+          "pitch": 38,
+          "start": 480,
+          "duration": 120,
+          "velocity": 102,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "97a8fd43-2734-5193-9cd9-0df9fa2626f7",
+          "pitch": 38,
+          "start": 1440,
+          "duration": 120,
+          "velocity": 102,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "b3ac00ad-ddfd-551c-870e-e4c182d86ce5",
+          "pitch": 49,
+          "start": 480,
+          "duration": 80,
+          "velocity": 92,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "d50091ef-9d25-5be8-8f4f-9ecfb9e2f3ff",
+          "pitch": 49,
+          "start": 1440,
+          "duration": 80,
+          "velocity": 92,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "564f0831-8c4d-5025-973f-03b2187899b9",
+          "pitch": 42,
+          "start": 0,
+          "duration": 60,
+          "velocity": 80,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "08558e18-777d-5203-b2c4-bc625811cde1",
+          "pitch": 42,
+          "start": 240,
+          "duration": 60,
+          "velocity": 80,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "9361f159-530a-5678-8c6f-1a65cbcc3a69",
+          "pitch": 42,
+          "start": 480,
+          "duration": 60,
+          "velocity": 80,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "c38f1324-85b2-5078-be67-39bf566ebf25",
+          "pitch": 42,
+          "start": 720,
+          "duration": 60,
+          "velocity": 80,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "4c761357-21bd-5ea1-89b8-707f665b4f66",
+          "pitch": 42,
+          "start": 960,
+          "duration": 60,
+          "velocity": 80,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "065ff4f5-ceee-5dcd-b8d1-79ac153e7fa8",
+          "pitch": 42,
+          "start": 1200,
+          "duration": 60,
+          "velocity": 80,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "8cd41fe9-5a9b-5ffb-8fd0-5b907fd7f6e5",
+          "pitch": 42,
+          "start": 1440,
+          "duration": 60,
+          "velocity": 80,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "ca8386d1-2c37-5ca6-b40c-8c6d6925a246",
+          "pitch": 42,
+          "start": 1680,
+          "duration": 60,
+          "velocity": 80,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "1836d1d6-41a6-5cbc-9c2e-ad842e65ef19",
+          "pitch": 46,
+          "start": 120,
+          "duration": 160,
+          "velocity": 66,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "eb9b8777-8da1-5b8e-a2c7-4c9a9df4946e",
+          "pitch": 46,
+          "start": 360,
+          "duration": 160,
+          "velocity": 66,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "dd216a66-073e-5714-925d-2aa6283de96e",
+          "pitch": 46,
+          "start": 600,
+          "duration": 160,
+          "velocity": 66,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "9d362d7a-0cf8-5a6c-942f-1b838e8f547c",
+          "pitch": 46,
+          "start": 840,
+          "duration": 160,
+          "velocity": 66,
+          "tied": false,
+          "articulation": null
+        }
+      ],
+      "steps": []
+    },
+    {
+      "id": "617df414-280d-57c5-a2cc-4d2b14950de3",
+      "name": "Bass_Bounce",
+      "bars": 1,
+      "time_signature": {
+        "numerator": 4,
+        "denominator": 4
+      },
+      "notes": [
+        {
+          "id": "d08daf9c-587a-533e-9ed0-f5041d69277f",
+          "pitch": 35,
+          "start": 0,
+          "duration": 200,
+          "velocity": 100,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "f5dfc1b6-a685-50e9-ae09-2555217f2195",
+          "pitch": 47,
+          "start": 240,
+          "duration": 200,
+          "velocity": 90,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "4a8c08ee-b34e-51d2-bcff-793c20646102",
+          "pitch": 35,
+          "start": 480,
+          "duration": 200,
+          "velocity": 98,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "207c862f-f7a1-5881-8437-d60396ab7230",
+          "pitch": 35,
+          "start": 720,
+          "duration": 200,
+          "velocity": 86,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "b074e35d-175c-5751-9675-b3496adb0226",
+          "pitch": 35,
+          "start": 960,
+          "duration": 200,
+          "velocity": 100,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "bfd87dfb-254d-5952-b851-a30dffe8ad3c",
+          "pitch": 47,
+          "start": 1200,
+          "duration": 200,
+          "velocity": 90,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "dbf1f3e8-9cfe-50de-8c7b-0570fdb51446",
+          "pitch": 35,
+          "start": 1440,
+          "duration": 200,
+          "velocity": 96,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "13b43cf0-cebb-595b-be12-d0ad58895d56",
+          "pitch": 47,
+          "start": 1680,
+          "duration": 200,
+          "velocity": 88,
+          "tied": false,
+          "articulation": null
+        }
+      ],
+      "steps": []
+    },
+    {
+      "id": "bdc31a38-6131-5700-aaca-a4a18125d468",
+      "name": "Bass_Root",
+      "bars": 1,
+      "time_signature": {
+        "numerator": 4,
+        "denominator": 4
+      },
+      "notes": [
+        {
+          "id": "a34f6591-7fc3-513b-8a6a-80f5102c000a",
+          "pitch": 35,
+          "start": 0,
+          "duration": 880,
+          "velocity": 96,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "53c68044-f28f-53d4-bb9a-126b2bf452cb",
+          "pitch": 35,
+          "start": 960,
+          "duration": 880,
+          "velocity": 92,
+          "tied": false,
+          "articulation": null
+        }
+      ],
+      "steps": []
+    },
+    {
+      "id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+      "name": "Guitar_Stabs",
+      "bars": 1,
+      "time_signature": {
+        "numerator": 4,
+        "denominator": 4
+      },
+      "notes": [
+        {
+          "id": "d5be1cc4-c717-5fbe-9c49-0219eff587bc",
+          "pitch": 47,
+          "start": 120,
+          "duration": 160,
+          "velocity": 96,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "72c783f2-136d-53ac-b7bc-6a77ae583cfc",
+          "pitch": 54,
+          "start": 120,
+          "duration": 160,
+          "velocity": 96,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "cf8a3ebf-9364-5a4f-9936-6971f924f45a",
+          "pitch": 47,
+          "start": 360,
+          "duration": 160,
+          "velocity": 88,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "c0892d21-2f3f-5037-a7ff-8b3d03ff3248",
+          "pitch": 54,
+          "start": 360,
+          "duration": 160,
+          "velocity": 88,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "6f978327-5a1c-53f3-b42e-dedfcbf91dce",
+          "pitch": 47,
+          "start": 600,
+          "duration": 160,
+          "velocity": 96,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "c66abdfc-f846-5b46-97db-87047ef2b54f",
+          "pitch": 54,
+          "start": 600,
+          "duration": 160,
+          "velocity": 96,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "513a3e0a-d061-5a33-8a87-50672bf079ca",
+          "pitch": 47,
+          "start": 840,
+          "duration": 160,
+          "velocity": 90,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "df1eee00-ad02-5d99-a075-5c21a270c3e1",
+          "pitch": 54,
+          "start": 840,
+          "duration": 160,
+          "velocity": 90,
+          "tied": false,
+          "articulation": null
+        }
+      ],
+      "steps": []
+    },
+    {
+      "id": "cf670139-f592-52e7-a17c-4ec73c8a10a4",
+      "name": "Epiano_Stabs",
+      "bars": 1,
+      "time_signature": {
+        "numerator": 4,
+        "denominator": 4
+      },
+      "notes": [
+        {
+          "id": "c7e71faa-a662-564b-a110-caa9191727e4",
+          "pitch": 59,
+          "start": 0,
+          "duration": 240,
+          "velocity": 88,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "f4e7ec7b-e369-5863-bcc4-95be54efbd4a",
+          "pitch": 62,
+          "start": 0,
+          "duration": 240,
+          "velocity": 88,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "d81a895d-1ee1-5b80-a5d6-9b5594fa16b4",
+          "pitch": 66,
+          "start": 0,
+          "duration": 240,
+          "velocity": 88,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "1c96b070-cb39-5af3-85ad-f647d0be6c40",
+          "pitch": 59,
+          "start": 960,
+          "duration": 240,
+          "velocity": 84,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "3c11e08c-c898-5d25-8042-8df64b9775b7",
+          "pitch": 62,
+          "start": 960,
+          "duration": 240,
+          "velocity": 84,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "0cd7e8b2-5798-53d9-8c9c-c31c81e67b42",
+          "pitch": 66,
+          "start": 960,
+          "duration": 240,
+          "velocity": 84,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "4b846851-4865-59dd-9ded-fc920d88d17a",
+          "pitch": 71,
+          "start": 1680,
+          "duration": 120,
+          "velocity": 78,
+          "tied": false,
+          "articulation": null
+        }
+      ],
+      "steps": []
+    },
+    {
+      "id": "eedfd2d5-3668-5e27-94b9-9e6f0967fab7",
+      "name": "Lead_Riff",
+      "bars": 1,
+      "time_signature": {
+        "numerator": 4,
+        "denominator": 4
+      },
+      "notes": [
+        {
+          "id": "46c50072-7748-5273-9846-835a059964c6",
+          "pitch": 71,
+          "start": 0,
+          "duration": 120,
+          "velocity": 96,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "b7a8bae2-775b-59f2-b26c-10978521f615",
+          "pitch": 74,
+          "start": 240,
+          "duration": 120,
+          "velocity": 88,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "f4dc637c-4711-59e9-96c4-5fdcca167ff3",
+          "pitch": 76,
+          "start": 480,
+          "duration": 240,
+          "velocity": 92,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "5ce21e00-3d58-5985-8cd4-223cc8e50b33",
+          "pitch": 78,
+          "start": 720,
+          "duration": 120,
+          "velocity": 86,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "b53d4050-aa05-5fe5-bf5f-bf6ff2e6255c",
+          "pitch": 76,
+          "start": 960,
+          "duration": 240,
+          "velocity": 90,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "f91897f2-2335-5256-887e-111cdde9dad2",
+          "pitch": 74,
+          "start": 1200,
+          "duration": 120,
+          "velocity": 86,
+          "tied": false,
+          "articulation": null
+        },
+        {
+          "id": "60dab374-7525-5985-b43b-593e0c855a16",
+          "pitch": 71,
+          "start": 1440,
+          "duration": 240,
+          "velocity": 84,
+          "tied": false,
+          "articulation": null
+        }
+      ],
+      "steps": []
+    }
+  ],
+  "spectral_reference": null,
+  "mixer": {
+    "master_gain_db": 0.0,
+    "stereo_width": 1.0,
+    "limiter_ceiling_db": -1.0
+  },
+  "sound_bank": "house",
+  "melodic_bank": "sf2",
+  "bus_graph": null,
+  "humanize": {
+    "enabled": true,
+    "seed": 116,
+    "velocity_sigma": 0.04,
+    "timing_sigma_ms": 3.0,
+    "gate_length_jitter": 0.04,
+    "groove": null,
+    "groove_amount": 0.0
+  },
+  "master_chain": {
+    "enabled": true,
+    "multiband": {
+      "enabled": true,
+      "low_crossover_hz": 120.0,
+      "high_crossover_hz": 3000.0,
+      "low_gain_db": -1.0,
+      "mid_gain_db": 0.5,
+      "high_gain_db": 1.0,
+      "low_width": 1.0,
+      "mid_width": 1.0,
+      "high_width": 1.0,
+      "mono_below_hz": 200.0
+    },
+    "saturation": {
+      "drive_db": 4.0,
+      "softness": 0.55,
+      "oversample": 2,
+      "trim_db": -3.0
+    },
+    "dither": {
+      "bits": 24,
+      "enabled": true
+    },
+    "target_lufs": -14.0
+  },
+  "status": "config_approved"
+}

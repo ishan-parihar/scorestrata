@@ -115,12 +115,13 @@ def reg(lo: int, hi: int) -> dict:
 def place(seed_prefix: str, pattern_id: str, bars: int, cycle, vm: float,
           offset: int = 0, fade: list | None = None) -> list:
     """One pattern instance per bar; `cycle` = transposes; `fade` = trailing
-    velocity-multiplier taper for the final bars."""
+    velocity-multiplier taper applied to the final `len(fade)` bars."""
     out = []
     for b in range(offset, offset + bars):
         mult = vm
         if fade and b >= offset + bars - len(fade):
-            mult *= fade[b - (offset + bars - len(fade))]
+            # Offset-independent: the fade index counts back from the last bar.
+            mult *= fade[b - (bars - len(fade))]
         out.append(instance(f"{seed_prefix}#{b}", pattern_id, b,
                             cycle[b % len(cycle)], round(mult, 3)))
     return out
@@ -295,20 +296,31 @@ def build_segments(patterns: dict) -> list:
     ]
     segs.append(segment("S_br", "Bridge", "bridge", 44, 8, bridge_layers))
 
-    # ── Finale (bars 52-59): full chorus with a 4-bar fade-out ───────────
+    # ── Finale (bars 52-59): full chorus with a 4-bar volume-automation
+    #    fade-out (CC 7) — audible in the mastered mix, unlike a velocity-
+    #    multiplier taper which the mastering chain's LUFS normalization
+    #    largely compensates.
     finale_layers = [
         layer("L_f_dr", "Drums", "drum_sampler",
-              place("F_dr", pid["Drums_Chorus"], 8, [0, 0, 0, 0], 1.0, fade=[1.0, 0.8, 0.6, 0.45])),
+              place("F_dr", pid["Drums_Chorus"], 8, [0, 0, 0, 0], 1.0)),
         layer("L_f_ba", "Bass", "bass_synth",
-              place("F_ba", pid["Bass_Chorus"], 8, CHORDS, 1.0, fade=[1.0, 0.8, 0.6, 0.45]),
+              place("F_ba", pid["Bass_Chorus"], 8, CHORDS, 1.0),
               reg(1, 3), gain=-1.5),
         layer("L_f_gu", "Guitar", "distorted_guitar",
-              place("F_gu", pid["Guitar_Chorus"], 8, CHORDS, 1.0, fade=[1.0, 0.8, 0.6, 0.45]),
+              place("F_gu", pid["Guitar_Chorus"], 8, CHORDS, 1.0),
               reg(2, 3), gain=-2.0, pan=-0.2),
         layer("L_f_ld", "Lead", "lead_synth",
-              place("F_ld", pid["Lead_Hook"], 8, CHORDS, 1.0, fade=[1.0, 0.8, 0.6, 0.45]),
+              place("F_ld", pid["Lead_Hook"], 8, CHORDS, 1.0),
               reg(4, 5), gain=-3.0, pan=0.25),
     ]
+    for lyr in finale_layers:
+        lyr["automation"] = [{
+            "layer_id": lyr["id"],
+            "param": "Volume",
+            "points": [{"tick": 0, "value": 1.0},
+                       {"tick": 4 * BAR, "value": 1.0},
+                       {"tick": 8 * BAR, "value": 0.2}],
+        }]
     segs.append(segment("S_f", "Finale", "chorus", 52, 8, finale_layers))
 
     return segs

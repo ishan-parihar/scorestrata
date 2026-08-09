@@ -10,6 +10,12 @@
 > channels the user pointed at.
 >
 > **Date:** 2026-08-10 · **HEAD:** `6490306`
+>
+> **Status update (Phase I, `ac8ace8`):** the synthetic bank audited below was
+> **retired** — `embedded_bank.rs`, `gen_instrument_bank.rs` and the 19 WAVs are
+> deleted, and the recorded `SoundFont` bank (`sf2_bank` + `assets/instruments_sf2/`,
+> FluidR3_GM via rustysynth) is now the only melodic sample path. Findings F1–F5
+> remain as the historical record of *why* the synthetic bank was replaced.
 
 ---
 
