@@ -208,6 +208,10 @@ pub fn render_cache_key(input_hash: &str, config: &RenderConfig) -> String {
         buf.push('|');
         buf.push_str(bank);
     }
+    if let Some(bank) = &config.melodic_bank {
+        buf.push('|');
+        buf.push_str(bank);
+    }
     if let Some(graph) = &config.bus_graph {
         buf.push('|');
         buf.push_str(&serde_json::to_string(graph).unwrap_or_default());
@@ -777,6 +781,11 @@ pub fn render_stems_full(
     let mut stems = Vec::new();
     let mut mixer = Mixer::new();
     let mut bus_layers: Vec<crate::bus::BusLayerInput> = Vec::new();
+    // (G) Build the melodic bank once for the whole render.
+    let melodic_bank = config
+        .melodic_bank
+        .as_ref()
+        .map(|_| crate::embedded_bank::embedded_instrument_bank());
 
     for layer_name in &layer_order {
         let layer_automation: Vec<&RenderAutomation> = automation
@@ -788,10 +797,6 @@ pub fn render_stems_full(
             .sound_bank
             .as_deref()
             .and_then(crate::samplebank::kit);
-        let melodic_bank = config
-            .melodic_bank
-            .as_ref()
-            .map(|_| crate::embedded_bank::embedded_instrument_bank());
         let mut buffer = render_layer_buffer(
             notes,
             layer_name,
@@ -1072,6 +1077,22 @@ fn render_layer_buffer(
                 rr_seed,
                 &mut note_buffer,
             );
+            // (G) Amp drive: the bank plays *clean* one-shots; a guitar
+            // family's voice carries a drive amount (e.g. `distorted_guitar`
+            // = 0.85) that previously lived in the synth voice. Re-apply it
+            // to the sampled body so the rock chug survives the switch.
+            if note_params.drive > 0.0 {
+                let gain = note_params.drive.clamp(0.0, 1.0).mul_add(8.0, 1.0);
+                let norm = gain.tanh().max(1e-6);
+                for s in &mut note_buffer {
+                    *s = (gain * *s).tanh() / norm;
+                }
+            }
+            // (G) Release fade: the sample engine stops writing when the
+            // one-shot ends, but a short note buffer would otherwise hard-
+            // truncate mid-pluck → a click on every chug. Ramp the tail of
+            // the note buffer down over the voice's release time.
+            fade_note_tail(&mut note_buffer, params.release.max(0.02), sample_rate);
         } else {
             let freq = midi_to_frequency(note.pitch);
             render_note(
@@ -1093,6 +1114,25 @@ fn render_layer_buffer(
         }
     }
     buffer
+}
+
+/// Ramp the last `release` seconds of a note buffer to zero (linear fade).
+///
+/// The multi-sample engine (G) writes the one-shot and stops; without this
+/// the buffer's hard end would clip every short note (rock chugs are 16th
+/// notes inside a 1.7 s pluck). The synth path already renders its ADSR
+/// release, so this only touches sampled notes.
+fn fade_note_tail(buffer: &mut [f32], release: f32, sample_rate: u32) {
+    let fade_samples = (release * sample_rate as f32) as usize;
+    let fade_samples = fade_samples.min(buffer.len());
+    if fade_samples == 0 {
+        return;
+    }
+    let start = buffer.len() - fade_samples;
+    for (i, sample) in buffer[start..].iter_mut().enumerate() {
+        let t = i as f32 / fade_samples as f32;
+        *sample *= 1.0 - t;
+    }
 }
 
 /// Convert a MIDI note number to a frequency in Hz.

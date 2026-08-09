@@ -139,6 +139,12 @@ impl MultiSampleInstrument {
         let looping = sample.loop_start.is_some();
         let src_len = sample.data.len() as f32;
 
+        // Crossfade length at the loop seam (~5 ms): partials at inharmonic
+        // ratios don't complete integer cycles in the loop, so a hard wrap
+        // would click every iteration. Blend the first `cf` frames of the
+        // loop against the last `cf` frames before it (equal-power).
+        let cf = ((0.005 * sample.sample_rate as f32) as usize).clamp(4, 64) as f32;
+        let mut wrap_t = 0.0f32;
         for out in output.iter_mut() {
             if pos >= src_len {
                 if looping {
@@ -150,11 +156,24 @@ impl MultiSampleInstrument {
             let i0 = pos.floor() as usize;
             let i1 = (i0 + 1).min(sample.data.len().saturating_sub(1));
             let frac = pos - i0 as f32;
-            let value = sample.data[i0].mul_add(1.0 - frac, sample.data[i1] * frac);
+            let mut value = sample.data[i0].mul_add(1.0 - frac, sample.data[i1] * frac);
+            if looping && wrap_t > 0.0 {
+                // Crossfade region: blend with the loop-end counterpart.
+                let end_pos = wrap_t.mul_add(-ratio, loop_end);
+                let e0 = end_pos.floor() as usize;
+                let e1 = (e0 + 1).min(sample.data.len().saturating_sub(1));
+                let e_frac = end_pos - e0 as f32;
+                let end_value = sample.data[e0].mul_add(1.0 - e_frac, sample.data[e1] * e_frac);
+                let mix = (wrap_t / cf).min(1.0);
+                let blend = (mix * std::f32::consts::FRAC_PI_2).sin();
+                value = value.mul_add(1.0 - blend, end_value * blend);
+            }
             *out = value.mul_add(gain, *out);
             pos += ratio;
+            wrap_t += 1.0;
             if looping && pos >= loop_end {
                 pos = loop_start + ((pos - loop_end) % (loop_end - loop_start));
+                wrap_t = 0.0;
             }
         }
     }
