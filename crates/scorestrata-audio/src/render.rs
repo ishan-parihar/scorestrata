@@ -48,6 +48,9 @@ pub const AUDIO_ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub struct RenderVoice {
     /// Layer name this voice applies to.
     pub layer_name: String,
+    /// Layer instrument name (e.g. `distorted_guitar`) — used to pick the
+    /// multi-sample voice when the melodic bank is enabled.
+    pub instrument: String,
     /// Synth parameters.
     pub params: SynthParams,
     /// Whether the layer is a percussion (drum) layer — notes route through
@@ -61,6 +64,7 @@ impl RenderVoice {
     pub fn default_for(layer_name: &str) -> Self {
         Self {
             layer_name: layer_name.to_string(),
+            instrument: layer_name.to_string(),
             params: SynthParams::default(),
             is_percussion: false,
         }
@@ -99,6 +103,10 @@ pub struct RenderConfig {
     /// is sample-rate parametric end-to-end, so a render at any rate is
     /// deterministic; defaults to [`DEFAULT_SAMPLE_RATE`] (48 kHz, R1).
     pub sample_rate: u32,
+    /// Opt-in melodic instrument bank (G): `Some(_)` routes guitar/bass/
+    /// e-piano layer families through the embedded multi-sample bank;
+    /// `None` keeps the subtractive synth voices byte-identical (R1).
+    pub melodic_bank: Option<String>,
 }
 
 impl Default for RenderConfig {
@@ -113,6 +121,7 @@ impl Default for RenderConfig {
             master_chain: None,
             bits_per_sample: 16,
             sample_rate: DEFAULT_SAMPLE_RATE,
+            melodic_bank: None,
         }
     }
 }
@@ -515,6 +524,10 @@ pub fn render_notes_full(
             .sound_bank
             .as_deref()
             .and_then(crate::samplebank::kit);
+        let melodic_bank = config
+            .melodic_bank
+            .as_ref()
+            .map(|_| crate::embedded_bank::embedded_instrument_bank());
         let mut buffer = render_layer_buffer(
             notes,
             layer_name,
@@ -524,6 +537,7 @@ pub fn render_notes_full(
             total_samples,
             &layer_automation,
             kit.as_ref(),
+            melodic_bank.as_ref(),
         );
         // G5 — insert FX chain (HPF → EQ → compressor). The reverb/delay
         // sends stay out of the inline fold when the bus graph (B) is
@@ -774,6 +788,10 @@ pub fn render_stems_full(
             .sound_bank
             .as_deref()
             .and_then(crate::samplebank::kit);
+        let melodic_bank = config
+            .melodic_bank
+            .as_ref()
+            .map(|_| crate::embedded_bank::embedded_instrument_bank());
         let mut buffer = render_layer_buffer(
             notes,
             layer_name,
@@ -783,6 +801,7 @@ pub fn render_stems_full(
             total_samples,
             &layer_automation,
             kit.as_ref(),
+            melodic_bank.as_ref(),
         );
         // G5 — insert FX chain, mirroring the master render so stems and
         // master stay in agreement.
@@ -971,11 +990,20 @@ fn render_layer_buffer(
     total_samples: u64,
     automation: &[&RenderAutomation],
     kit: Option<&crate::samplebank::DrumKit>,
+    melodic_bank: Option<&crate::multisample::InstrumentBank>,
 ) -> Vec<f32> {
     let mut buffer = vec![0.0f32; total_samples as usize];
     let voice = voices.iter().find(|v| v.layer_name == layer_name);
     let params = voice.map_or_else(SynthParams::default, |v| v.params.clone());
     let is_percussion = voice.is_some_and(|v| v.is_percussion);
+    // (G) Multi-sample voice: the bank instrument this layer maps to, if any.
+    // Guitar / bass / e-piano families route to the embedded sample bank
+    // when enabled; everything else keeps the subtractive voice (R1).
+    let bank_instrument = melodic_bank.and_then(|_| {
+        voice
+            .as_ref()
+            .and_then(|v| melodic_instrument_for(&v.instrument))
+    });
 
     // G4 — resolve this layer's automation lanes once: cutoff (CC 74) and
     // volume (CC 7). Values are interpolated per note at its start tick.
@@ -1028,6 +1056,22 @@ fn render_layer_buffer(
                     &mut note_buffer,
                 );
             }
+        } else if let Some(bank) = melodic_bank
+            && let Some(instrument) = bank_instrument
+        {
+            // (G) Multi-sample voice: the embedded bank pitch-shifts its
+            // one-shots to this note. The round-robin seed is a deterministic
+            // hash of the note (pitch, velocity bits, start tick) so repeated
+            // identical hits still cycle (R2).
+            let rr_seed =
+                u64::from(note.pitch) ^ u64::from(note.velocity.to_bits()) << 32 ^ note.start_tick;
+            bank.render_note(
+                instrument,
+                note.pitch,
+                note.velocity,
+                rr_seed,
+                &mut note_buffer,
+            );
         } else {
             let freq = midi_to_frequency(note.pitch);
             render_note(
@@ -1114,6 +1158,22 @@ fn instrument_family(instrument: &str) -> &str {
 #[must_use]
 pub fn is_percussion_instrument(instrument: &str) -> bool {
     instrument_family(instrument) == "drums"
+}
+
+/// Map a layer instrument to a multi-sample bank voice (G).
+///
+/// Returns the embedded-bank instrument name for the instrument families the
+/// sample bank ships (`guitar`, `bass`, `epiano`); other families keep the
+/// subtractive synth voice. The mapping is by family substring so suffixed
+/// names (`distorted_guitar`, `bass_synth`, `lead_synth`) resolve naturally.
+#[must_use]
+pub fn melodic_instrument_for(instrument: &str) -> Option<&'static str> {
+    match instrument_family(instrument) {
+        "guitar" => Some("guitar"),
+        "bass" => Some("bass"),
+        "bell" => Some("epiano"),
+        _ => None,
+    }
 }
 
 /// Production-grade per-family voice timbres.
@@ -1271,6 +1331,7 @@ pub fn build_voices(layers: &[(&str, &str)]) -> Vec<RenderVoice> {
         .iter()
         .map(|(name, instrument)| RenderVoice {
             layer_name: name.to_string(),
+            instrument: instrument.to_string(),
             params: voice_params_for_instrument(instrument),
             is_percussion: is_percussion_instrument(instrument),
         })
@@ -1529,6 +1590,75 @@ mod tests {
     }
 
     #[test]
+    fn melodic_bank_routes_guitar_and_bass_to_samples() {
+        // A guitar power-chord dyad + bass note. With the bank enabled the
+        // layer must sound (peaks present) and differ from the synth path;
+        // with the bank disabled it must stay byte-identical to legacy (R1).
+        let notes = vec![
+            RenderNote {
+                pitch: 45,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ) * 2,
+                velocity: 0.8,
+                layer_name: "Guitar".to_string(),
+            },
+            RenderNote {
+                pitch: 52,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ) * 2,
+                velocity: 0.8,
+                layer_name: "Guitar".to_string(),
+            },
+            RenderNote {
+                pitch: 33,
+                start_tick: 0,
+                duration_ticks: u64::from(PPQ) * 2,
+                velocity: 0.9,
+                layer_name: "Bass".to_string(),
+            },
+        ];
+        let voices = build_voices(&[("Guitar", "distorted_guitar"), ("Bass", "bass_synth")]);
+
+        let plain = RenderConfig::default();
+        let with_bank = RenderConfig {
+            melodic_bank: Some("embedded".to_string()),
+            ..RenderConfig::default()
+        };
+
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let synth = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &plain).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let sampled =
+            render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &with_bank).unwrap();
+
+        // Both paths are audible.
+        assert!(rms(&synth.mono_samples) > 0.01, "synth path audible");
+        assert!(rms(&sampled.mono_samples) > 0.01, "sampled path audible");
+        // The bank changes the tone (plucked string vs driven saw).
+        assert_ne!(
+            synth.checksum, sampled.checksum,
+            "melodic bank must change guitar/bass output"
+        );
+
+        // R1: repeat the synth render — byte-identical to the first.
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let synth_again =
+            render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &plain).unwrap();
+        assert_eq!(
+            synth.checksum, synth_again.checksum,
+            "bankless render stays byte-identical (R1)"
+        );
+        // And the banked render is deterministic (R2).
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let sampled_again =
+            render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &with_bank).unwrap();
+        assert_eq!(
+            sampled.checksum, sampled_again.checksum,
+            "banked render is deterministic (R2)"
+        );
+    }
+
+    #[test]
     fn master_gain_db_scales_the_master_fold() {
         let notes = vec![RenderNote {
             pitch: 60,
@@ -1596,6 +1726,7 @@ mod tests {
             master_chain: None,
             bits_per_sample: 16,
             sample_rate: DEFAULT_SAMPLE_RATE,
+            melodic_bank: None,
         };
         let wide = RenderConfig {
             stereo: true,
@@ -1607,6 +1738,7 @@ mod tests {
             master_chain: None,
             bits_per_sample: 16,
             sample_rate: DEFAULT_SAMPLE_RATE,
+            melodic_bank: None,
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let a = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &narrow).unwrap();

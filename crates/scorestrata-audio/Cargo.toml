@@ -19,5 +19,12 @@ hex.workspace = true
 rustfft = "6"
 plotters = { version = "0.3", default-features = false, features = ["bitmap_backend", "bitmap_encoder", "line_series"] }
 
+# Real-instrument synthesis infrastructure (Phase G): hound for robust WAV
+# loading of the embedded sample bank, rubato for high-quality fractional
+# pitch-shifting of multi-sample instruments (and the plan's future 96 kHz
+# SRC mode). Both pure-Rust (R7).
+hound = "3.5"
+rubato = "0.15"
+
 [lints]
 workspace = true

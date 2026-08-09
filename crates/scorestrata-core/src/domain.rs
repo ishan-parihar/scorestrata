@@ -1160,6 +1160,12 @@ pub struct Project {
     /// (R1).
     #[serde(default)]
     pub sound_bank: Option<String>,
+    /// Opt-in melodic instrument bank (G) — multi-sample voices for guitar /
+    /// bass / e-piano. `Some(_)` routes those layer families through the
+    /// embedded sample bank (Karplus-Strong plucked strings); `None` keeps
+    /// the subtractive synth voices, byte-identical (R1).
+    #[serde(default)]
+    pub melodic_bank: Option<String>,
     /// Send/return + group-bus routing graph (B). `None` = flat per-layer
     /// fold, byte-identical to pre-bus renders (R1).
     #[serde(default)]

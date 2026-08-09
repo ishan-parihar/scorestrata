@@ -8135,6 +8135,7 @@ pub fn render_config_from_project(
         limiter,
         master_gain_db: project.mixer.master_gain_db,
         sound_bank: project.sound_bank.clone(),
+        melodic_bank: project.melodic_bank.clone(),
         bus_graph: project.bus_graph.clone(),
         stereo_width: project.mixer.stereo_width,
         master_chain: project.master_chain.clone(),

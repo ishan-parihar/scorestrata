@@ -16,6 +16,7 @@
 )]
 
 use crate::error::AudioError;
+use rubato::Resampler;
 
 /// Write a stereo WAV file from interleaved L/R f32 sample slices.
 ///
@@ -263,6 +264,18 @@ pub fn read_wav_stereo(bytes: &[u8]) -> Result<(Vec<f32>, Vec<f32>, u32), AudioE
                 }
             }
         }
+        (1, 24) => {
+            // 24-bit PCM (common in sample libraries): 3 bytes/sample, sign
+            // extended from bit 23, scaled by 8_388_607 like the writer.
+            let n = raw.len() / 3;
+            for frame in 0..n / usize::from(channels) {
+                let base = frame * usize::from(channels) * 3;
+                left.push(i24_sample(&raw[base..base + 3]));
+                if channels == 2 {
+                    right.push(i24_sample(&raw[base + 3..base + 6]));
+                }
+            }
+        }
         (3, 32) => {
             let n = raw.len() / 4;
             for frame in 0..n / usize::from(channels) {
@@ -296,6 +309,73 @@ pub fn read_wav_file(path: &std::path::Path) -> Result<(Vec<f32>, Vec<f32>, u32)
     read_wav_stereo(&bytes)
 }
 
+/// Decode a WAV into a single mono channel (left for stereo, the only
+/// channel for mono), returning `(samples, sample_rate)`.
+///
+/// This is the multi-sample instrument loader's entry point: embedded
+/// one-shot WAVs (any hound-readable encoding the stereo reader supports)
+/// become mono sample data for a key zone.
+///
+/// # Errors
+///
+/// Returns [`AudioError::InvalidWav`] for malformed/unsupported files.
+pub fn read_wav_mono(bytes: &[u8]) -> Result<(Vec<f32>, u32), AudioError> {
+    let (left, _right, sample_rate) = read_wav_stereo(bytes)?;
+    Ok((left, sample_rate))
+}
+
+/// Deterministically convert a mono buffer's sample rate with rubato's
+/// offline FFT resampler (`FftFixedInOut` — latency-free, designed for
+/// whole-buffer offline conversion).
+///
+/// The resampler processes fixed input chunks; the input is zero-padded to a
+/// multiple of the chunk size and the output is truncated to the exact
+/// expected length `round(len · out/in)` so renders are byte-identical for
+/// identical inputs (R2).
+#[must_use]
+pub fn convert_rate(data: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate == 0 || to_rate == 0 || from_rate == to_rate {
+        return data.to_vec();
+    }
+    let Ok(mut resampler) = rubato::FftFixedInOut::<f32>::new(
+        from_rate as usize,
+        to_rate as usize,
+        data.len().max(1),
+        1,
+    ) else {
+        return data.to_vec();
+    };
+
+    let chunk_in = resampler.input_frames_next();
+    let chunk_out = resampler.output_frames_next();
+    if chunk_in == 0 || chunk_out == 0 {
+        return data.to_vec();
+    }
+
+    // Pad to a whole number of input chunks (rubato requires exact frames).
+    let padded_len = data.len().div_ceil(chunk_in) * chunk_in;
+    let mut padded = data.to_vec();
+    padded.resize(padded_len, 0.0);
+
+    let mut out = Vec::with_capacity(padded_len * chunk_out / chunk_in + chunk_out);
+    for chunk in padded.chunks_exact(chunk_in) {
+        if let Ok(converted) = resampler.process(&[chunk], None) {
+            out.extend_from_slice(&converted[0]);
+        }
+    }
+    // Exact expected output length (rubato's chunk arithmetic can overshoot
+    // by a partial chunk); truncation keeps the length deterministic.
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "Expected resampled length is a bounded f64->usize conversion of fixed-rate audio"
+    )]
+    let expected = (data.len() as f64 * f64::from(to_rate) / f64::from(from_rate)).round() as usize;
+    out.truncate(expected.min(out.len()));
+    out
+}
+
 /// Decode a little-endian 16-bit PCM sample to f32.
 ///
 /// Divides by 32767.0 to match the writer's scale, keeping the f32 round trip
@@ -306,6 +386,24 @@ pub fn read_wav_file(path: &std::path::Path) -> Result<(Vec<f32>, Vec<f32>, u32)
 fn i16_sample(bytes: &[u8]) -> f32 {
     let raw = i16::from_le_bytes([bytes[0], bytes[1]]);
     (f32::from(raw) / 32767.0).clamp(-1.0, 1.0)
+}
+
+/// Decode a little-endian 24-bit PCM sample to f32.
+///
+/// The 3 bytes are little-endian with the top bit as the sign (two's
+/// complement); sign-extend to `i32` then scale by `8_388_607` (mirroring the
+/// writer's 24-bit path) and clamp to ±1.0.
+fn i24_sample(bytes: &[u8]) -> f32 {
+    let mut raw = u32::from(bytes[0]) | (u32::from(bytes[1]) << 8) | (u32::from(bytes[2]) << 16);
+    if raw & 0x80_0000 != 0 {
+        raw |= 0xFF00_0000; // sign-extend bit 23
+    }
+    let signed = raw.cast_signed();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "24-bit PCM fits exactly in f32's 23-bit mantissa (same scale as the writer)"
+    )]
+    (signed as f32 / 8_388_607.0).clamp(-1.0, 1.0)
 }
 
 /// Decode a little-endian 32-bit float sample (clamped to ±1).
@@ -380,6 +478,24 @@ mod tests {
         assert_eq!(&wav[47..50], &[0x01, 0x00, 0x80]);
         // 0.0 → 0.
         assert_eq!(&wav[50..53], &[0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, reason = "Test should panic if WAV is malformed")]
+    fn read_wav_round_trips_24_bit_pcm() {
+        // The multi-sample bank ships 24-bit one-shots; the reader must
+        // decode them (real sample libraries are commonly 24-bit).
+        let samples: Vec<f32> = vec![0.0, 0.5, -0.5, 1.0, -1.0, 0.125];
+        let wav = write_wav(&samples, 48_000, 24);
+        let (decoded, rate) = read_wav_mono(&wav).expect("decodes 24-bit");
+        assert_eq!(rate, 48_000);
+        assert_eq!(decoded.len(), samples.len());
+        for (a, b) in decoded.iter().zip(&samples) {
+            assert!(
+                (a - b).abs() < 1.0 / 8_388_607.0,
+                "24-bit sample {a} vs {b}"
+            );
+        }
     }
 
     #[test]

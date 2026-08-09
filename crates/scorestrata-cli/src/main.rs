@@ -506,6 +506,7 @@ fn handle_new(name: &str, brief: Option<&str>) -> Result<()> {
         // The config is generated deterministically and schema-valid, so the
         // project starts pipeline-ready (ConfigApproved → ArrangementPlanned…).
         sound_bank: None,
+        melodic_bank: None,
         bus_graph: None,
         humanize: None,
         master_chain: None,
@@ -955,6 +956,7 @@ fn render_config_for(
             .and_then(|c| c.dither.as_ref())
             .map_or(16, |d| d.bits),
         sample_rate: rate,
+        melodic_bank: project.melodic_bank.clone(),
     }
 }
 

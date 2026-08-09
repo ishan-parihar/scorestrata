@@ -791,6 +791,7 @@ mod tests {
             master_chain: None,
             status: scorestrata_core::domain::ProjectStatus::ConfigApproved,
             sound_bank: None,
+            melodic_bank: None,
             bus_graph: None,
         }
     }
