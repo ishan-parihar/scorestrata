@@ -36,20 +36,15 @@ use std::path::PathBuf;
 
 const RATE: u32 = 48_000;
 
+/// Bank-wide level plan (audit fixes F1/F2): hard layers at −18 dB RMS,
+/// soft layers 6 dB below; every family shares the same −18 dB reference.
+const REF_RMS_DB: f32 = -18.0;
+/// Soft layers sit 6 dB below the hard-layer reference.
+const SOFT_OFFSET_DB: f32 = -6.0;
+
 fn main() {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/instruments");
     std::fs::create_dir_all(&out_dir).expect("create assets dir");
-
-    // ── Level plan (F1/F2) ───────────────────────────────────────────────
-    // Velocity response is fixed by **RMS** normalization, not peak: a hard
-    // pick is louder AND brighter than a soft one, so hard layers target
-    // −18 dB RMS and soft layers −24 dB (6 dB velocity spread) instead of all
-    // files peaking at 0.85 (which flattened the layers into silence on the
-    // hard ones — audit finding F1). All families share the same −18 dB
-    // reference so the bank is internally level-matched (F2). A 20 Hz
-    // one-pole DC-block removes the body-resonance offset (F5).
-    const REF_RMS_DB: f32 = -18.0; // hard layers
-    const SOFT_OFFSET_DB: f32 = -6.0; // soft layers sit 6 dB below
 
     // ── Guitar ─────────────────────────────────────────────────────────
     // Zones at C2/A2/E3/B3/E4, each with soft + hard velocity layers. The
@@ -66,8 +61,16 @@ fn main() {
                 if hard { 0.35 } else { 0.55 },
                 0.18,
             );
-            let target = if hard { REF_RMS_DB } else { REF_RMS_DB + SOFT_OFFSET_DB };
-            write_wav_file(&out_dir, &format!("guitar_{root}_{name}.wav"), &finalize(pluck, target));
+            let target = if hard {
+                REF_RMS_DB
+            } else {
+                REF_RMS_DB + SOFT_OFFSET_DB
+            };
+            write_wav_file(
+                &out_dir,
+                &format!("guitar_{root}_{name}.wav"),
+                &finalize(pluck, target),
+            );
             let _ = i;
         }
     }
@@ -85,8 +88,16 @@ fn main() {
                 if hard { 0.3 } else { 0.5 },
                 0.12,
             );
-            let target = if hard { REF_RMS_DB } else { REF_RMS_DB + SOFT_OFFSET_DB };
-            write_wav_file(&out_dir, &format!("bass_{root}_{name}.wav"), &finalize(pluck, target));
+            let target = if hard {
+                REF_RMS_DB
+            } else {
+                REF_RMS_DB + SOFT_OFFSET_DB
+            };
+            write_wav_file(
+                &out_dir,
+                &format!("bass_{root}_{name}.wav"),
+                &finalize(pluck, target),
+            );
             let _ = i;
         }
     }
@@ -97,7 +108,11 @@ fn main() {
     let epiano_roots = [48u8, 60, 72];
     for (i, root) in epiano_roots.iter().enumerate() {
         let tone = epiano_tone(midi_freq(*root), 3.0);
-        write_wav_file(&out_dir, &format!("epiano_{root}.wav"), &finalize(tone, REF_RMS_DB));
+        write_wav_file(
+            &out_dir,
+            &format!("epiano_{root}.wav"),
+            &finalize(tone, REF_RMS_DB),
+        );
         let _ = i;
     }
 
@@ -253,9 +268,11 @@ fn epiano_tone(freq: f32, seconds: f32) -> Vec<f32> {
 /// same −18 dB RMS reference with a 6 dB velocity spread.
 fn finalize(mut buf: Vec<f32>, target_db: f32) -> Vec<f32> {
     dc_block(&mut buf);
-    let rms = (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt().max(1e-9);
+    let rms = (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32)
+        .sqrt()
+        .max(1e-9);
     let gain = 10f32.powf(target_db / 20.0) / rms;
-    for s in buf.iter_mut() {
+    for s in &mut buf {
         // Clamp at 0.92 (not 1.0): the pluck transient is hot, and
         // pitch-shifting up in the sampler can interpolate slightly past the
         // source peak — headroom keeps interpolated samples below full-scale.

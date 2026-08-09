@@ -528,10 +528,7 @@ pub fn render_notes_full(
             .sound_bank
             .as_deref()
             .and_then(crate::samplebank::kit);
-        let melodic_bank = config
-            .melodic_bank
-            .as_ref()
-            .map(|_| crate::embedded_bank::embedded_instrument_bank());
+        let melodic_bank = melodic_bank_for(config);
         let mut buffer = render_layer_buffer(
             notes,
             layer_name,
@@ -782,10 +779,7 @@ pub fn render_stems_full(
     let mut mixer = Mixer::new();
     let mut bus_layers: Vec<crate::bus::BusLayerInput> = Vec::new();
     // (G) Build the melodic bank once for the whole render.
-    let melodic_bank = config
-        .melodic_bank
-        .as_ref()
-        .map(|_| crate::embedded_bank::embedded_instrument_bank());
+    let melodic_bank = melodic_bank_for(config);
 
     for layer_name in &layer_order {
         let layer_automation: Vec<&RenderAutomation> = automation
@@ -1198,6 +1192,22 @@ fn instrument_family(instrument: &str) -> &str {
 #[must_use]
 pub fn is_percussion_instrument(instrument: &str) -> bool {
     instrument_family(instrument) == "drums"
+}
+
+/// Select the melodic instrument bank by config name (G/H).
+///
+/// - `"embedded"` → the synthetic Karplus-Strong bank
+///   (`embedded_bank`), the Phase G default.
+/// - `"sf2"` → the recorded `SoundFont` bank (`sf2_bank`), Phase H — real
+///   multi-sampled instruments rendered from `FluidR3_GM`.
+/// - any other value → `None` (the subtractive synth voice, R1).
+#[must_use]
+fn melodic_bank_for(config: &RenderConfig) -> Option<crate::multisample::InstrumentBank> {
+    match config.melodic_bank.as_deref() {
+        Some("sf2") => Some(crate::sf2_bank::sf2_instrument_bank()),
+        Some(_) => Some(crate::embedded_bank::embedded_instrument_bank()),
+        None => None,
+    }
 }
 
 /// Map a layer instrument to a multi-sample bank voice (G).

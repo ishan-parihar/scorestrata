@@ -31,5 +31,6 @@ pub mod reference;
 pub mod render;
 pub mod samplebank;
 pub mod sampler;
+pub mod sf2_bank;
 pub mod synth;
 pub mod wav;
