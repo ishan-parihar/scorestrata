@@ -9229,16 +9229,17 @@ mod tests {
         assert!(matches!(receipt.status, ToolStatus::Succeeded));
         assert_eq!(
             receipt.score_delta.get("arrangement_templates.genres"),
-            Some(&"5".to_string()),
-            "five named genre tables"
+            Some(&"6".to_string()),
+            "six named genre tables (incl. rock)"
         );
         assert_eq!(
             receipt.score_delta.get("arrangement_templates.sections"),
-            Some(&"25".to_string()),
-            "5 genres × 5 sections"
+            Some(&"30".to_string()),
+            "6 genres × 5 sections"
         );
         assert!(receipt.summary.contains("techno"));
         assert!(receipt.summary.contains("ambient"));
+        assert!(receipt.summary.contains("rock"));
         assert!(receipt.summary.contains("\"genre\":\"default\""));
     }
 

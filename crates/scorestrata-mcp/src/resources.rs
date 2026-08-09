@@ -623,6 +623,14 @@ pub fn arrangement_template_for(genre: &str) -> ArrangementTemplate {
         (32u32, 8u32, 16u32, 16u32, 16u32)
     } else if g.contains("house") {
         (16u32, 8u32, 16u32, 8u32, 8u32)
+    } else if g.contains("rock")
+        || g.contains("metal")
+        || g.contains("nu_metal")
+        || g.contains("punk")
+    {
+        // Rock/nu-metal: shorter intro, big chorus (the peak), and a
+        // breakdown for the quiet middle-eight — the Linkin Park shape.
+        (8u32, 8u32, 32u32, 8u32, 8u32)
     } else if g.contains("techno") || g.contains("trance") || g.contains("dubstep") {
         (16u32, 8u32, 32u32, 8u32, 8u32)
     } else {
@@ -667,7 +675,7 @@ pub struct ArrangementTemplates {
 /// the default fallback.
 #[must_use]
 pub fn arrangement_templates_resource() -> ArrangementTemplates {
-    let genres = ["techno", "house", "ambient", "trance", "dubstep"];
+    let genres = ["techno", "house", "ambient", "trance", "dubstep", "rock"];
     let templates: Vec<ArrangementTemplate> =
         genres.iter().map(|g| arrangement_template_for(g)).collect();
     ArrangementTemplates {

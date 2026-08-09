@@ -573,15 +573,19 @@ pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<FxChain> {
         g.as_str(),
         "techno" | "house" | "melodic_techno" | "dark_techno"
     );
+    // Rock/nu-metal gets its own character: punchier drums (parallel-
+    // style aggressive compression), a driven bass, saturated guitars, and
+    // a reverb-drenched vocal-range lead.
+    let rock = g.contains("rock") || g.contains("metal") || g.contains("nu_metal");
     let chain = match i.as_str() {
         "drum_sampler" | "drums" | "kick" => FxChain {
             high_pass_hz: Some(30.0),
             compressor: Some(CompressorCfg {
-                threshold_db: -12.0,
-                ratio: 3.0,
+                threshold_db: if rock { -16.0 } else { -12.0 },
+                ratio: if rock { 4.0 } else { 3.0 },
                 attack_ms: 2.0,
-                release_ms: 80.0,
-                makeup_db: 4.0,
+                release_ms: if rock { 60.0 } else { 80.0 },
+                makeup_db: if rock { 6.0 } else { 4.0 },
             }),
             ..Default::default()
         },
@@ -589,10 +593,23 @@ pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<FxChain> {
             high_pass_hz: Some(40.0),
             eq: vec![FreqBand {
                 freq_hz: 200.0,
-                gain_db: -2.0,
+                gain_db: if rock { 2.0 } else { -2.0 },
                 q: 1.0,
             }],
             sidechain_from_kick: sidechain,
+            ..Default::default()
+        },
+        "distorted_guitar" | "guitar" | "power_chord" => FxChain {
+            high_pass_hz: Some(80.0),
+            eq: vec![FreqBand {
+                freq_hz: 2500.0,
+                gain_db: 3.0,
+                q: 1.2,
+            }],
+            sends: SendLevels {
+                reverb: 0.1,
+                delay: 0.05,
+            },
             ..Default::default()
         },
         "pad_synth" | "pad" | "chord" => FxChain {
@@ -649,6 +666,10 @@ pub fn register_for_instrument(instrument: &str) -> Option<Register> {
         || lower.contains("key")
     {
         Some(Register::new(3, 5))
+    } else if lower.contains("guitar") || lower.contains("power_chord") {
+        // Rhythm/lead guitars: power chords and riffs in octaves 2–4
+        // (the §1.3 map keeps guitars out of the bass and vocal bands).
+        Some(Register::new(2, 4))
     } else if lower.contains("lead")
         || lower.contains("pluck")
         || lower.contains("bell")
@@ -698,5 +719,54 @@ pub fn fx_summary(fx: &FxChain) -> String {
         "clean".to_string()
     } else {
         parts.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rock_mix_chain_saturates_guitar_and_punches_drums() {
+        // The rock genre must produce its own character: a saturated
+        // distorted-guitar chain (presence + short verb/delay), a harder
+        // drum compressor, and a driven bass — vs. the techno default.
+        let guitar = genre_mix_chain("rock", "distorted_guitar").expect("rock guitar chain exists");
+        assert_eq!(guitar.high_pass_hz, Some(80.0));
+        assert!(
+            guitar
+                .eq
+                .iter()
+                .any(|b| b.freq_hz == 2500.0 && b.gain_db > 0.0)
+        );
+        assert!(guitar.sends.reverb > 0.0);
+
+        let drums = genre_mix_chain("nu_metal", "drum_sampler").expect("rock drums");
+        let comp = drums.compressor.expect("drums compressed");
+        assert_eq!(comp.threshold_db, -16.0);
+        assert_eq!(comp.ratio, 4.0);
+
+        // Techno drums stay at the original gentler settings.
+        let techno_drums = genre_mix_chain("techno", "drums").expect("techno drums");
+        let techno_comp = techno_drums.compressor.expect("techno drums compressed");
+        assert_eq!(techno_comp.ratio, 3.0);
+
+        // Bass is driven in rock (no sidechain, boosted low-mid) vs the
+        // techno bass (sidechained, scooped 200 Hz).
+        let rock_bass = genre_mix_chain("rock", "bass").expect("rock bass");
+        assert!(!rock_bass.sidechain_from_kick);
+        assert!(rock_bass.eq.iter().any(|b| b.gain_db > 0.0));
+        let techno_bass = genre_mix_chain("techno", "bass").expect("techno bass");
+        assert!(techno_bass.sidechain_from_kick);
+    }
+
+    #[test]
+    fn register_for_guitar_uses_power_chord_band() {
+        // Rhythm/lead guitars live in octaves 2–4 (§1.3), clear of the bass
+        // and vocal registers.
+        let reg = register_for_instrument("distorted_guitar").expect("guitar register");
+        assert_eq!(reg.min_octave, 2);
+        assert_eq!(reg.max_octave, 4);
+        assert!(register_for_instrument("drums").is_none());
     }
 }

@@ -75,6 +75,10 @@ enum Genre {
     House,
     /// Sparse percussion, drone bass, bell tones, evolving pad layer.
     Ambient,
+    /// Rock/nu-metal: backbeat drums, palm-muted power-chord guitar riff,
+    /// driving root-fifth bass, and a vocal-range lead (per the §1.2
+    /// reference-track research and the Linkin Park stress test).
+    Rock,
     /// Any genre the planner does not specialize yet (keeps the baseline).
     Other,
 }
@@ -88,6 +92,12 @@ fn detect_genre(config: &ProjectConfig) -> Genre {
         Genre::Ambient
     } else if genre.contains("techno") {
         Genre::Techno
+    } else if genre.contains("rock")
+        || genre.contains("metal")
+        || genre.contains("nu_metal")
+        || genre.contains("punk")
+    {
+        Genre::Rock
     } else {
         Genre::Other
     }
@@ -144,6 +154,12 @@ fn build_patterns(scale: &Scale, genre: Genre, ids: &mut IdSeq) -> Vec<Pattern> 
         // Techno and un-specialized genres keep the original baseline
         // patterns (names and structure unchanged, so the golden gates and
         // pattern-shape tests stay stable).
+        Genre::Rock => vec![
+            rock_drum_pattern(ids),
+            rock_bass_pattern(scale, ids),
+            rock_guitar_pattern(scale, ids),
+            rock_lead_pattern(scale, ids),
+        ],
         Genre::Techno | Genre::Other => vec![
             drum_pattern(ids),
             bass_pattern(scale, ids),
@@ -622,6 +638,146 @@ fn ambient_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
 }
 
 /// Build segments covering the full duration, with layered pattern instances.
+/// 1-bar rock drums: driving backbeat with a busier hi-hat.
+///
+/// Kick on 1 and 3, snare on 2 and 4 (the rock backbeat — §1.2 reference
+/// research), with eighth-note hats on the beat and offbeat for drive.
+fn rock_drum_pattern(ids: &mut IdSeq) -> Pattern {
+    let mut steps = Vec::new();
+    for i in 0..16u32 {
+        // Kick on 1 & 3, snare backbeat on 2 & 4, and hats riding the
+        // offbeat eighths (the on-beat eighths are covered by the kick and
+        // snare hits themselves).
+        let (active, velocity) = match i {
+            0 | 8 => (true, 115),
+            4 | 12 => (true, 108),
+            2 | 6 | 10 | 14 => (true, 88),
+            _ => (false, 0),
+        };
+        steps.push(Step {
+            id: StepId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+            index: i,
+            active,
+            velocity: Velocity::new(velocity),
+        });
+    }
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Drums_Rock_Backbeat".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes: Vec::new(),
+        steps,
+    }
+}
+
+/// 1-bar rock bass: driving root-fifth eighth-note line with a pickup
+/// accent, sitting low (octaves 1–2 per the §1.3 register map).
+fn rock_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, _, fifth, _] = chord_tones_in_range(scale, 12, 36);
+    let eighth = u64::from(PPQ) / 2;
+    let note = |pitch: MidiNote, start: u64, velocity: u8, ids: &mut IdSeq| Note {
+        id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        pitch,
+        start: Tick::new(start),
+        duration: Duration::eighth(),
+        velocity: Velocity::new(velocity),
+        tied: false,
+    };
+    // Driving eighths with the fifth on beat 3 and an offbeat pickup.
+    let notes = vec![
+        note(root, 0, 104, ids),
+        note(root, eighth, 92, ids),
+        note(root, eighth * 2, 100, ids),
+        note(fifth, eighth * 3, 90, ids),
+        note(root, eighth * 4, 102, ids),
+        note(root, eighth * 5, 88, ids),
+        note(root, eighth * 6, 96, ids),
+        note(fifth, eighth * 7, 84, ids),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Bass_Rock_Drive".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar rock rhythm guitar: palm-muted power-chord riff on the offbeat
+/// eighth grid (the classic nu-metal chug).
+///
+/// Power chords are root + fifth, voiced in the guitar register (octaves
+/// 2–4, §1.3) and heavily compressed at the mix stage via the rock guitar
+/// FX chain.
+fn rock_guitar_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    // Octaves 2–4 = MIDI 36–59 (the §1.3 guitar band).
+    let [root, _, fifth, _] = chord_tones_in_range(scale, 36, 60);
+    let eighth = u64::from(PPQ) / 2;
+    let note =
+        |pitch: MidiNote, start: u64, duration: Duration, velocity: u8, ids: &mut IdSeq| Note {
+            id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+            pitch,
+            start: Tick::new(start),
+            duration,
+            velocity: Velocity::new(velocity),
+            tied: false,
+        };
+    let chug = Duration::sixteenth();
+    let mut notes = Vec::new();
+    // Root-fifth dyads chugging on the offbeat eighths.
+    for (i, tick) in [1u64, 3, 5, 7, 9, 11, 13, 15].into_iter().enumerate() {
+        let velocity = if i % 4 == 3 { 100 } else { 92 };
+        notes.push(note(root, tick * eighth, chug, velocity, ids));
+        notes.push(note(fifth, tick * eighth, chug, velocity - 4, ids));
+    }
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Guitar_PowerChord_Chug".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
+/// 1-bar rock lead: a vocal-range line (octaves 4–6) with held notes on
+/// the beat and a pickup, in the §1.3 lead register.
+fn rock_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
+    let [root, third, fifth, _] = chord_tones_in_range(scale, 60, 84);
+    let quarter = u64::from(PPQ);
+    let note =
+        |pitch: MidiNote, start: u64, duration: Duration, velocity: u8, ids: &mut IdSeq| Note {
+            id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+            pitch,
+            start: Tick::new(start),
+            duration,
+            velocity: Velocity::new(velocity),
+            tied: false,
+        };
+    let notes = vec![
+        note(third, 0, Duration::quarter(), 100, ids),
+        note(fifth, quarter, Duration::eighth(), 92, ids),
+        note(third, quarter * 2, Duration::half(), 96, ids),
+        note(
+            root,
+            quarter * 3 + u64::from(PPQ) / 4,
+            Duration::eighth(),
+            88,
+            ids,
+        ),
+    ];
+    Pattern {
+        id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
+        name: "Lead_VocalRange".to_string(),
+        bars: 1,
+        time_signature: TimeSignature::default(),
+        notes,
+        steps: Vec::new(),
+    }
+}
+
 fn build_segments(
     config: &ProjectConfig,
     patterns: &[Pattern],
@@ -696,6 +852,7 @@ fn build_layers(
     match genre {
         Genre::House => house_layers(patterns, role, segment_bars, ids),
         Genre::Ambient => ambient_layers(patterns, role, segment_bars, ids),
+        Genre::Rock => rock_layers(patterns, role, segment_bars, ids),
         Genre::Techno | Genre::Other => techno_layers(patterns, role, segment_bars, ids),
     }
 }
@@ -745,6 +902,63 @@ fn techno_layers(
                     segment_bars,
                     ids,
                 ));
+            }
+        }
+    }
+    layers
+}
+
+/// Rock/nu-metal layer composition: the full band in the chorus, guitar +
+/// bass + drums in the verse, and the stripped rhythm section in intro/
+/// outro — the classic verse→chorus energy ramp (Linkin Park stress test).
+fn rock_layers(
+    patterns: &[Pattern],
+    role: SegmentRole,
+    segment_bars: u32,
+    ids: &mut IdSeq,
+) -> Vec<Layer> {
+    let drum = patterns.first();
+    let bass = patterns.get(1);
+    let guitar = patterns.get(2);
+    let lead = patterns.get(3);
+
+    let mut layers = Vec::new();
+    if let Some(p) = drum {
+        layers.push(make_layer("Drums", "drum_sampler", p, 0, segment_bars, ids));
+    }
+    if let Some(p) = bass {
+        layers.push(make_layer("Bass", "bass_synth", p, 0, segment_bars, ids));
+    }
+    match role {
+        // Intro/outro: rhythm section only — the band builds in.
+        SegmentRole::Intro | SegmentRole::Outro => {}
+        // Verse: add the chugging power-chord guitar riff.
+        SegmentRole::Verse | SegmentRole::Build | SegmentRole::Breakdown => {
+            if let Some(p) = guitar {
+                layers.push(make_layer(
+                    "Guitar",
+                    "distorted_guitar",
+                    p,
+                    0,
+                    segment_bars,
+                    ids,
+                ));
+            }
+        }
+        // Chorus: full band — guitar + lead in the vocal register.
+        SegmentRole::Chorus | SegmentRole::Bridge | SegmentRole::Custom => {
+            if let Some(p) = guitar {
+                layers.push(make_layer(
+                    "Guitar",
+                    "distorted_guitar",
+                    p,
+                    0,
+                    segment_bars,
+                    ids,
+                ));
+            }
+            if let Some(p) = lead {
+                layers.push(make_layer("Lead", "lead_synth", p, 0, segment_bars, ids));
             }
         }
     }
@@ -992,6 +1206,58 @@ mod tests {
         assert!(drums.steps[0].active);
         assert!(drums.steps[4].active);
         assert!(drums.steps[8].active);
+    }
+
+    #[test]
+    fn rock_genre_builds_power_chord_guitar_and_rock_drums() {
+        // The Linkin Park stress test: a rock/nu-metal config must produce
+        // the band-shaped plan — backbeat drums, driving bass, a power-chord
+        // guitar riff, and a vocal-range lead — not the generic techno set.
+        let mut cfg = config(32);
+        cfg.genre = "nu_metal".to_string();
+        let plan = plan_project(&cfg);
+
+        let names: Vec<&str> = plan.patterns.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Drums_Rock_Backbeat",
+                "Bass_Rock_Drive",
+                "Guitar_PowerChord_Chug",
+                "Lead_VocalRange",
+            ]
+        );
+        // Rock drums: backbeat (kick 1&3, snare 2&4) with offbeat hats.
+        let drums = &plan.patterns[0];
+        assert!(drums.steps[0].active);
+        assert!(drums.steps[4].active); // snare on 2
+        assert!(drums.steps[8].active); // kick on 3
+        assert!(drums.steps[12].active); // snare on 4
+        assert!(drums.steps[2].active); // offbeat hat
+        // Power-chord guitar: root+fifth dyads only (all notes in 2..4).
+        let guitar = &plan.patterns[2];
+        assert!(!guitar.notes.is_empty());
+        assert!(
+            guitar
+                .notes
+                .iter()
+                .all(|n| (2..=4).contains(&n.pitch.octave())),
+            "power chords sit in octaves 2..4"
+        );
+        // The chorus carries the full band: drums, bass, guitar, lead.
+        let chorus = plan
+            .arrangement
+            .segments
+            .iter()
+            .find(|s| s.role == SegmentRole::Chorus)
+            .expect("chorus exists");
+        let layer_names: Vec<&str> = chorus.layers.iter().map(|l| l.name.as_str()).collect();
+        assert!(
+            layer_names.contains(&"Guitar") && layer_names.contains(&"Lead"),
+            "chorus has guitar + lead: {layer_names:?}"
+        );
+        let guitar_layer = chorus.layers.iter().find(|l| l.name == "Guitar").unwrap();
+        assert_eq!(guitar_layer.instrument, "distorted_guitar");
     }
 
     #[test]

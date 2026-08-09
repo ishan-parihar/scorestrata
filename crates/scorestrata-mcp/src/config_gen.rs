@@ -41,6 +41,11 @@ fn detect_genre(text: &str) -> Option<String> {
         ("dubstep", &["dubstep", "bass music"]),
         ("lo-fi", &["lo-fi", "lofi", "chill hop"]),
         ("drum_and_bass", &["drum and bass", "dnb", "jungle"]),
+        (
+            "nu_metal",
+            &["nu metal", "nu-metal", "linkin park", "rap metal"],
+        ),
+        ("rock", &["rock", "metal", "hard rock", "punk"]),
     ];
     for (genre, keywords) in candidates {
         if keywords.iter().any(|k| lower.contains(k)) {
@@ -50,16 +55,44 @@ fn detect_genre(text: &str) -> Option<String> {
     None
 }
 
-/// Detect BPM: first 3-digit number in the text (120–199 preferred).
+/// Detect BPM: prefer an explicit "N bpm" phrase, then the first 3-digit
+/// number (60–240). Numbers that are duration hints ("32 bars", "16-bar")
+/// are excluded so a brief like "rock, 32 bars" cannot mis-read the bar
+/// count as a tempo.
 fn detect_bpm(text: &str) -> Option<u32> {
+    let lower = text.to_lowercase();
+    // 1. Explicit "<digits> bpm" wins outright.
+    for token in lower.split(|c: char| !c.is_ascii_alphanumeric() && c != ' ') {
+        let token = token.trim();
+        if token.ends_with("bpm") {
+            let num: String = token.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if let Ok(n) = num.parse::<u32>()
+                && (40..=240).contains(&n)
+            {
+                return Some(n);
+            }
+        }
+    }
+    // 2. Fall back to the first 3-digit number, skipping "N bar(s)" hints
+    //    (a duration "32 bars" must not be read as a 32 BPM tempo).
+    let bytes = lower.as_bytes();
     let mut best: Option<u32> = None;
-    for token in text.split(|c: char| !c.is_ascii_digit()) {
-        if token.is_empty() {
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_digit() {
+            i += 1;
             continue;
         }
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        let token = &lower[start..i];
         if let Ok(n) = token.parse::<u32>() {
-            if (1..=400).contains(&n) {
-                if best.is_none_or(|b| (100..=199).contains(&n) && !(100..=199).contains(&b)) {
+            let rest = lower[i..].trim_start_matches([' ', '-', '_']);
+            let is_bar_count = rest.starts_with("bar");
+            if !is_bar_count && (100..=240).contains(&n) {
+                if best.is_none_or(|b| !(100..=240).contains(&b)) {
                     best = Some(n);
                 }
             }
@@ -226,6 +259,8 @@ pub fn generate_config(project_name: &str, brief_text: &str) -> ProjectConfig {
         Some("ambient") => (80, "A minor"),
         Some("cinematic") => (90, "D minor"),
         Some("trance") => (138, "F minor"),
+        Some("nu_metal") => (104, "E minor"),
+        Some("rock") => (112, "A minor"),
         _ => (120, "C minor"),
     };
 
@@ -335,5 +370,42 @@ mod tests {
         assert_eq!(config.genre, "experimental");
         assert_eq!(config.bpm, 120);
         assert_eq!(config.duration_bars, 8);
+    }
+
+    #[test]
+    fn bar_count_is_not_misread_as_bpm() {
+        // "32 bars" is a duration hint, not a 32 BPM tempo. The nu-metal
+        // default (104) must survive the bar count in the brief.
+        let config = generate_config(
+            "Crawling",
+            "linkin park style nu metal rock, 32 bars, heavy guitars",
+        );
+        assert_eq!(config.genre, "nu_metal");
+        assert_eq!(config.bpm, 104, "duration bar count not read as tempo");
+        assert_eq!(config.duration_bars, 32);
+
+        // An explicit tempo still wins.
+        let explicit = generate_config("Riff", "hard rock, 120 bpm, 32 bars");
+        assert_eq!(explicit.bpm, 120);
+        assert_eq!(explicit.duration_bars, 32);
+    }
+
+    #[test]
+    fn detects_rock_and_nu_metal_briefs() {
+        // The Linkin Park stress test: a nu-metal brief must land on the
+        // rock family with a rock tempo (104 BPM, E minor), not fall back
+        // to the generic "experimental" baseline.
+        let lp = generate_config(
+            "Crawling",
+            "linkin park style nu metal rock with heavy distorted guitars",
+        );
+        assert_eq!(lp.genre, "nu_metal");
+        assert_eq!(lp.bpm, 104);
+        assert_eq!(lp.key, "E minor");
+
+        let rock = generate_config("Riff", "Hard rock, aggressive, 120 bpm");
+        assert_eq!(rock.genre, "rock");
+        assert_eq!(rock.bpm, 120);
+        assert_eq!(rock.key, "A minor");
     }
 }
