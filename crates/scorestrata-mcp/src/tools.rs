@@ -4989,6 +4989,69 @@ pub fn get_sound_bank_catalog(params: &GetSoundBankCatalogParams) -> ToolReceipt
     }
 }
 
+/// Parameters for `get_reference_profile` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetReferenceProfileParams {
+    /// Project ID (used only for labeling evidence URIs).
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Serialized project to inspect (when provided, real).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Get the `reference_profile` resource (Phase E, §4.1) — the loaded spectral
+/// fingerprint that `import_reference_profile` wrote and the L4 render gate
+/// compares the render against.
+///
+/// Read-only (the §8.1 "tools mutate, resources inspect" split): returns the
+/// full profile (band shares, centroid, aliasing ceiling, LUFS target) so an
+/// agent can see what the render is being held to before calling
+/// `compare_to_reference` or `run_validation`.
+#[must_use]
+pub fn get_reference_profile(params: &GetReferenceProfileParams) -> ToolReceipt {
+    let project_id = params.project_id.as_deref().unwrap_or("unknown");
+    let view = params
+        .project
+        .as_ref()
+        .and_then(|p| serde_json::from_value::<scorestrata_core::domain::Project>(p.clone()).ok())
+        .map_or_else(crate::resources::ReferenceProfileView::empty, |proj| {
+            crate::resources::reference_profile_resource(&proj)
+        });
+    let summary = serde_json::to_string(&view).unwrap_or_else(|_| "{}".to_string());
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "render.reference_profile".to_string(),
+        if view.loaded {
+            view.track_name
+        } else {
+            "none".to_string()
+        },
+    );
+    ToolReceipt {
+        tool: "get_reference_profile".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!("reference_profile {summary}"),
+        score_delta,
+        evidence_uris: vec![format!("project://{project_id}/render/reference")],
+        focus_uris: vec![format!("project://{project_id}/render/latest")],
+        next_actions: vec![
+            "import_reference_profile".to_string(),
+            "render_project".to_string(),
+            "compare_to_reference".to_string(),
+            "run_validation".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 /// Parameters for `get_production_playbook` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetProductionPlaybookParams {
@@ -7970,21 +8033,57 @@ pub fn render_project_to_layer_audit(
     ),
     String,
 > {
-    let timeline = scorestrata_compiler::compile_project(project).map_err(|e| e.to_string())?;
-    let (notes, voices, automation, fx) = timeline_render_inputs(&timeline, project);
-    let (stems, master) = scorestrata_audio::render::render_stems_full(
-        &notes,
-        timeline.bpm,
-        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
-        &voices,
-        &automation,
-        &fx,
-        &render_config_from_project(project),
+    render_project_to_layer_audit_with_cache(
+        project,
+        png_dir,
+        &mut scorestrata_audio::render::RenderCache::new(),
     )
-    .map_err(|e| e.to_string())?;
+}
+
+/// Cache-aware layer audit (plan §6 Phase E: "audit without full
+/// re-render").
+///
+/// When the caller supplies a [`RenderCache`], the stems+master render is
+/// keyed on the timeline input hash + render-config signature; an unchanged
+/// project audits from cache instead of re-rendering. The cache is purely a
+/// performance accelerator — a miss falls through to a full render and
+/// returns identical bytes (R2).
+pub fn render_project_to_layer_audit_with_cache(
+    project: &scorestrata_core::domain::Project,
+    png_dir: Option<&std::path::Path>,
+    cache: &mut scorestrata_audio::render::RenderCache,
+) -> Result<
+    (
+        Vec<scorestrata_audio::audit::LayerAuditEntry>,
+        scorestrata_audio::render::RenderResult,
+    ),
+    String,
+> {
+    let timeline = scorestrata_compiler::compile_project(project).map_err(|e| e.to_string())?;
+    let config = render_config_from_project(project);
+    let key = scorestrata_audio::render::render_cache_key(&timeline.input_hash, &config);
+    let render = if let Some(cached) = cache.get(&key) {
+        cached.clone()
+    } else {
+        let (notes, voices, automation, fx) = timeline_render_inputs(&timeline, project);
+        let (stems, master) = scorestrata_audio::render::render_stems_full(
+            &notes,
+            timeline.bpm,
+            scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+            &voices,
+            &automation,
+            &fx,
+            &config,
+        )
+        .map_err(|e| e.to_string())?;
+        let render = scorestrata_audio::render::LayerRender { stems, master };
+        cache.insert(key, render.clone());
+        render
+    };
 
     let genre = Some(project.config.genre.as_str());
-    let layers: Vec<(&str, &[f32])> = stems
+    let layers: Vec<(&str, &[f32])> = render
+        .stems
         .iter()
         .map(|s| (s.layer_name.as_str(), s.samples.as_slice()))
         .collect();
@@ -8002,7 +8101,7 @@ pub fn render_project_to_layer_audit(
             genre,
         ),
     };
-    Ok((entries, master))
+    Ok((entries, render.master))
 }
 
 /// Build the render config from the project's mixer state (G5), mirroring
@@ -10153,6 +10252,79 @@ mod tests {
                 .iter()
                 .any(|d| d.code == "BRIEF_GENRE_MISMATCH"),
             "dispatcher L5 must emit brief diagnostics"
+        );
+    }
+
+    #[test]
+    fn shared_render_cache_serves_second_audit_without_rerender() {
+        // Phase E exit: "audit without full re-render" — a second layer audit
+        // of an unchanged project must hit the cache and return byte-identical
+        // results, and the cache must still hold exactly one entry.
+        let project = scorestrata_testkit::melodic_techno_project();
+        let mut cache = scorestrata_audio::render::RenderCache::new();
+        let (entries_a, master_a) =
+            render_project_to_layer_audit_with_cache(&project, None, &mut cache)
+                .expect("first audit must render");
+        assert_eq!(cache.len(), 1, "first call must populate the cache");
+        let (entries_b, master_b) =
+            render_project_to_layer_audit_with_cache(&project, None, &mut cache)
+                .expect("second audit must succeed");
+        assert_eq!(
+            cache.len(),
+            1,
+            "unchanged project must be served from cache, not re-rendered"
+        );
+        assert_eq!(
+            master_a.checksum, master_b.checksum,
+            "cache hit must return byte-identical master"
+        );
+        assert_eq!(entries_a.len(), entries_b.len());
+        for (a, b) in entries_a.iter().zip(entries_b.iter()) {
+            assert_eq!(a.layer_name, b.layer_name);
+            assert_eq!(
+                a.report.spectral_centroid_hz, b.report.spectral_centroid_hz,
+                "cache hit must return identical layer audit reports"
+            );
+        }
+    }
+
+    #[test]
+    fn get_reference_profile_reports_loaded_and_empty_states() {
+        // §4.1 resource: a project with an imported reference exposes the full
+        // fingerprint; one without exposes the empty view (never errors).
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let receipt = get_reference_profile(&GetReferenceProfileParams {
+            project_id: Some(project.id.to_string()),
+            project: Some(serde_json::to_value(&project).unwrap()),
+        });
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            receipt.summary.contains("\"loaded\":false"),
+            "no reference imported yet: {}",
+            receipt.summary
+        );
+
+        project.spectral_reference = Some(scorestrata_core::domain::SpectralReference {
+            track_name: "Imported_Ref".to_string(),
+            genre: "techno".to_string(),
+            band_energy_expected: [0.15, 0.25, 0.2, 0.2, 0.1, 0.1],
+            centroid_expected_hz: 2400.0,
+            aliasing_max: 0.05,
+            loudness_target_lufs: -14.0,
+        });
+        let receipt = get_reference_profile(&GetReferenceProfileParams {
+            project_id: Some(project.id.to_string()),
+            project: Some(serde_json::to_value(&project).unwrap()),
+        });
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert!(
+            receipt.summary.contains("Imported_Ref") && receipt.summary.contains("\"loaded\":true"),
+            "imported profile must surface: {}",
+            receipt.summary
+        );
+        assert_eq!(
+            receipt.score_delta.get("render.reference_profile"),
+            Some(&"Imported_Ref".to_string())
         );
     }
 

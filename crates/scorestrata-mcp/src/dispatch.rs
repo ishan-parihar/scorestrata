@@ -513,6 +513,14 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::get_bus_graph
             )
         }
+        "get_reference_profile" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::GetReferenceProfileParams,
+                crate::tools::get_reference_profile
+            )
+        }
         "set_sound_bank" => {
             route!(
                 tool_name,

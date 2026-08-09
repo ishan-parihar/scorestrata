@@ -1843,6 +1843,63 @@ pub fn master_chain_resource(project: &scorestrata_core::domain::Project) -> Mas
     }
 }
 
+/// Snapshot of the project's loaded `reference_profile` resource (Phase E, §4.1).
+///
+/// Mirrors the domain [`SpectralReference`](scorestrata_core::domain::SpectralReference)
+/// that `import_reference_profile` stores and the L4 render gate compares against.
+#[must_use]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceProfileView {
+    /// Whether a reference profile is loaded on the project.
+    pub loaded: bool,
+    /// Name of the reference track the fingerprint came from.
+    pub track_name: String,
+    /// Genre the reference belongs to.
+    pub genre: String,
+    /// Expected energy share in the six audit bands (sub/bass/lo-mid/mid/hi-mid/air).
+    pub band_energy_expected: Vec<f32>,
+    /// Expected spectral centroid in Hz.
+    pub centroid_expected_hz: f32,
+    /// Maximum acceptable energy share above 16 kHz (aliasing proxy).
+    pub aliasing_max: f32,
+    /// Loudness target in LUFS (from the reference master).
+    pub loudness_target_lufs: f32,
+}
+
+impl ReferenceProfileView {
+    /// An empty view for a project with no reference loaded.
+    pub const fn empty() -> Self {
+        Self {
+            loaded: false,
+            track_name: String::new(),
+            genre: String::new(),
+            band_energy_expected: Vec::new(),
+            centroid_expected_hz: 0.0,
+            aliasing_max: 0.0,
+            loudness_target_lufs: 0.0,
+        }
+    }
+}
+
+/// Build the `reference_profile` resource from a real project (Phase E, §4.1).
+pub fn reference_profile_resource(
+    project: &scorestrata_core::domain::Project,
+) -> ReferenceProfileView {
+    project
+        .spectral_reference
+        .as_ref()
+        .map_or_else(ReferenceProfileView::empty, |r| ReferenceProfileView {
+            loaded: true,
+            track_name: r.track_name.clone(),
+            genre: r.genre.clone(),
+            band_energy_expected: r.band_energy_expected.to_vec(),
+            centroid_expected_hz: r.centroid_expected_hz,
+            aliasing_max: r.aliasing_max,
+            loudness_target_lufs: r.loudness_target_lufs,
+        })
+}
+
 /// Build the `sample_bank_catalog` resource (Phase A).
 ///
 /// The catalog is derived from the audio crate's embedded `KIT_NAMES` so it
@@ -2464,6 +2521,42 @@ mod tests {
                 .unwrap_or_default()
                 .contains("24 bit")
         );
+    }
+
+    #[test]
+    fn reference_profile_resource_reflects_loaded_and_empty_states() {
+        // §4.1 resource: the view must mirror the domain SpectralReference
+        // when imported and report `loaded: false` otherwise.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let view = reference_profile_resource(&project);
+        assert!(!view.loaded, "testkit project has no reference by default");
+        assert!(view.band_energy_expected.is_empty());
+
+        project.spectral_reference = Some(scorestrata_core::domain::SpectralReference {
+            track_name: "Ref_A".to_string(),
+            genre: "techno".to_string(),
+            band_energy_expected: [0.15, 0.25, 0.2, 0.2, 0.1, 0.1],
+            centroid_expected_hz: 2400.0,
+            aliasing_max: 0.05,
+            loudness_target_lufs: -14.0,
+        });
+        let view = reference_profile_resource(&project);
+        assert!(view.loaded);
+        assert_eq!(view.track_name, "Ref_A");
+        assert_eq!(view.genre, "techno");
+        assert_eq!(
+            view.band_energy_expected,
+            vec![0.15, 0.25, 0.2, 0.2, 0.1, 0.1]
+        );
+        assert!((view.centroid_expected_hz - 2400.0).abs() < 1e-6);
+        assert!((view.aliasing_max - 0.05).abs() < 1e-6);
+        assert!((view.loudness_target_lufs - (-14.0)).abs() < 1e-6);
+
+        // The empty view must serialize without error (never panics on None).
+        let empty = ReferenceProfileView::empty();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(json.contains("\"loaded\":false"));
     }
 
     #[test]

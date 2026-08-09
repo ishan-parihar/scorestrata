@@ -556,6 +556,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
         ),
         ("get_bus_graph", "read-only", false, "read", "low", "render"),
         (
+            "get_reference_profile",
+            "read-only",
+            false,
+            "read",
+            "low",
+            "render",
+        ),
+        (
             "set_humanize",
             "mutating",
             false,
@@ -823,6 +831,7 @@ pub fn get_capabilities() -> CapabilityManifest {
             "system://playbooks/<genre>",
             "project://<id>/render/jobs",
             "project://<id>/render/jobs/<job_id>",
+            "project://<id>/render/reference",
             "project://<id>/human-review/latest",
             "engineering://specs",
             "engineering://specs/<spec_id>",

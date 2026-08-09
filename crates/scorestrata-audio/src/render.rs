@@ -117,6 +117,99 @@ impl Default for RenderConfig {
     }
 }
 
+/// A full layer render: per-layer stems plus the mastered fold.
+#[derive(Debug, Clone)]
+pub struct LayerRender {
+    /// Per-layer stems in deterministic layer order.
+    pub stems: Vec<Stem>,
+    /// The mastered master render.
+    pub master: RenderResult,
+}
+
+/// Keyed render cache (plan §6 Phase E exit criteria: "audit without full
+/// re-render").
+///
+/// Content-addressed on the timeline input hash **plus** the render-config
+/// signature, so a hit implies the exact same engine inputs — reusing the
+/// cached result is byte-identical to re-rendering (R2). A project edit or
+/// config change misses and re-renders.
+#[derive(Debug, Clone, Default)]
+pub struct RenderCache {
+    entries: std::collections::BTreeMap<String, LayerRender>,
+}
+
+impl RenderCache {
+    /// An empty cache.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Look up a render by its cache key.
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&LayerRender> {
+        self.entries.get(key)
+    }
+
+    /// Insert a render under its cache key.
+    pub fn insert(&mut self, key: String, render: LayerRender) {
+        self.entries.insert(key, render);
+    }
+
+    /// Number of cached renders.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the cache is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Deterministic cache key for a timeline render: the compiler's input hash
+/// plus a signature of every config field that changes the output bytes.
+///
+/// Floats are keyed by their bits so any change (even a tiny dB tweak)
+/// misses; `BusGraph`/`MasterChain` are serialized canonically by `serde_json`.
+#[must_use]
+pub fn render_cache_key(input_hash: &str, config: &RenderConfig) -> String {
+    use sha2::{Digest, Sha256};
+    let mut buf = String::with_capacity(256);
+    buf.push_str(input_hash);
+    buf.push('|');
+    buf.push_str(if config.stereo { "s1" } else { "s0" });
+    buf.push('|');
+    buf.push_str(&config.sample_rate.to_string());
+    buf.push('|');
+    buf.push_str(&config.bits_per_sample.to_string());
+    buf.push('|');
+    buf.push_str(&config.master_gain_db.to_bits().to_string());
+    buf.push('|');
+    buf.push_str(&config.stereo_width.to_bits().to_string());
+    if let Some(lim) = config.limiter {
+        buf.push('|');
+        buf.push_str(&lim.ceiling_db.to_bits().to_string());
+        buf.push(':');
+        buf.push_str(&lim.knee_db.to_bits().to_string());
+    }
+    if let Some(bank) = &config.sound_bank {
+        buf.push('|');
+        buf.push_str(bank);
+    }
+    if let Some(graph) = &config.bus_graph {
+        buf.push('|');
+        buf.push_str(&serde_json::to_string(graph).unwrap_or_default());
+    }
+    if let Some(chain) = &config.master_chain {
+        buf.push('|');
+        buf.push_str(&serde_json::to_string(chain).unwrap_or_default());
+    }
+    hex::encode(Sha256::digest(buf.as_bytes()))
+}
+
 /// Apply the master-bus state (§8.6 `MixerState`, G5) to the folded mix:
 /// stereo width (mid/side) then master gain, before the master limiter so
 /// the ceiling still protects the final level.
@@ -2156,5 +2249,56 @@ mod tests {
             ]);
             assert_eq!(header_rate, rate, "WAV header records {rate} Hz");
         }
+    }
+
+    #[test]
+    fn render_cache_key_is_deterministic_and_sensitive_to_config_and_input() {
+        // Phase E exit: caching keyed on input hash + render config — same
+        // inputs must always produce the same key, any change must invalidate.
+        let cfg_a = RenderConfig::default();
+        let cfg_b = RenderConfig {
+            sample_rate: 96_000,
+            ..cfg_a.clone()
+        };
+        let key_a1 = render_cache_key("abc123", &cfg_a);
+        let key_a2 = render_cache_key("abc123", &cfg_a);
+        assert_eq!(
+            key_a1, key_a2,
+            "same input hash + config must map to the same cache key"
+        );
+        let key_b = render_cache_key("abc123", &cfg_b);
+        assert_ne!(key_a1, key_b, "a config change must invalidate the key");
+        let key_c = render_cache_key("abc124", &cfg_a);
+        assert_ne!(
+            key_a1, key_c,
+            "an input-hash change must invalidate the key"
+        );
+    }
+
+    #[test]
+    fn render_cache_is_empty_then_grows_on_insert() {
+        let mut cache = RenderCache::new();
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+        let render = LayerRender {
+            stems: vec![],
+            master: RenderResult {
+                wav_bytes: vec![1, 2, 3],
+                duration_seconds: 0.5,
+                sample_rate: 48_000,
+                channels: 1,
+                checksum: "deadbeef".to_string(),
+                mono_samples: vec![0.0],
+                analysis: crate::analysis::analyze_mono(&[]),
+            },
+        };
+        cache.insert("k".to_string(), render);
+        assert_eq!(cache.len(), 1);
+        assert!(!cache.is_empty());
+        #[expect(clippy::expect_used, reason = "Test assertions")]
+        let hit = cache.get("k").expect("key must resolve after insert");
+        assert_eq!(hit.master.checksum, "deadbeef");
+        assert!(hit.stems.is_empty());
+        assert!(cache.get("missing").is_none(), "unknown keys must miss");
     }
 }
