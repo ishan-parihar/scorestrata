@@ -348,6 +348,104 @@ fn golden_gates_stay_green_with_register_and_automation() {
     );
 }
 
+/// The committed Linkin Park-style nu-metal gold-standard demo
+/// (`demos/lp_nu_metal/`, regenerable via `python3 scripts/gen_lp_golden.py`)
+/// must compile, validate, and render through the recorded SF2 bank with the
+/// same production gates as the planner goldens. This pins the hand-authored
+/// blueprint — i–VI–III–VII, intro/verse/build/chorus/bridge/finale — so the
+/// gold-standard demo cannot silently regress.
+#[test]
+fn golden_lp_nu_metal_demo_passes_full_gates() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../demos/lp_nu_metal/project.json");
+    let project: scorestrata_core::domain::Project =
+        serde_json::from_slice(&std::fs::read(&path).expect("demo project exists"))
+            .expect("demo project parses");
+
+    // ── Structural blueprint (§16.5) ────────────────────────────────
+    assert_eq!(project.config.genre, "nu_metal");
+    assert_eq!(project.config.bpm, 105);
+    assert_eq!(project.config.duration_bars, 60);
+    assert_eq!(
+        project.melodic_bank.as_deref(),
+        Some("sf2"),
+        "demo renders through the recorded SF2 bank"
+    );
+    let roles: Vec<scorestrata_core::domain::SegmentRole> = project
+        .arrangement
+        .segments
+        .iter()
+        .map(|s| s.role)
+        .collect();
+    for role in [
+        scorestrata_core::domain::SegmentRole::Intro,
+        scorestrata_core::domain::SegmentRole::Verse,
+        scorestrata_core::domain::SegmentRole::Build,
+        scorestrata_core::domain::SegmentRole::Chorus,
+        scorestrata_core::domain::SegmentRole::Bridge,
+    ] {
+        assert!(roles.contains(&role), "blueprint has {role:?}");
+    }
+    let covered: u32 = project.arrangement.segments.iter().map(|s| s.bars).sum();
+    assert_eq!(covered, 60, "segments cover the full duration");
+
+    // ── Compile determinism ──────────────────────────────────────────
+    let timeline = scorestrata_compiler::compile_project(&project).expect("compiles");
+    assert!(!timeline.events.is_empty());
+    let again = scorestrata_compiler::compile_project(&project).expect("compiles again");
+    assert_eq!(
+        timeline.content_hash(),
+        again.content_hash(),
+        "R2 determinism"
+    );
+
+    // ── Full L6 validation gates ─────────────────────────────────────
+    let run_params = scorestrata_mcp::tools::RunValidationParams {
+        project_id: project.id.to_string(),
+        scope: "full".to_string(),
+        segment_ids: vec![],
+        layer_ids: vec![],
+        min_energy_delta: 0.15,
+    };
+    let receipt = scorestrata_mcp::tools::run_validation_with_project(&run_params, &project, 6);
+    let report = scorestrata_validator::report::build_validation_report(
+        project.id,
+        6,
+        receipt.diagnostics.clone(),
+    );
+    assert!(
+        report.all_hard_gates_passed,
+        "no hard validation failures: {}",
+        receipt
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == scorestrata_core::error::Severity::Error)
+            .map(|d| d.code.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    assert!(
+        receipt
+            .diagnostics
+            .iter()
+            .all(|d| d.code != "LAYER_NOTE_OUTSIDE_REGISTER"),
+        "transposed patterns stay inside their declared registers"
+    );
+
+    // ── Audio gates with the SF2 bank in the mix ────────────────────
+    let render = scorestrata_mcp::tools::render_project_to_analysis(&project).expect("renders");
+    assert!(
+        render.analysis.true_peak_dbtp <= -0.5,
+        "no clipping (true peak {})",
+        render.analysis.true_peak_dbtp
+    );
+    assert!(
+        (-16.0..=-4.0).contains(&render.analysis.integrated_lufs),
+        "loudness in golden range ({})",
+        render.analysis.integrated_lufs
+    );
+}
+
 /// Eval harness: measure real system + agent + engineering metrics from an
 /// actual compile → validate → patch run (§16.8).
 #[test]

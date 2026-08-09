@@ -21,7 +21,6 @@ pub mod analysis;
 pub mod audit;
 pub mod bus;
 pub mod convolve;
-pub mod embedded_bank;
 pub mod error;
 pub mod fx;
 pub mod mastering;

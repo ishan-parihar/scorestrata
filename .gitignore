@@ -6,6 +6,9 @@
 examples/projects/
 renders/
 *.ssproj/
+demos/lp_nu_metal/render/
+demos/lp_nu_metal/timeline.json
+demos/lp_nu_metal/cache/
 
 # IDE
 .idea/

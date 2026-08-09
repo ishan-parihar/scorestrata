@@ -11,11 +11,10 @@
 //!
 //! The bank is embedded via `include_bytes!` (R7) and fully deterministic
 //! (R2): identical bytes in → identical samples out. Runtime renders of
-//! this bank are byte-exact; only the *source* differs from the synthetic
-//! bank, which the engine cannot see.
+//! this bank are byte-exact; the committed one-shot set is the only source
+//! the engine sees.
 //!
-//! Instruments (same names/zones as `embedded_bank` so the two are
-//! drop-in interchangeable):
+//! Instruments (the same names/zones `render.rs` routes to):
 //! - `guitar` — GM 30 Distortion Guitar, 5 key zones × 2 velocity layers
 //! - `bass`   — GM 34 Picked Bass, 4 zones × 2 layers
 //! - `epiano` — GM 4 E.Piano, 3 zones, sustain loop detected at load
@@ -132,7 +131,7 @@ pub fn sf2_instrument_bank() -> InstrumentBank {
 }
 
 /// Append zones to a (possibly already-present) instrument, creating it if
-/// needed (mirrors `embedded_bank::push_zones`).
+/// needed (mirrors the `multisample` registration pattern).
 fn push_zones(bank: &mut InstrumentBank, name: &str, zones: Vec<SampleZone>) {
     if let Some(instrument) = bank.get_mut(name) {
         instrument.zones.extend(zones);
@@ -317,15 +316,21 @@ mod tests {
     #[test]
     fn sf2_guitar_differs_from_synthetic_guitar() {
         // The whole point of Phase H: the SF2 bank is NOT the synthetic
-        // bank. Same note, same buffer length — different bytes proves the
+        // voice. Same note, same buffer length — different bytes proves the
         // recorded instrument is actually in the mix.
         let sf2 = sf2_instrument_bank();
-        let synth = crate::embedded_bank::embedded_instrument_bank();
         let n = BANK_RATE as usize / 2;
         let mut a = vec![0.0; n];
         let mut b = vec![0.0; n];
         sf2.render_note("guitar", 57, 0.8, 7, &mut a);
-        synth.render_note("guitar", 57, 0.8, 7, &mut b);
+        crate::synth::render_note(
+            &crate::render::voice_params_for_instrument("guitar"),
+            crate::render::midi_to_frequency(57),
+            0.8,
+            BANK_RATE as f32,
+            n,
+            &mut b,
+        );
         assert_ne!(a, b, "SF2 guitar must differ from the synthetic pluck");
         let peak = a.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
         assert!(peak > 0.02, "SF2 guitar produces sound (peak {peak})");

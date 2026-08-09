@@ -2,12 +2,13 @@
 //!
 //! # Why this exists
 //!
-//! The Phase G bank (`gen_instrument_bank`) is *synthetic* — `Karplus-Strong`
-//! plucks and additive tones. It is deterministic and license-free, but it
-//! does not sound like a recorded instrument (audit `voice-sample-audit.md`:
-//! "no layer is like rock"). `SoundFont`s *are* recorded multi-sampled
-//! instruments — key zones, velocity layers, sustain loops — which is
-//! exactly the model our `multisample.rs` engine already plays.
+//! The legacy Phase G bank was *synthetic* — `Karplus-Strong` plucks and
+//! additive tones. It was deterministic and license-free, but it did not
+//! sound like a recorded instrument (audit `voice-sample-audit.md`: "no
+//! layer is like rock") and has since been retired in favor of this bank.
+//! `SoundFont`s *are* recorded multi-sampled instruments — key zones,
+//! velocity layers, sustain loops — which is exactly the model our
+//! `multisample.rs` engine already plays.
 //!
 //! This binary **renders** the `SoundFont` through
 //! [rustysynth](https://crates.io/crates/rustysynth) (MIT, pure Rust) into
@@ -228,7 +229,8 @@ fn dc_block(buf: &mut [f32]) {
 }
 
 /// Write a mono 24-bit PCM WAV (minimal local writer — keeps this binary
-/// independent of the library crate so it can bootstrap the embedded assets).
+/// independent of the library crate so it can bootstrap the committed
+/// one-shot assets).
 fn write_wav_file(dir: &std::path::Path, name: &str, samples: &[f32]) {
     let mut wav = Vec::with_capacity(44 + samples.len() * 3);
     wav.extend_from_slice(b"RIFF");

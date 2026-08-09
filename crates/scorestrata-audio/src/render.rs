@@ -103,8 +103,8 @@ pub struct RenderConfig {
     /// is sample-rate parametric end-to-end, so a render at any rate is
     /// deterministic; defaults to [`DEFAULT_SAMPLE_RATE`] (48 kHz, R1).
     pub sample_rate: u32,
-    /// Opt-in melodic instrument bank (G): `Some(_)` routes guitar/bass/
-    /// e-piano layer families through the embedded multi-sample bank;
+    /// Opt-in melodic instrument bank (G/H): `Some("sf2")` routes guitar/
+    /// bass/e-piano layer families through the recorded `SoundFont` bank;
     /// `None` keeps the subtractive synth voices byte-identical (R1).
     pub melodic_bank: Option<String>,
 }
@@ -1196,30 +1196,32 @@ pub fn is_percussion_instrument(instrument: &str) -> bool {
 
 /// Select the melodic instrument bank by config name (G/H).
 ///
-/// - `"embedded"` → the synthetic Karplus-Strong bank
-///   (`embedded_bank`), the Phase G default.
-/// - `"sf2"` → the recorded `SoundFont` bank (`sf2_bank`), Phase H — real
-///   multi-sampled instruments rendered from `FluidR3_GM`.
-/// - any other value → `None` (the subtractive synth voice, R1). Unknown
+/// - `"sf2"` → the recorded `SoundFont` bank (`sf2_bank`), the production
+///   bank — real multi-sampled instruments rendered from `FluidR3_GM`.
+/// - any other value or `None` → the subtractive synth voice (R1). Unknown
 ///   names deliberately do **not** fall back to a sample bank — a typo like
 ///   `"sft"` must not silently swap the instrument sound.
 #[must_use]
 fn melodic_bank_for(config: &RenderConfig) -> Option<crate::multisample::InstrumentBank> {
     match config.melodic_bank.as_deref() {
         Some("sf2") => Some(crate::sf2_bank::sf2_instrument_bank()),
-        Some("embedded") => Some(crate::embedded_bank::embedded_instrument_bank()),
         Some(_) | None => None,
     }
 }
 
 /// Map a layer instrument to a multi-sample bank voice (G).
 ///
-/// Returns the embedded-bank instrument name for the instrument families the
-/// sample bank ships (`guitar`, `bass`, `epiano`); other families keep the
+/// Returns the sample-bank instrument name for the instrument families the
+/// bank ships (`guitar`, `bass`, `epiano`); other families keep the
 /// subtractive synth voice. The mapping is by family substring so suffixed
-/// names (`distorted_guitar`, `bass_synth`, `lead_synth`) resolve naturally.
+/// names (`distorted_guitar`, `bass_synth`, `lead_synth`) resolve naturally;
+/// keyboards (`epiano`/`piano`/`keys`) route to the recorded e-piano.
 #[must_use]
 pub fn melodic_instrument_for(instrument: &str) -> Option<&'static str> {
+    let lower = instrument.to_lowercase();
+    if lower.contains("piano") || lower.contains("keys") {
+        return Some("epiano");
+    }
     match instrument_family(instrument) {
         "guitar" => Some("guitar"),
         "bass" => Some("bass"),
@@ -1673,7 +1675,7 @@ mod tests {
 
         let plain = RenderConfig::default();
         let with_bank = RenderConfig {
-            melodic_bank: Some("embedded".to_string()),
+            melodic_bank: Some("sf2".to_string()),
             ..RenderConfig::default()
         };
 
@@ -1739,10 +1741,11 @@ mod tests {
     }
 
     #[test]
-    fn sf2_melodic_bank_renders_and_differs_from_embedded() {
+    fn sf2_melodic_bank_renders_and_differs_from_synth() {
         // Phase H: melodic_bank "sf2" uses the recorded SoundFont bank; it
-        // must render audibly and produce different bytes than "embedded"
-        // (recorded vs synthetic source), and stay deterministic (R2).
+        // must render audibly and produce different bytes than the
+        // subtractive synth voice (recorded vs synthesized source), and
+        // stay deterministic (R2).
         let notes = vec![RenderNote {
             pitch: 57,
             start_tick: 0,
@@ -1751,23 +1754,19 @@ mod tests {
             layer_name: "Guitar".to_string(),
         }];
         let voices = build_voices(&[("Guitar", "distorted_guitar")]);
-        let embedded = RenderConfig {
-            melodic_bank: Some("embedded".to_string()),
-            ..RenderConfig::default()
-        };
+        let plain = RenderConfig::default();
         let sf2 = RenderConfig {
             melodic_bank: Some("sf2".to_string()),
             ..RenderConfig::default()
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
-        let embedded_r =
-            render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &embedded).unwrap();
+        let synth_r = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &plain).unwrap();
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let sf2_r = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &sf2).unwrap();
         assert!(rms(&sf2_r.mono_samples) > 0.01, "SF2 bank path audible");
         assert_ne!(
-            embedded_r.checksum, sf2_r.checksum,
-            "recorded SF2 bank differs from the synthetic bank"
+            synth_r.checksum, sf2_r.checksum,
+            "recorded SF2 bank differs from the synth voice"
         );
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let sf2_again = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &sf2).unwrap();
