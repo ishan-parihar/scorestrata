@@ -2446,6 +2446,7 @@ mod tests {
                 bits: 24,
                 enabled: true,
             }),
+            target_lufs: None,
         });
         let view = master_chain_resource(&project);
         assert!(view.enabled);

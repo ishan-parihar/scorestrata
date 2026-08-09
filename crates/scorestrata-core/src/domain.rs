@@ -654,6 +654,12 @@ pub struct MasterChain {
     pub saturation: Option<SaturationCfg>,
     /// TPDF dither + bit-depth for the export; `None` = 16-bit no dither.
     pub dither: Option<DitherCfg>,
+    /// Target integrated loudness in LUFS (plan §1.3, streaming ≈ −14).
+    /// `Some(t)` makes the chain measure the pre-limiter mix and apply
+    /// deterministic makeup gain to land at `t` LUFS; `None` = no
+    /// normalization (R1 — bytes unchanged).
+    #[serde(default)]
+    pub target_lufs: Option<f32>,
 }
 
 /// The send/return + group-bus routing graph (Phase B).

@@ -95,6 +95,10 @@ pub struct RenderConfig {
     /// PCM export depth for the WAV (16 or 24). The master chain's dither
     /// `bits` wins when a chain is present; otherwise this applies.
     pub bits_per_sample: u16,
+    /// Render sample rate (44100 / 48000 / 96000, plan §3.3). The engine
+    /// is sample-rate parametric end-to-end, so a render at any rate is
+    /// deterministic; defaults to [`DEFAULT_SAMPLE_RATE`] (48 kHz, R1).
+    pub sample_rate: u32,
 }
 
 impl Default for RenderConfig {
@@ -108,6 +112,7 @@ impl Default for RenderConfig {
             bus_graph: None,
             master_chain: None,
             bits_per_sample: 16,
+            sample_rate: DEFAULT_SAMPLE_RATE,
         }
     }
 }
@@ -1497,6 +1502,7 @@ mod tests {
             bus_graph: None,
             master_chain: None,
             bits_per_sample: 16,
+            sample_rate: DEFAULT_SAMPLE_RATE,
         };
         let wide = RenderConfig {
             stereo: true,
@@ -1507,6 +1513,7 @@ mod tests {
             bus_graph: None,
             master_chain: None,
             bits_per_sample: 16,
+            sample_rate: DEFAULT_SAMPLE_RATE,
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let a = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &narrow).unwrap();
@@ -1930,6 +1937,7 @@ mod tests {
             multiband: scorestrata_core::domain::MultibandCfg::default(),
             saturation: None,
             dither: None,
+            target_lufs: None,
         };
         chain.dither = Some(scorestrata_core::domain::DitherCfg {
             bits: 16,
@@ -1981,6 +1989,7 @@ mod tests {
                     bits: 24,
                     enabled: true,
                 }),
+                target_lufs: None,
             }),
             ..RenderConfig::default()
         };
@@ -2108,5 +2117,44 @@ mod tests {
         // Stereo WAV header says 2 channels.
         let channels = u16::from_le_bytes([lead.wav_bytes[22], lead.wav_bytes[23]]);
         assert_eq!(channels, 2, "stereo stem WAV is 2-channel");
+    }
+
+    #[test]
+    fn render_at_alternate_sample_rates_is_deterministic_and_valid() {
+        // Plan §3.3 / §4.2: `ss render --rate 44100|96000` — the engine is
+        // sample-rate parametric, so a render at any rate is deterministic
+        // (same project + same rate → byte-identical bytes) and the WAV
+        // header records the requested rate.
+        let notes = [RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        for rate in [44_100u32, 48_000, 96_000] {
+            let config = RenderConfig {
+                stereo: true,
+                sample_rate: rate,
+                ..RenderConfig::default()
+            };
+            #[expect(clippy::unwrap_used, reason = "Test assertions")]
+            let a = render_notes_full(&notes, 120, rate, &[], &[], &[], &config).unwrap();
+            #[expect(clippy::unwrap_used, reason = "Test assertions")]
+            let b = render_notes_full(&notes, 120, rate, &[], &[], &[], &config).unwrap();
+            assert_eq!(
+                a.wav_bytes, b.wav_bytes,
+                "{rate} Hz render is deterministic (R2)"
+            );
+            assert_eq!(a.sample_rate, rate, "render reports the requested rate");
+            // WAV sample-rate field lives at byte offset 24 (LE u32).
+            let header_rate = u32::from_le_bytes([
+                a.wav_bytes[24],
+                a.wav_bytes[25],
+                a.wav_bytes[26],
+                a.wav_bytes[27],
+            ]);
+            assert_eq!(header_rate, rate, "WAV header records {rate} Hz");
+        }
     }
 }

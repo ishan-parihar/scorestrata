@@ -2698,6 +2698,11 @@ pub struct SetMasterChainParams {
     /// Enable TPDF dither on export.
     #[serde(default)]
     pub dither_enabled: bool,
+    /// Target integrated loudness in LUFS (plan §1.3, streaming ≈ −14).
+    /// `Some(t)` enables deterministic makeup gain to land the mastered mix
+    /// at `t` LUFS; `None` = no loudness normalization (R1).
+    #[serde(default)]
+    pub target_lufs: Option<f32>,
 }
 
 const fn default_crossover_low() -> f32 {
@@ -2777,6 +2782,7 @@ pub fn set_master_chain(params: &SetMasterChainParams) -> ToolReceipt {
         },
         saturation,
         dither,
+        target_lufs: params.target_lufs,
     });
     let mut score_delta = BTreeMap::new();
     score_delta.insert(
@@ -7848,6 +7854,10 @@ pub struct RenderProjectParams {
     /// Hashes of source assets, keyed by asset path/name (§17.2).
     #[serde(default)]
     pub asset_hashes: Option<BTreeMap<String, String>>,
+    /// Render sample rate in Hz (44100 / 48000 / 96000, plan §3.3).
+    /// Defaults to the engine's 48 kHz.
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
 }
 
 /// Render a compiled timeline to audio and produce its Level-4 analysis.
@@ -7918,12 +7928,13 @@ fn timeline_render_inputs(
 pub(crate) fn render_timeline_to_analysis(
     timeline: &scorestrata_compiler::TimelineIR,
     project: &scorestrata_core::domain::Project,
+    sample_rate: u32,
 ) -> Result<scorestrata_audio::render::RenderResult, String> {
     let (notes, voices, automation, fx) = timeline_render_inputs(timeline, project);
     scorestrata_audio::render::render_notes_full(
         &notes,
         timeline.bpm,
-        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        sample_rate,
         &voices,
         &automation,
         &fx,
@@ -8022,6 +8033,7 @@ pub fn render_config_from_project(
             .as_ref()
             .and_then(|c| c.dither.as_ref())
             .map_or(16, |d| d.bits),
+        sample_rate: scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
     }
 }
 
@@ -8086,7 +8098,11 @@ pub fn render_project_to_analysis(
     project: &scorestrata_core::domain::Project,
 ) -> Result<scorestrata_audio::render::RenderResult, String> {
     let timeline = scorestrata_compiler::compile_project(project).map_err(|e| e.to_string())?;
-    render_timeline_to_analysis(&timeline, project)
+    render_timeline_to_analysis(
+        &timeline,
+        project,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+    )
 }
 
 /// Build a diagnostic explaining why the Level-4 audio plane could not run.
@@ -8198,7 +8214,10 @@ pub fn render_project(params: &RenderProjectParams) -> ToolReceipt {
         };
     };
 
-    match render_timeline_to_analysis(&timeline, &project) {
+    let render_rate = params
+        .sample_rate
+        .unwrap_or(scorestrata_audio::render::DEFAULT_SAMPLE_RATE);
+    match render_timeline_to_analysis(&timeline, &project, render_rate) {
         Ok(result) => {
             // Level-4 audio validation: surface LUFS / true peak / clipping
             // diagnostics on the receipt so the agent loop can react to mix
@@ -8408,6 +8427,10 @@ pub struct RenderSegmentParams {
     /// Hashes of source assets (§17.2).
     #[serde(default)]
     pub asset_hashes: Option<BTreeMap<String, String>>,
+    /// Render sample rate in Hz (44100 / 48000 / 96000, plan §3.3).
+    /// Defaults to the engine's 48 kHz.
+    #[serde(default)]
+    pub sample_rate: Option<u32>,
 }
 
 /// Render a single segment to a WAV artifact.
@@ -8425,6 +8448,7 @@ pub fn render_segment(params: &RenderSegmentParams) -> ToolReceipt {
         command_id: params.command_id.clone(),
         seed: params.seed,
         asset_hashes: params.asset_hashes.clone(),
+        sample_rate: params.sample_rate,
     })
 }
 
@@ -13060,6 +13084,7 @@ mod tests {
             command_id: None,
             seed: None,
             asset_hashes: None,
+            sample_rate: None,
         };
         let receipt = render_project(&params);
         // Without a project payload, the render cannot run — it fails cleanly.
@@ -13310,6 +13335,7 @@ mod tests {
             command_id: None,
             seed: None,
             asset_hashes: None,
+            sample_rate: None,
         };
         let receipt = render_segment(&params);
         // Without a project payload, the render cannot run — it fails cleanly.
@@ -13334,6 +13360,7 @@ mod tests {
             command_id: Some("cmd_0042".to_string()),
             seed: Some(1337),
             asset_hashes: None,
+            sample_rate: None,
         };
         let receipt = render_project(&params);
         assert!(
@@ -13391,6 +13418,7 @@ mod tests {
             command_id: None,
             seed: None,
             asset_hashes: None,
+            sample_rate: None,
         };
         let receipt = render_project(&params);
         assert!(matches!(receipt.status, ToolStatus::Succeeded));
@@ -13421,6 +13449,7 @@ mod tests {
             command_id: None,
             seed: None,
             asset_hashes: None,
+            sample_rate: None,
         };
         let receipt = render_project(&params);
         assert!(
@@ -13465,6 +13494,7 @@ mod tests {
             command_id: Some("cmd_0042".to_string()),
             seed: Some(1337),
             asset_hashes: None,
+            sample_rate: None,
         };
         let a = render_project(&params);
         let b = render_project(&params);
@@ -13618,6 +13648,7 @@ mod tests {
             saturation_trim_db: -2.0,
             dither_bits: 24,
             dither_enabled: true,
+            target_lufs: Some(-14.0),
         };
         let receipt = set_master_chain(&params);
         assert!(
@@ -13655,6 +13686,7 @@ mod tests {
             saturation_trim_db: -3.0,
             dither_bits: 16,
             dither_enabled: false,
+            target_lufs: None,
         };
         let receipt = set_master_chain(&params);
         assert!(matches!(receipt.status, ToolStatus::Failed));

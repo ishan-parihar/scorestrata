@@ -75,6 +75,9 @@ enum Commands {
         /// Render only this segment (by name or id) into segments/<Name>.wav
         #[arg(long)]
         segment: Option<String>,
+        /// Sample rate in Hz for the render (44100 / 48000 / 96000)
+        #[arg(long, default_value_t = scorestrata_audio::render::DEFAULT_SAMPLE_RATE)]
+        rate: u32,
     },
     /// Post-generation spectral audit of a rendered WAV (debug log for music)
     Analyze {
@@ -403,7 +406,8 @@ fn main() -> Result<()> {
             path,
             mode,
             segment,
-        } => handle_render(&path, &mode, segment.as_deref())?,
+            rate,
+        } => handle_render(&path, &mode, segment.as_deref(), rate)?,
         Commands::Analyze {
             path,
             reference,
@@ -928,6 +932,7 @@ fn handle_validate(path: &str, scope: &str) -> Result<()> {
 /// the engine defaults, so legacy projects render byte-identically.
 fn render_config_for(
     project: &scorestrata_core::domain::Project,
+    rate: u32,
 ) -> scorestrata_audio::render::RenderConfig {
     let limiter = project.mixer.limiter_ceiling_db.map(|ceiling_db| {
         let knee_db = scorestrata_audio::mastering::LimiterConfig::default().knee_db;
@@ -949,6 +954,7 @@ fn render_config_for(
             .as_ref()
             .and_then(|c| c.dither.as_ref())
             .map_or(16, |d| d.bits),
+        sample_rate: rate,
     }
 }
 
@@ -956,7 +962,7 @@ fn render_config_for(
     clippy::too_many_lines,
     reason = "CLI render composes isolation, render, mastering and audit in one flow"
 )]
-fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
+fn handle_render(path: &str, mode: &str, segment: Option<&str>, rate: u32) -> Result<()> {
     use scorestrata_compiler::timeline::EventKind;
     let scope_note = segment.map_or_else(String::new, |s| format!(" (segment: {s})"));
     println!(
@@ -1068,11 +1074,11 @@ fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
 
     // F′ — segment mode: a single per-phase WAV plus a §17.2 segment manifest.
     if let Some(seg) = &segment_scope {
-        let config = render_config_for(&project);
+        let config = render_config_for(&project, rate);
         let result = scorestrata_audio::render::render_notes_full(
             &notes,
             timeline.bpm,
-            scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+            config.sample_rate,
             &voices,
             &automation,
             &fx,
@@ -1135,11 +1141,11 @@ fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
 
     // Stems mode: write one WAV per layer plus the master mix (§16 stems).
     if mode == "stems" {
-        let config = render_config_for(&project);
+        let config = render_config_for(&project, rate);
         let (stems, master) = scorestrata_audio::render::render_stems_full(
             &notes,
             timeline.bpm,
-            scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+            config.sample_rate,
             &voices,
             &automation,
             &fx,
@@ -1188,11 +1194,11 @@ fn handle_render(path: &str, mode: &str, segment: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let config = render_config_for(&project);
+    let config = render_config_for(&project, rate);
     let result = scorestrata_audio::render::render_notes_full(
         &notes,
         timeline.bpm,
-        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        config.sample_rate,
         &voices,
         &automation,
         &fx,
@@ -1272,11 +1278,22 @@ fn handle_demo(dir: &str) -> Result<()> {
                 &project_dir.display().to_string(),
                 "master",
                 Some(segment_name),
+                scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
             )?;
         }
         // Phase 2 — per-layer stems + phase 3/4 — mastered master.
-        handle_render(&project_dir.display().to_string(), "stems", None)?;
-        handle_render(&project_dir.display().to_string(), "master", None)?;
+        handle_render(
+            &project_dir.display().to_string(),
+            "stems",
+            None,
+            scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        )?;
+        handle_render(
+            &project_dir.display().to_string(),
+            "master",
+            None,
+            scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        )?;
 
         // §4 — validate every artifact in <project>/render/.
         let render_dir = project_dir.join("render");
@@ -3395,7 +3412,7 @@ mod tests {
         assert_eq!(reloaded.mixer.master_gain_db, -6.0);
         assert_eq!(reloaded.mixer.limiter_ceiling_db, Some(-0.5));
         // The render path maps the mixer bus onto the engine config.
-        let config = render_config_for(&reloaded);
+        let config = render_config_for(&reloaded, scorestrata_audio::render::DEFAULT_SAMPLE_RATE);
         assert_eq!(config.master_gain_db, -6.0);
         assert_eq!(config.stereo_width, 1.0);
         assert_eq!(config.limiter.expect("limiter mapped").ceiling_db, -0.5);

@@ -296,6 +296,25 @@ pub fn apply_master_chain(
         }
     }
 
+    // ── 2.5 Loudness normalization (plan §1.3): deterministic makeup gain
+    // to land the pre-limiter mix at the target integrated LUFS. Measured
+    // with the same analyzer the audit uses, so the value is reproducible;
+    // applied *before* the limiter so the maximizer tames any peaks the
+    // makeup creates (R2 — no wall-clock state, fixed math only).
+    if let Some(target) = chain.target_lufs {
+        let measured = crate::analysis::analyze_stereo(left, right).integrated_lufs;
+        if measured > -70.0 {
+            let makeup_db = target - measured;
+            let gain = 10.0f32.powf(makeup_db / 20.0).clamp(0.01, 100.0);
+            for s in left.iter_mut() {
+                *s *= gain;
+            }
+            for s in right.iter_mut() {
+                *s *= gain;
+            }
+        }
+    }
+
     // ── 3. Limiter (the chain's maximizer). ─────────────────────────────
     if let Some(lim) = limiter {
         apply_limiter(left, lim);
@@ -356,6 +375,8 @@ impl SplitMix64 {
 #[cfg(test)]
 #[expect(
     clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
     reason = "Test sample indices stay well within f32's exact integer range"
 )]
 mod tests {
@@ -439,6 +460,7 @@ mod tests {
             },
             saturation: None,
             dither: None,
+            target_lufs: None,
         }
     }
 
@@ -514,6 +536,7 @@ mod tests {
                 oversample: 2,
             }),
             dither: None,
+            target_lufs: None,
         };
         let mut left: Vec<f32> = (0..48_000)
             .map(|i| 1.4 * (i as f32 * 0.005).sin())
@@ -565,5 +588,141 @@ mod tests {
         let original = samples.clone();
         dither_buffer(&mut samples, &cfg);
         assert_eq!(samples, original);
+    }
+
+    // ── Phase D exit criteria (plan §6) ──────────────────────────────────
+
+    /// A dense, headroom-rich mix: several sine layers + a kick-ish pulse,
+    /// deliberately quiet so the makeup gain must *lift* it to the target.
+    fn test_mix(sample_rate: u32, seconds: f32) -> (Vec<f32>, Vec<f32>) {
+        let sr = f64::from(sample_rate);
+        let len = (sr * f64::from(seconds)) as usize;
+        let mut left = Vec::with_capacity(len);
+        let mut right = Vec::with_capacity(len);
+        let half_period = (sample_rate / 2) as usize;
+        for i in 0..len {
+            let t = i as f32 / sr as f32;
+            let s = 0.12f32.mul_add(
+                (std::f32::consts::TAU * 220.0 * t).sin(),
+                0.08 * (std::f32::consts::TAU * 440.0 * t).sin(),
+            ) + if i % half_period < 2_000 { 0.15 } else { 0.0 };
+            left.push(s);
+            right.push(0.9 * s); // slight stereo difference
+        }
+        (left, right)
+    }
+
+    #[test]
+    fn master_chain_normalizes_to_minus_14_lufs_under_minus_1_dbtp() {
+        // Plan §6 Phase D exit: mastered loudness lands at −14 LUFS ±0.5 with
+        // a true peak ≤ −1.0 dBTP (the limiter ceiling).
+        let mut chain = test_chain();
+        chain.target_lufs = Some(-14.0);
+        let (mut left, mut right) = test_mix(48_000, 3.0);
+        let limiter = LimiterConfig::default();
+        apply_master_chain(&mut left, &mut right, &chain, 48_000, Some(&limiter));
+
+        let analysis = crate::analysis::analyze_stereo(&left, &right);
+        assert!(
+            (analysis.integrated_lufs - (-14.0)).abs() < 0.5,
+            "−14 LUFS ±0.5 target, got {:.2}",
+            analysis.integrated_lufs
+        );
+        assert!(
+            analysis.true_peak_dbtp <= -1.0 + 0.02,
+            "true peak ≤ −1 dBTP, got {:.2}",
+            analysis.true_peak_dbtp
+        );
+        assert!(!analysis.clipping_detected, "no full-scale clips");
+    }
+
+    #[test]
+    fn master_chain_target_lufs_none_is_a_noop() {
+        // R1: `target_lufs: None` must not touch the buffers — byte-identical.
+        // (Multiband is disabled so the LR-24 phase tilt cannot mask the
+        // assertion; only the makeup stage is under test here.)
+        let chain = MasterChain {
+            enabled: true,
+            multiband: MultibandCfg {
+                enabled: false,
+                ..MultibandCfg::default()
+            },
+            saturation: None,
+            dither: None,
+            target_lufs: None,
+        };
+        let (mut left, mut right) = test_mix(48_000, 2.0);
+        let (l0, r0) = (left.clone(), right.clone());
+        apply_master_chain(&mut left, &mut right, &chain, 48_000, None);
+        assert_eq!(left, l0, "no target → no makeup gain (R1)");
+        assert_eq!(right, r0);
+    }
+
+    #[test]
+    fn saturation_oversampling_controls_aliasing_above_16k() {
+        // Plan §6 Phase D exit: "no aliasing >16 kHz on driven material with
+        // saturation". A hot 7 kHz tone drives the soft clip; the 2×-oversampled
+        // path must fold far less energy above 16 kHz than the 1× path, and
+        // stay under a small absolute ceiling.
+        let sample_rate = 48_000u32;
+        let len = sample_rate * 2;
+        // A 9 kHz tone driven hard: its 3rd harmonic (27 kHz) folds back to
+        // 21 kHz at 1× (a >16 kHz alias), while 2× oversampling keeps it
+        // below the decimation low-pass and out of the audible band.
+        let tone: Vec<f32> = (0..len)
+            .map(|i| 0.9 * (std::f32::consts::TAU * 9_000.0 * i as f32 / sample_rate as f32).sin())
+            .collect();
+
+        // Linear baseline: the tone's own >16 kHz content before saturation.
+        let linear = {
+            let mut left = tone.clone();
+            let mut right = tone.clone();
+            let chain = MasterChain {
+                enabled: true,
+                multiband: MultibandCfg {
+                    enabled: false,
+                    ..MultibandCfg::default()
+                },
+                saturation: None,
+                dither: None,
+                target_lufs: None,
+            };
+            apply_master_chain(&mut left, &mut right, &chain, sample_rate, None);
+            crate::audit::audit_stereo(&left, &right, sample_rate, None).aliasing_ratio
+        };
+
+        let alias_share = |oversample: u32| {
+            let mut left = tone.clone();
+            let mut right = tone.clone();
+            let chain = MasterChain {
+                enabled: true,
+                multiband: MultibandCfg {
+                    enabled: false,
+                    ..MultibandCfg::default()
+                },
+                saturation: Some(SaturationCfg {
+                    drive_db: 12.0,
+                    softness: 0.5,
+                    trim_db: -3.0,
+                    oversample,
+                }),
+                dither: None,
+                target_lufs: None,
+            };
+            apply_master_chain(&mut left, &mut right, &chain, sample_rate, None);
+            crate::audit::audit_stereo(&left, &right, sample_rate, None).aliasing_ratio
+        };
+
+        let os1 = alias_share(1);
+        let os2 = alias_share(2);
+        // Oversampling must fold back *less* than the naive path: the
+        // saturation-induced >16 kHz bump (over the linear baseline) shrinks.
+        let fold_in_1x = os1 - linear;
+        let fold_in_2x = os2 - linear;
+        assert!(
+            fold_in_2x < fold_in_1x,
+            "2× OS must cut the fold-in bump: 1× +{fold_in_1x:.4} → 2× +{fold_in_2x:.4}"
+        );
+        assert!(os2 < 0.18, ">16 kHz share bounded with 2× OS, got {os2:.4}");
     }
 }
