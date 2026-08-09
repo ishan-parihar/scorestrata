@@ -21,3 +21,5 @@ renders/
 
 # Test artifacts
 /tmp/
+demo/
+lp_demo/

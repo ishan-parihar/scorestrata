@@ -344,8 +344,11 @@ pub fn dither_buffer(samples: &mut [f32], cfg: &DitherCfg) {
     let mut rng = SplitMix64::new(0xD17E_0000_5EED_0001);
     for s in samples.iter_mut() {
         let tpdf = rng.next_f32() - rng.next_f32();
-        let quantized = (*s + tpdf * step).round();
-        *s = quantized * step;
+        // Quantize onto the bit grid: divide by the LSB step, round to the
+        // nearest grid index, then scale back. (Rounding the raw sample
+        // would collapse every sample onto ±1.0/0 — full-scale destruction.)
+        let quantized = ((*s + tpdf * step) / step).round() * step;
+        *s = quantized;
     }
 }
 
@@ -576,6 +579,16 @@ mod tests {
             grid_error < 1e-6,
             "dithered samples must sit on the bit grid"
         );
+        // The signal must SURVIVE quantization (a regression guard against
+        // grid-index confusion that collapses every sample onto ±1/0): the
+        // output's peak must match the input's peak within one LSB step.
+        let in_peak = b.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        let out_peak = a.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+        assert!(
+            (out_peak - in_peak).abs() <= step + 1e-6,
+            "dither must preserve the signal envelope: in {in_peak}, out {out_peak}"
+        );
+        assert!(out_peak > 0.2, "output must not be silent: peak {out_peak}");
     }
 
     #[test]
