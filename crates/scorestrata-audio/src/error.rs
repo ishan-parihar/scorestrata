@@ -16,4 +16,7 @@ pub enum AudioError {
     /// The audit visualization could not be rendered.
     #[error("visualization failed: {0}")]
     Visualization(String),
+    /// A reference-analysis failure (e.g. no onsets in the WAV).
+    #[error("{0}")]
+    Other(String),
 }

@@ -545,6 +545,38 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::set_master_chain
             )
         }
+        "load_reference_track" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::LoadReferenceTrackParams,
+                crate::tools::load_reference_track
+            )
+        }
+        "compare_to_reference" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::CompareToReferenceParams,
+                crate::tools::compare_to_reference
+            )
+        }
+        "apply_audit_patch" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::ApplyAuditPatchParams,
+                crate::tools::apply_audit_patch
+            )
+        }
+        "extract_groove_from_reference" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::ExtractGrooveFromReferenceParams,
+                crate::tools::extract_groove_from_reference
+            )
+        }
         "repeat_pattern_in_segment" => {
             route!(
                 tool_name,

@@ -8901,6 +8901,566 @@ pub fn audit_layer_spectral(params: &AuditLayerSpectralParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `load_reference_track` (Phase E).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[must_use]
+pub struct LoadReferenceTrackParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Path to the reference WAV on disk.
+    pub path: String,
+}
+
+/// Analyze a user WAV into a [`ReferenceProfile`] for `compare_to_reference`.
+///
+/// Reads the file at `path`, decodes it with the standard WAV reader, and
+/// computes the six band-energy shares, LUFS, true peak, and spectral
+/// centroid. The profile is returned inline in the receipt summary so the
+/// agent can pass it back to `compare_to_reference` (stateless round trip).
+#[must_use]
+pub fn load_reference_track(params: &LoadReferenceTrackParams) -> ToolReceipt {
+    let bytes = match std::fs::read(&params.path) {
+        Ok(b) => b,
+        Err(e) => {
+            return ToolReceipt {
+                tool: "load_reference_track".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Cannot read reference '{}': {e}", params.path),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec!["get_project_summary".to_string()],
+                cost: ToolCost::default(),
+                warnings: vec![format!("I/O error reading {}", params.path)],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    };
+    let profile =
+        match scorestrata_audio::reference::analyze_reference_wav(&bytes, params.path.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolReceipt {
+                    tool: "load_reference_track".to_string(),
+                    status: ToolStatus::Failed,
+                    summary: format!("Reference analysis failed: {e}"),
+                    score_delta: BTreeMap::new(),
+                    evidence_uris: vec![],
+                    focus_uris: vec![],
+                    next_actions: vec!["load_reference_track".to_string()],
+                    cost: ToolCost::default(),
+                    warnings: vec!["WAV decode / analysis error".to_string()],
+                    dry_run: false,
+                    diagnostics: vec![],
+                };
+            }
+        };
+    let labels = scorestrata_audio::reference::band_labels();
+    let band_line = labels
+        .iter()
+        .zip(&profile.bands)
+        .map(|(l, b)| format!("{l} {:.0}%", b * 100.0))
+        .collect::<Vec<_>>()
+        .join(", ");
+    ToolReceipt {
+        tool: "load_reference_track".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Reference '{}': {} Hz, LUFS {:.1}, true peak {:.1} dBTP, centroid {:.0} Hz — {band_line}",
+            profile.path,
+            profile.sample_rate,
+            profile.lufs,
+            profile.true_peak_db,
+            profile.centroid_hz,
+        ),
+        score_delta: BTreeMap::from([("reference.loaded".to_string(), "1".to_string())]),
+        evidence_uris: vec!["system://reference-profile".to_string()],
+        focus_uris: vec![format!("project://{}/eval/latest", params.project_id)],
+        next_actions: vec![
+            "compare_to_reference".to_string(),
+            "extract_groove_from_reference".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 20,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![scorestrata_core::diagnostic::Diagnostic {
+            id: scorestrata_core::ids::DiagnosticId::new(),
+            code: "REFERENCE_PROFILE_LOADED".to_string(),
+            metric: "reference.profile".to_string(),
+            severity: scorestrata_core::error::Severity::Info,
+            scope: scorestrata_core::diagnostic::MetricScope::default(),
+            evidence_uris: vec!["system://reference-profile".to_string()],
+            message: serde_json::to_string(&profile).unwrap_or_default(),
+            root_causes: vec![],
+            suggested_patches: vec![],
+            expected_delta: None,
+            confidence: 1.0,
+        }],
+    }
+}
+
+/// Parameters for `compare_to_reference` (Phase E).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[must_use]
+pub struct CompareToReferenceParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project to render and compare.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+    /// Serialized `ReferenceProfile` (from `load_reference_track`); required.
+    #[serde(default)]
+    pub reference: Option<serde_json::Value>,
+}
+
+/// Render the project and compare every layer (and the master) against the
+/// reference profile, reporting per-layer deviation deltas.
+///
+/// The master deviation weights band shares + LUFS + centroid; each layer's
+/// deviation uses band shares + centroid (layers have no standalone LUFS).
+/// This is the Phase E debug loop: the agent reads the deltas, calls
+/// `apply_audit_patch`, re-renders, and re-compares until the deltas shrink.
+#[must_use]
+pub fn compare_to_reference(params: &CompareToReferenceParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "compare_to_reference".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot compare project '{}': no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["No project payload — supply the serialized project".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let Some(reference_json) = &params.reference else {
+        return ToolReceipt {
+            tool: "compare_to_reference".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot compare project '{}': no reference profile provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["load_reference_track".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No reference — run load_reference_track first (or pass the profile)".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("compare_to_reference", "project", &e),
+        };
+    let reference: scorestrata_audio::reference::ReferenceProfile =
+        match serde_json::from_value(reference_json.clone()) {
+            Ok(r) => r,
+            Err(e) => return deserialize_error_receipt("compare_to_reference", "reference", &e),
+        };
+    let (layers, master) = match render_project_to_layer_audit(&project, None) {
+        Ok(v) => v,
+        Err(e) => {
+            return ToolReceipt {
+                tool: "compare_to_reference".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Compare failed: {e}"),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec!["run_validation".to_string()],
+                cost: ToolCost::default(),
+                warnings: vec!["Render engine error".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    };
+    // Master band shares/centroid come from a spectral audit of the rendered
+    // mono fold (the analysis struct carries LUFS/true-peak only).
+    let master_report = scorestrata_audio::audit::audit_stereo(
+        &master.mono_samples,
+        &master.mono_samples,
+        master.sample_rate,
+        None,
+    );
+    let mut deviations = Vec::with_capacity(layers.len() + 1);
+    let master_dev = scorestrata_audio::reference::compare_measured(
+        "master",
+        master_report.band_shares(),
+        Some(master.analysis.integrated_lufs),
+        master_report.spectral_centroid_hz,
+        &reference,
+    );
+    deviations.push(master_dev);
+    for layer in &layers {
+        deviations.push(scorestrata_audio::reference::compare_measured(
+            &layer.layer_name,
+            layer.report.band_shares(),
+            None,
+            layer.report.spectral_centroid_hz,
+            &reference,
+        ));
+    }
+    deviations.sort_by(|a, b| {
+        b.overall
+            .partial_cmp(&a.overall)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut score_delta = BTreeMap::new();
+    let worst = &deviations[0];
+    score_delta.insert(
+        "reference.overall".to_string(),
+        format!("{:.3}", worst.overall),
+    );
+    let table = deviations
+        .iter()
+        .map(|d| format!("{} Δ{:.3} — {}", d.entity, d.overall, d.diagnosis))
+        .collect::<Vec<_>>()
+        .join("\n");
+    ToolReceipt {
+        tool: "compare_to_reference".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Compare {}: worst deviation {:.3} ({}); {} entity(s) compared:\n{table}",
+            params.project_id,
+            worst.overall,
+            worst.entity,
+            deviations.len(),
+        ),
+        score_delta,
+        evidence_uris: vec!["system://reference-profile".to_string()],
+        focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+        next_actions: vec![
+            "apply_audit_patch".to_string(),
+            "render_project".to_string(),
+            "compare_to_reference".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 40,
+            tool_calls: 1,
+            render_seconds: master.duration_seconds as f32,
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![scorestrata_core::diagnostic::Diagnostic {
+            id: scorestrata_core::ids::DiagnosticId::new(),
+            code: "REFERENCE_DEVIATION".to_string(),
+            metric: "reference.deviation".to_string(),
+            severity: if worst.overall > 0.2 {
+                scorestrata_core::error::Severity::Warning
+            } else {
+                scorestrata_core::error::Severity::Info
+            },
+            scope: scorestrata_core::diagnostic::MetricScope::default(),
+            evidence_uris: vec!["system://reference-profile".to_string()],
+            message: serde_json::to_string(&deviations).unwrap_or_default(),
+            root_causes: vec![worst.diagnosis.clone()],
+            suggested_patches: vec![],
+            expected_delta: None,
+            confidence: 0.9,
+        }],
+    }
+}
+
+/// Parameters for `apply_audit_patch` (Phase E).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[must_use]
+pub struct ApplyAuditPatchParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project to mutate.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+    /// Layer to patch (must match a `Layer.name` in the arrangement).
+    pub layer_name: String,
+    /// Audit band index (0–5) whose excess should be EQ-cut. `None` = no EQ cut.
+    #[serde(default)]
+    pub band_idx: Option<u8>,
+    /// Cut depth in dB for the band EQ (positive number, applied as a cut).
+    #[serde(default = "default_patch_cut_db")]
+    pub cut_db: f32,
+    /// Also tame aliasing (gentle 12 kHz shelf cut).
+    #[serde(default)]
+    pub reduce_aliasing: bool,
+    /// Also raise a silent layer's mix gain by 3 dB.
+    #[serde(default)]
+    pub address_silence: bool,
+    /// Dry run — simulate the patch and report the changes without persisting.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+const fn default_patch_cut_db() -> f32 {
+    3.0
+}
+
+/// Turn an audit finding into an applied project patch (band excess → EQ cut,
+/// aliasing → shelf, silence → gain).
+///
+/// The agent reads `compare_to_reference`/`audit_layer_spectral` deltas and
+/// calls this with the offending layer + band; the patch is applied to the
+/// layer's insert FX (`FxChain.eq`) so the next render is closer to the
+/// reference. Returns the mutated project in `focus_uris`/diagnostics for the
+/// stateless round trip.
+#[must_use]
+pub fn apply_audit_patch(params: &ApplyAuditPatchParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "apply_audit_patch".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot patch project '{}': no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["No project payload — supply the serialized project".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("apply_audit_patch", "project", &e),
+        };
+    let mut changes: Vec<String> = Vec::new();
+    let mut found = false;
+    for segment in &mut project.arrangement.segments {
+        for layer in &mut segment.layers {
+            if layer.name != params.layer_name {
+                continue;
+            }
+            found = true;
+            let fx = layer
+                .fx
+                .get_or_insert_with(|| scorestrata_core::domain::FxChain {
+                    high_pass_hz: None,
+                    eq: vec![],
+                    compressor: None,
+                    sidechain_from_kick: false,
+                    sends: scorestrata_core::domain::SendLevels::default(),
+                    sidechain_amount: None,
+                });
+            if let Some(idx) = params.band_idx {
+                let idx = usize::from(idx).min(5);
+                let center = scorestrata_audio::reference::band_center_hz(idx);
+                let label = scorestrata_audio::reference::band_labels()[idx];
+                fx.eq.push(scorestrata_core::domain::FreqBand {
+                    freq_hz: center,
+                    gain_db: -params.cut_db.abs(),
+                    q: 1.0,
+                });
+                changes.push(format!(
+                    "{label} EQ −{:.1} dB @ {center:.0} Hz",
+                    params.cut_db.abs()
+                ));
+            }
+            if params.reduce_aliasing {
+                fx.eq.push(scorestrata_core::domain::FreqBand {
+                    freq_hz: 12_000.0,
+                    gain_db: -3.0,
+                    q: 0.7,
+                });
+                changes.push("12 kHz shelf −3 dB (aliasing tame)".to_string());
+            }
+            if params.address_silence {
+                let current = layer.mix_gain_db.unwrap_or(0.0);
+                layer.mix_gain_db = Some(current + 3.0);
+                changes.push(format!("mix gain +3 dB (was {current:.1} dB)"));
+            }
+        }
+    }
+    if !found {
+        return ToolReceipt {
+            tool: "apply_audit_patch".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "No layer named '{}' in project '{}'",
+                params.layer_name, params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Layer name mismatch — check get_project_summary".to_string()],
+            dry_run: params.dry_run,
+            diagnostics: vec![],
+        };
+    }
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("patch.layers".to_string(), "1".to_string());
+    let mut receipt = ToolReceipt {
+        tool: "apply_audit_patch".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Patched layer '{}': {}",
+            params.layer_name,
+            if changes.is_empty() {
+                "no changes requested".to_string()
+            } else {
+                changes.join(", ")
+            }
+        ),
+        score_delta,
+        evidence_uris: vec!["system://reference-profile".to_string()],
+        focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+        next_actions: vec![
+            "render_project".to_string(),
+            "compare_to_reference".to_string(),
+            "audit_layer_spectral".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: params.dry_run,
+        diagnostics: vec![scorestrata_core::diagnostic::Diagnostic {
+            id: scorestrata_core::ids::DiagnosticId::new(),
+            code: "AUDIT_PATCH_APPLIED".to_string(),
+            metric: "patch.layer".to_string(),
+            severity: scorestrata_core::error::Severity::Info,
+            scope: scorestrata_core::diagnostic::MetricScope::default(),
+            evidence_uris: vec!["system://reference-profile".to_string()],
+            message: serde_json::to_string(&project).unwrap_or_default(),
+            root_causes: vec![],
+            suggested_patches: vec![],
+            expected_delta: None,
+            confidence: 1.0,
+        }],
+    };
+    if params.dry_run {
+        receipt.status = ToolStatus::DryRunCompleted;
+        receipt
+            .warnings
+            .push("Dry run — patch simulated but not persisted".to_string());
+    }
+    receipt
+}
+
+/// Parameters for `extract_groove_from_reference` (Phase E).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[must_use]
+pub struct ExtractGrooveFromReferenceParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Path to the reference WAV on disk.
+    pub path: String,
+    /// Project BPM (anchors the 16th grid; 0 = infer from onsets).
+    #[serde(default)]
+    pub bpm: u32,
+}
+
+/// Derive a groove map from the reference WAV's transient timing (Ableton
+/// Extract Groove semantics).
+///
+/// Returns the swing amount (0 = straight, 0.66 ≈ swing-16) and the closest
+/// built-in template; the agent feeds these into `set_humanize` so the
+/// project's timing matches the reference's feel.
+#[must_use]
+pub fn extract_groove_from_reference(params: &ExtractGrooveFromReferenceParams) -> ToolReceipt {
+    let bytes = match std::fs::read(&params.path) {
+        Ok(b) => b,
+        Err(e) => {
+            return ToolReceipt {
+                tool: "extract_groove_from_reference".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Cannot read reference '{}': {e}", params.path),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec!["load_reference_track".to_string()],
+                cost: ToolCost::default(),
+                warnings: vec![format!("I/O error reading {}", params.path)],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    };
+    let groove = match scorestrata_audio::reference::extract_groove(&bytes, params.bpm) {
+        Ok(g) => g,
+        Err(e) => {
+            return ToolReceipt {
+                tool: "extract_groove_from_reference".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Groove extraction failed: {e}"),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec!["load_reference_track".to_string()],
+                cost: ToolCost::default(),
+                warnings: vec!["WAV decode / onset detection error".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    };
+    ToolReceipt {
+        tool: "extract_groove_from_reference".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Groove from '{}': template '{}', swing {:.2}, 16th pulse {:.1} ms, {} pulse offsets",
+            params.path,
+            groove.template,
+            groove.swing,
+            groove.pulse_ms,
+            groove.pulse_offsets.len(),
+        ),
+        score_delta: BTreeMap::from([("groove.template".to_string(), groove.template.clone())]),
+        evidence_uris: vec!["system://humanization-view".to_string()],
+        focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+        next_actions: vec!["set_humanize".to_string(), "render_project".to_string()],
+        cost: ToolCost {
+            cpu_ms: 30,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![scorestrata_core::diagnostic::Diagnostic {
+            id: scorestrata_core::ids::DiagnosticId::new(),
+            code: "GROOVE_EXTRACTED".to_string(),
+            metric: "reference.groove".to_string(),
+            severity: scorestrata_core::error::Severity::Info,
+            scope: scorestrata_core::diagnostic::MetricScope::default(),
+            evidence_uris: vec!["system://humanization-view".to_string()],
+            message: serde_json::to_string(&groove).unwrap_or_default(),
+            root_causes: vec![],
+            suggested_patches: vec![],
+            expected_delta: None,
+            confidence: 1.0,
+        }],
+    }
+}
+
 /// Parameters for `render_candidate_preview` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderCandidatePreviewParams {
@@ -9299,7 +9859,8 @@ pub fn cancel_render_job(params: &CancelRenderJobParams) -> ToolReceipt {
 #[expect(
     clippy::float_cmp,
     clippy::unwrap_used,
-    reason = "Tests assert exact float identities and unwrap fixtures"
+    clippy::cast_precision_loss,
+    reason = "Tests assert exact float identities, unwrap fixtures, and bounded index casts"
 )]
 mod tests {
     use super::*;
@@ -12510,6 +13071,230 @@ mod tests {
                 .any(|w| w.contains("No project payload")),
             "expected missing-payload warning, got {:#?}",
             receipt.warnings
+        );
+    }
+
+    fn write_reference_wav(path: &std::path::Path) {
+        // 120 BPM, 8 bars of a 440 Hz tone + a kick-ish pulse — a stable
+        // synthetic "commercial" reference for the Phase E loop.
+        let left: Vec<f32> = (0..48_000 * 8)
+            .map(|i| {
+                0.2f32.mul_add(
+                    (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin(),
+                    if i % 24_000 < 4_000 { 0.3 } else { 0.0 },
+                )
+            })
+            .collect();
+        let wav = scorestrata_audio::wav::write_wav_stereo(&left, &left, 48_000, 16);
+        std::fs::write(path, wav).expect("write reference wav");
+    }
+
+    #[test]
+    fn load_reference_track_produces_profile() {
+        let path = std::env::temp_dir().join("ss_ref_test.wav");
+        write_reference_wav(&path);
+        let params = LoadReferenceTrackParams {
+            project_id: "proj_1".to_string(),
+            path: path.to_string_lossy().into_owned(),
+        };
+        let receipt = load_reference_track(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "load_reference_track should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("LUFS"));
+        assert!(receipt.summary.contains("centroid"));
+        assert!(
+            receipt
+                .evidence_uris
+                .contains(&"system://reference-profile".to_string())
+        );
+    }
+
+    #[test]
+    fn compare_to_reference_without_reference_fails_cleanly() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = CompareToReferenceParams {
+            project_id: project.id.to_string(),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+            reference: None,
+        };
+        let receipt = compare_to_reference(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(receipt.summary.contains("no reference"));
+    }
+
+    #[test]
+    fn compare_to_reference_reports_master_and_layer_deviations() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let (layers, master) =
+            render_project_to_layer_audit(&project, None).expect("layer audit renders");
+        assert!(!layers.is_empty());
+        let reference = scorestrata_audio::reference::analyze_reference_wav(
+            &master.wav_bytes,
+            "inline:baseline",
+        )
+        .expect("reference from own render");
+        let params = CompareToReferenceParams {
+            project_id: project.id.to_string(),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+            reference: Some(serde_json::to_value(&reference).expect("profile serializes")),
+        };
+        let receipt = compare_to_reference(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "compare should succeed, got {receipt:#?}"
+        );
+        // The baseline equals the reference, so the worst deviation is small.
+        assert!(receipt.summary.contains("worst deviation"));
+        assert!(receipt.summary.contains("master"));
+    }
+
+    #[test]
+    fn apply_audit_patch_adds_eq_band_and_fails_on_unknown_layer() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = ApplyAuditPatchParams {
+            project_id: project.id.to_string(),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+            layer_name: "Bass".to_string(),
+            band_idx: Some(1), // bass band
+            cut_db: 3.0,
+            reduce_aliasing: true,
+            address_silence: false,
+            dry_run: false,
+        };
+        let receipt = apply_audit_patch(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "patch should succeed, got {receipt:#?}"
+        );
+        // Rebuild the project from the diagnostic payload and verify the EQ.
+        let patched: scorestrata_core::domain::Project =
+            serde_json::from_str(&receipt.diagnostics[0].message)
+                .expect("patched project round-trips");
+        let mut found = false;
+        for segment in &patched.arrangement.segments {
+            for layer in &segment.layers {
+                if layer.name == "Bass" {
+                    let eq = layer.fx.as_ref().expect("fx chain created").eq.clone();
+                    assert!(!eq.is_empty(), "EQ band added");
+                    assert!(eq.iter().any(|b| b.gain_db < 0.0), "cut applied");
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "Bass layer patched");
+        // Unknown layer fails cleanly.
+        let mut bad = params;
+        bad.layer_name = "Theremin".to_string();
+        bad.project = Some(serde_json::to_value(&patched).expect("serializes"));
+        let bad_receipt = apply_audit_patch(&bad);
+        assert!(matches!(bad_receipt.status, ToolStatus::Failed));
+    }
+
+    #[test]
+    fn extract_groove_from_reference_detects_template() {
+        let path = std::env::temp_dir().join("ss_ref_groove.wav");
+        write_reference_wav(&path);
+        let params = ExtractGrooveFromReferenceParams {
+            project_id: "proj_1".to_string(),
+            path: path.to_string_lossy().into_owned(),
+            bpm: 120,
+        };
+        let receipt = extract_groove_from_reference(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "groove extraction should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("template"));
+        assert!(receipt.summary.contains("swing"));
+    }
+
+    #[test]
+    fn audit_patch_loop_reduces_seeded_deviation_by_half() {
+        // Phase E exit criterion: the patch loop must cut a seeded synthetic
+        // deviation by > 50% on a real render.
+        //
+        // 1. Baseline render → reference profile.
+        // 2. Seed a synthetic deviation: +6 dB peaking boost on the bass band
+        //    of the Bass layer.
+        // 3. compare → deviation d1.
+        // 4. apply_audit_patch (cut that band) → render → compare → d2.
+        // 5. Assert d2 < d1 / 2.
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let (_, master) = render_project_to_layer_audit(&project, None).expect("baseline renders");
+        let reference = scorestrata_audio::reference::analyze_reference_wav(
+            &master.wav_bytes,
+            "inline:baseline",
+        )
+        .expect("baseline reference");
+
+        // Seed the deviation: +6 dB @ ~158 Hz (bass band center) on the Bass layer.
+        let mut seeded = false;
+        for segment in &mut project.arrangement.segments {
+            for layer in &mut segment.layers {
+                if layer.name == "Bass" {
+                    let fx = layer
+                        .fx
+                        .get_or_insert_with(|| scorestrata_core::domain::FxChain {
+                            high_pass_hz: None,
+                            eq: vec![],
+                            compressor: None,
+                            sidechain_from_kick: false,
+                            sends: scorestrata_core::domain::SendLevels::default(),
+                            sidechain_amount: None,
+                        });
+                    fx.eq.push(scorestrata_core::domain::FreqBand {
+                        freq_hz: scorestrata_audio::reference::band_center_hz(1),
+                        gain_db: 6.0,
+                        q: 1.0,
+                    });
+                    seeded = true;
+                }
+            }
+        }
+        assert!(seeded, "Bass layer seeded");
+
+        let deviation_of = |p: &scorestrata_core::domain::Project| -> f32 {
+            let (_, m) = render_project_to_layer_audit(p, None).expect("render");
+            let report = scorestrata_audio::audit::audit_stereo(
+                &m.mono_samples,
+                &m.mono_samples,
+                m.sample_rate,
+                None,
+            );
+            scorestrata_audio::reference::compare_measured(
+                "master",
+                report.band_shares(),
+                Some(m.analysis.integrated_lufs),
+                report.spectral_centroid_hz,
+                &reference,
+            )
+            .overall
+        };
+
+        let d1 = deviation_of(&project);
+        assert!(d1 > 0.01, "seeded deviation must be measurable, got {d1}");
+
+        // Patch: cut the same band by −6 dB on the same layer.
+        let patch_params = ApplyAuditPatchParams {
+            project_id: project.id.to_string(),
+            project: Some(serde_json::to_value(&project).expect("serializes")),
+            layer_name: "Bass".to_string(),
+            band_idx: Some(1),
+            cut_db: 6.0,
+            reduce_aliasing: false,
+            address_silence: false,
+            dry_run: false,
+        };
+        let receipt = apply_audit_patch(&patch_params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        let patched: scorestrata_core::domain::Project =
+            serde_json::from_str(&receipt.diagnostics[0].message).expect("patched round-trips");
+        let d2 = deviation_of(&patched);
+        assert!(
+            d2 < d1 / 2.0,
+            "patch loop must cut deviation by >50%: d1 {d1:.4} → d2 {d2:.4}"
         );
     }
 

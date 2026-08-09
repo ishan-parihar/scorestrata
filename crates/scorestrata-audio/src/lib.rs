@@ -12,6 +12,7 @@
 //! - `render`: deterministic offline render of timelines to WAV
 //! - `analysis`: Level 4 audio metrics (LUFS, true peak, clipping, …)
 //! - `audit`: post-generation spectral audit (STFT, spectrogram/waveform PNG)
+//! - `reference`: Phase E reference profiles, deviation metrics, groove extraction
 //! - `error`: audio-crate error type
 
 #![deny(missing_docs)]
@@ -24,6 +25,7 @@ pub mod error;
 pub mod fx;
 pub mod mastering;
 pub mod mixer;
+pub mod reference;
 pub mod render;
 pub mod samplebank;
 pub mod sampler;

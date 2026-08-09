@@ -80,6 +80,12 @@ enum Commands {
     Analyze {
         /// Project path
         path: String,
+        /// Compare the master against a reference WAV (Phase E debug loop)
+        #[arg(long)]
+        reference: Option<String>,
+        /// Print a bar/beat grid ruler over the rendered duration
+        #[arg(long)]
+        grid: bool,
     },
     /// Arrangement planning (show the genre-aware section layout)
     Arrangement {
@@ -90,6 +96,12 @@ enum Commands {
     Audit {
         /// Project path
         path: String,
+        /// Compare the master against a reference WAV (Phase E debug loop)
+        #[arg(long)]
+        reference: Option<String>,
+        /// Print a bar/beat grid ruler over the rendered duration
+        #[arg(long)]
+        grid: bool,
     },
     /// Layered timeline view (sections × layers × octave registers)
     Timeline {
@@ -392,7 +404,16 @@ fn main() -> Result<()> {
             mode,
             segment,
         } => handle_render(&path, &mode, segment.as_deref())?,
-        Commands::Analyze { path } | Commands::Audit { path } => handle_analyze(&path)?,
+        Commands::Analyze {
+            path,
+            reference,
+            grid,
+        }
+        | Commands::Audit {
+            path,
+            reference,
+            grid,
+        } => handle_analyze(&path, reference.as_deref(), grid)?,
         Commands::Arrangement { action } => match action {
             ArrangementAction::Plan { path } => handle_arrangement_plan(&path)?,
         },
@@ -1392,9 +1413,10 @@ fn handle_arrangement_plan(path: &str) -> Result<()> {
     clippy::too_many_lines,
     reason = "CLI analyze writes audit files, spectrograms and waveform PNGs in one flow"
 )]
-fn handle_analyze(path: &str) -> Result<()> {
+fn handle_analyze(path: &str, reference_path: Option<&str>, grid: bool) -> Result<()> {
     use scorestrata_audio::audit::write_audit_files;
     use scorestrata_audio::wav::read_wav_file;
+    use std::fmt::Write as _;
 
     println!("{}", format!("Analyzing: {path}").yellow());
 
@@ -1531,6 +1553,71 @@ fn handle_analyze(path: &str) -> Result<()> {
             }
         }
         Err(e) => println!("\n  Layer-wise audit skipped: {e}"),
+    }
+
+    // Phase E — bar/beat grid overlay (`--grid`): an ASCII bar ruler aligned
+    // to the project tempo, so a producer can read the spectrogram against
+    // the arrangement.
+    if grid {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "Tempo values (e.g. 120 BPM) are exactly representable in f32"
+        )]
+        let secs_per_bar = 240.0f32 / project.config.bpm as f32; // 4/4
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "Bar count derives from a non-negative render duration"
+        )]
+        let bars = (report.duration_seconds / secs_per_bar).ceil() as usize;
+        println!("\n  Bar/beat grid ({} BPM, 4/4):", project.config.bpm);
+        let mut ruler = String::from("  ");
+        for b in 0..bars.min(64) {
+            let _ = write!(ruler, "| {:>4}", b + 1);
+        }
+        println!("{ruler}|");
+        let mut beats = String::from("  ");
+        for b in 0..bars.min(64) {
+            let _ = write!(beats, "| 1.{:>2} ", (b * 4) % 16 + 1);
+        }
+        println!("{beats}|");
+    }
+
+    // Phase E — reference comparison (`--reference ref.wav`): deviation of
+    // the mastered render vs the loaded reference profile (band shares,
+    // LUFS, centroid), i.e. the CLI face of `compare_to_reference`.
+    if let Some(ref_path) = reference_path {
+        let bytes = std::fs::read(ref_path)
+            .with_context(|| format!("Cannot read reference '{ref_path}'"))?;
+        let reference = scorestrata_audio::reference::analyze_reference_wav(&bytes, ref_path)
+            .context("Reference analysis failed")?;
+        let analysis = scorestrata_audio::analysis::analyze_stereo(&left, &right);
+        let dev = scorestrata_audio::reference::compare_measured(
+            "master",
+            report.band_shares(),
+            Some(analysis.integrated_lufs),
+            report.spectral_centroid_hz,
+            &reference,
+        );
+        println!("\n  Reference deviation vs {}:", reference.path);
+        let labels = scorestrata_audio::reference::band_labels();
+        for (i, label) in labels.iter().enumerate() {
+            let d = dev.band_deltas[i];
+            let arrow = if d > 0.01 {
+                "↑ under"
+            } else if d < -0.01 {
+                "↓ over"
+            } else {
+                "  ok"
+            };
+            println!("    {label:>7} Δshare {d:+.3} {arrow}");
+        }
+        println!(
+            "    LUFS Δ {:.1} · centroid Δ {:.0} Hz · overall {:.3}",
+            dev.lufs_delta, dev.centroid_delta_hz, dev.overall
+        );
+        println!("    {}", dev.diagnosis);
+        println!("    Next: ss render + ss audit --reference to iterate (apply_audit_patch loop)");
     }
     Ok(())
 }
@@ -2657,7 +2744,7 @@ mod tests {
     fn parse_analyze_command() {
         let cli = Cli::try_parse_from(["ss", "analyze", "my_song"]).unwrap();
         match cli.command {
-            Commands::Analyze { path } => assert_eq!(path, "my_song"),
+            Commands::Analyze { path, .. } => assert_eq!(path, "my_song"),
             _ => panic!("expected Commands::Analyze"),
         }
     }
@@ -2677,7 +2764,7 @@ mod tests {
     fn parse_audit_command() {
         let cli = Cli::try_parse_from(["ss", "audit", "my_song"]).unwrap();
         match cli.command {
-            Commands::Audit { path } => assert_eq!(path, "my_song"),
+            Commands::Audit { path, .. } => assert_eq!(path, "my_song"),
             _ => panic!("expected Commands::Audit"),
         }
     }
