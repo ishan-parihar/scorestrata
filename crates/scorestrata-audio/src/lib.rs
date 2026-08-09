@@ -23,6 +23,7 @@ pub mod fx;
 pub mod mastering;
 pub mod mixer;
 pub mod render;
+pub mod samplebank;
 pub mod sampler;
 pub mod synth;
 pub mod wav;

@@ -1610,6 +1610,59 @@ pub fn arrangement_templates_resource() -> ArrangementTemplates {
     }
 }
 
+/// A single kit description in the embedded sampled-percussion bank.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SampleKitDescription {
+    /// Kit name — selectable via `set_sound_bank`.
+    pub name: String,
+    /// Character summary: how the kit sits in a mix.
+    pub character: String,
+    /// Drum kinds this kit covers (kick/snare/hat/...).
+    pub voices: Vec<String>,
+    /// Any per-kind DSP baked into the kit (tuning, tone, decay).
+    pub processing: Vec<String>,
+}
+
+/// The embedded sampled-percussion catalog (Phase A, R7).
+///
+/// Deterministic and embedded — no external samples; every one-shot is
+/// synthesized procedurally at load time from a seeded PRNG so renders stay
+/// reproducible across machines and runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SampleBankCatalog {
+    /// All selectable kit names, in catalog order.
+    pub kits: Vec<String>,
+    /// One description per kit, same order.
+    pub descriptions: Vec<SampleKitDescription>,
+    /// `None` selection semantics: legacy synth drums stay active (R1).
+    pub default: String,
+}
+
+/// Build the `sample_bank_catalog` resource (Phase A).
+///
+/// The catalog is derived from the audio crate's embedded `KIT_NAMES` so it
+/// can never drift from what `set_sound_bank` accepts.
+#[must_use]
+pub fn sample_bank_catalog_resource() -> SampleBankCatalog {
+    let kits = scorestrata_audio::samplebank::KIT_NAMES;
+    let mut descriptions = Vec::with_capacity(kits.len());
+    for kit in kits {
+        let voices = scorestrata_audio::samplebank::kit_voice_names(kit);
+        let processing = scorestrata_audio::samplebank::kit_processing_summary(kit);
+        descriptions.push(SampleKitDescription {
+            name: (*kit).to_string(),
+            character: scorestrata_audio::samplebank::kit_character(kit).to_string(),
+            voices,
+            processing,
+        });
+    }
+    SampleBankCatalog {
+        kits: kits.iter().map(|k| (*k).to_string()).collect(),
+        descriptions,
+        default: "(none — legacy synth drums)".to_string(),
+    }
+}
+
 /// Build the layered timeline view from a real project.
 ///
 /// Pure derivation (no storage): sections come from the arrangement, lanes

@@ -473,6 +473,30 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::set_layer_register
             )
         }
+        "list_sound_bank" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::ListSoundBankParams,
+                crate::tools::list_sound_bank
+            )
+        }
+        "get_sound_bank_catalog" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::GetSoundBankCatalogParams,
+                crate::tools::get_sound_bank_catalog
+            )
+        }
+        "set_sound_bank" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::SetSoundBankParams,
+                crate::tools::set_sound_bank
+            )
+        }
         "repeat_pattern_in_segment" => {
             route!(
                 tool_name,

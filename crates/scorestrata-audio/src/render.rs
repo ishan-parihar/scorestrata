@@ -81,6 +81,10 @@ pub struct RenderConfig {
     /// mono fold, >1.0 widens the side channel. The mono fold is invariant
     /// under this transform, so mono renders are unaffected.
     pub stereo_width: f32,
+    /// Opt-in sampled percussion kit (A): `Some("rock")` etc. routes drum
+    /// voices through the embedded sample bank; `None` keeps the legacy
+    /// synth-drum path (R1 — bankless renders stay byte-identical).
+    pub sound_bank: Option<String>,
 }
 
 impl Default for RenderConfig {
@@ -90,6 +94,7 @@ impl Default for RenderConfig {
             limiter: Some(LimiterConfig::default()),
             master_gain_db: 0.0,
             stereo_width: 1.0,
+            sound_bank: None,
         }
     }
 }
@@ -367,6 +372,10 @@ pub fn render_notes_full(
             .filter(|a| a.layer_name == *layer_name)
             .collect();
         let layer_fx = fx.iter().find(|f| f.layer_name == *layer_name);
+        let kit = config
+            .sound_bank
+            .as_deref()
+            .and_then(crate::samplebank::kit);
         let mut buffer = render_layer_buffer(
             notes,
             layer_name,
@@ -375,6 +384,7 @@ pub fn render_notes_full(
             sample_rate,
             total_samples,
             &layer_automation,
+            kit.as_ref(),
         );
         // G5 — insert FX chain (HPF → EQ → compressor → reverb/delay sends).
         if let Some(rfx) = layer_fx {
@@ -559,6 +569,10 @@ pub fn render_stems_full(
             .filter(|a| a.layer_name == *layer_name)
             .collect();
         let layer_fx = fx.iter().find(|f| f.layer_name == *layer_name);
+        let kit = config
+            .sound_bank
+            .as_deref()
+            .and_then(crate::samplebank::kit);
         let mut buffer = render_layer_buffer(
             notes,
             layer_name,
@@ -567,6 +581,7 @@ pub fn render_stems_full(
             sample_rate,
             total_samples,
             &layer_automation,
+            kit.as_ref(),
         );
         // G5 — insert FX chain, mirroring the master render so stems and
         // master stay in agreement.
@@ -666,6 +681,10 @@ pub fn render_stems_full(
 ///
 /// Shared by the master render and the stems renderer so both produce
 /// identical per-layer audio.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Render pipeline threads the full note context through one shared helper"
+)]
 fn render_layer_buffer(
     notes: &[RenderNote],
     layer_name: &str,
@@ -674,6 +693,7 @@ fn render_layer_buffer(
     sample_rate: u32,
     total_samples: u64,
     automation: &[&RenderAutomation],
+    kit: Option<&crate::samplebank::DrumKit>,
 ) -> Vec<f32> {
     let mut buffer = vec![0.0f32; total_samples as usize];
     let voice = voices.iter().find(|v| v.layer_name == layer_name);
@@ -712,8 +732,14 @@ fn render_layer_buffer(
 
         if is_percussion {
             if let Some(kind) = drum_kind_for_pitch(note.pitch) {
-                // Real drum synthesis (kick pitch-sweep, snare/hay noise).
-                render_drum_note(kind, note.velocity, sample_rate as f32, &mut note_buffer);
+                if let Some(kit) = kit {
+                    // (A) Sampled percussion — the embedded kit's one-shot.
+                    crate::samplebank::render_kit_note(kit, kind, note.velocity, &mut note_buffer);
+                } else {
+                    // Legacy real drum synthesis (kick pitch-sweep, snare/hat
+                    // noise) — the bankless path stays byte-identical (R1).
+                    render_drum_note(kind, note.velocity, sample_rate as f32, &mut note_buffer);
+                }
             } else {
                 let freq = midi_to_frequency(note.pitch);
                 render_note(
@@ -1286,12 +1312,14 @@ mod tests {
             limiter: None,
             master_gain_db: -6.0,
             stereo_width: 0.0,
+            sound_bank: None,
         };
         let wide = RenderConfig {
             stereo: true,
             limiter: None,
             master_gain_db: -6.0,
             stereo_width: 2.0,
+            sound_bank: None,
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let a = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &narrow).unwrap();

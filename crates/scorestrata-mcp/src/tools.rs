@@ -2350,6 +2350,151 @@ pub fn set_layer_instrument(params: &SetLayerInstrumentParams) -> ToolReceipt {
     }
 }
 
+/// Parameters for `list_sound_bank` tool (A) — read-only kit catalog query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListSoundBankParams {
+    /// Project ID (used only for labeling the receipt).
+    pub project_id: String,
+    /// Serialized project; when provided, the receipt reports which kit it
+    /// currently selects.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// List the embedded sampled-percussion kits (Phase A) and the project's
+/// current selection.
+///
+/// The bank catalog is deterministic and embedded (R7): rock, house,
+/// hiphop, techno, trap. `None` selection means the legacy synth-drum path
+/// stays active (R1).
+#[must_use]
+pub fn list_sound_bank(params: &ListSoundBankParams) -> ToolReceipt {
+    let kits = scorestrata_audio::samplebank::KIT_NAMES.len();
+    let current = params.project.as_ref().and_then(|p| {
+        serde_json::from_value::<scorestrata_core::domain::Project>(p.clone())
+            .ok()
+            .and_then(|proj| proj.sound_bank)
+    });
+    ToolReceipt {
+        tool: "list_sound_bank".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "{kits} embedded kits; project selects {}",
+            current.as_deref().unwrap_or("(none — legacy synth drums)")
+        ),
+        score_delta: BTreeMap::new(),
+        evidence_uris: vec!["system://sample-bank-catalog".to_string()],
+        focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+        next_actions: vec!["set_sound_bank".to_string(), "render_project".to_string()],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `set_sound_bank` tool (A).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetSoundBankParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Kit name from the catalog (`rock`, `house`, `hiphop`, `techno`,
+    /// `trap`), or an empty string to clear back to legacy synth drums.
+    pub kit: String,
+    /// Serialized project to mutate.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Select a sampled-percussion kit for a project (Phase A).
+///
+/// Sets `project.sound_bank`; the next render routes drum voices through
+/// the embedded one-shots. Clearing (`kit: ""`) restores the legacy path.
+#[must_use]
+pub fn set_sound_bank(params: &SetSoundBankParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_sound_bank".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set sound bank for project '{}': no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_sound_bank", "project", &e),
+        };
+    let kit = params.kit.trim();
+    let selection = if kit.is_empty() {
+        None
+    } else if scorestrata_audio::samplebank::KIT_NAMES.contains(&kit) {
+        Some(kit.to_string())
+    } else {
+        return ToolReceipt {
+            tool: "set_sound_bank".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Unknown kit '{kit}' — choose from {}",
+                scorestrata_audio::samplebank::KIT_NAMES.join(", ")
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec!["system://sample-bank-catalog".to_string()],
+            focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+            next_actions: vec!["list_sound_bank".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    project.sound_bank = selection;
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "render.sound_bank".to_string(),
+        project
+            .sound_bank
+            .clone()
+            .unwrap_or_else(|| "(legacy)".to_string()),
+    );
+    ToolReceipt {
+        tool: "set_sound_bank".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Sound bank set to '{}' — drum layers now render sampled one-shots",
+            project.sound_bank.as_deref().unwrap_or("(legacy)")
+        ),
+        score_delta,
+        evidence_uris: vec!["system://sample-bank-catalog".to_string()],
+        focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+        next_actions: vec!["render_project".to_string(), "run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 /// Parameters for `set_layer_register` tool (G2).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetLayerRegisterParams {
@@ -4121,6 +4266,78 @@ pub fn get_arrangement_templates(params: &GetArrangementTemplatesParams) -> Tool
         ],
         cost: ToolCost {
             cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `get_sound_bank_catalog` tool (A) — read-only catalog query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetSoundBankCatalogParams {
+    /// Project ID (used only for labeling evidence URIs).
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Optional kit filter; when omitted every kit description is returned.
+    #[serde(default)]
+    pub kit: Option<String>,
+}
+
+/// Get the `sample_bank_catalog` resource (Phase A, R7) — the embedded
+/// sampled-percussion kit tables.
+///
+/// Read-only (the §8.1 "tools mutate, resources inspect" split): returns the
+/// per-kit voice list, character, and baked-in DSP so a producer can compare
+/// kits before calling `set_sound_bank`, and can see that `None` selection
+/// keeps the legacy synth-drum path active (R1).
+#[must_use]
+pub fn get_sound_bank_catalog(params: &GetSoundBankCatalogParams) -> ToolReceipt {
+    let resource = crate::resources::sample_bank_catalog_resource();
+    let selected = match &params.kit {
+        Some(kit) => {
+            let index = resource
+                .kits
+                .iter()
+                .position(|k| k == kit)
+                .unwrap_or(resource.kits.len());
+            let mut kits = Vec::new();
+            let mut descriptions = Vec::new();
+            if let Some(entry) = resource.descriptions.get(index) {
+                kits.push(resource.kits[index].clone());
+                descriptions.push(entry.clone());
+            }
+            crate::resources::SampleBankCatalog {
+                kits,
+                descriptions,
+                default: resource.default,
+            }
+        }
+        None => resource,
+    };
+    let summary = serde_json::to_string(&selected).unwrap_or_else(|_| "{}".to_string());
+    let project_id = params.project_id.as_deref().unwrap_or("unknown");
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "sample_bank.kits".to_string(),
+        selected.kits.len().to_string(),
+    );
+    ToolReceipt {
+        tool: "get_sound_bank_catalog".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!("sample_bank_catalog {summary}"),
+        score_delta,
+        evidence_uris: vec!["system://sample-bank-catalog".to_string()],
+        focus_uris: vec![format!("project://{project_id}/render/latest")],
+        next_actions: vec![
+            "list_sound_bank".to_string(),
+            "set_sound_bank".to_string(),
+            "render_project".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 1,
             tool_calls: 1,
             ..Default::default()
         },
@@ -7160,6 +7377,7 @@ pub fn render_config_from_project(
         stereo: true,
         limiter,
         master_gain_db: project.mixer.master_gain_db,
+        sound_bank: project.sound_bank.clone(),
         stereo_width: project.mixer.stereo_width,
     }
 }

@@ -910,6 +910,12 @@ pub struct Project {
     /// master limiter ceiling the renderer applies to the final mix fold.
     #[serde(default)]
     pub mixer: MixerState,
+    /// Opt-in sampled percussion bank (A) — kit name from the embedded
+    /// catalog (`rock`, `house`, `hiphop`, `techno`, `trap`). `None` =
+    /// the legacy synth-drum path, keeping bankless renders byte-identical
+    /// (R1).
+    #[serde(default)]
+    pub sound_bank: Option<String>,
     /// Current status.
     pub status: ProjectStatus,
 }
