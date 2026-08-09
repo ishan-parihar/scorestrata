@@ -488,6 +488,40 @@ mod tests {
     }
 
     #[test]
+    fn layer_register_clamps_out_of_range_notes() {
+        // G2 — the compiler enforces the layer's declared octave register:
+        // notes pushed outside the band by transposition are clamped back
+        // into it, so a transposed pattern can never spill into a neighbor-
+        // ing layer's register (§1.3 octave discipline).
+        let mut project = build_project();
+        let layer = &mut project.arrangement.segments[0].layers[0];
+        layer.register = Some(scorestrata_core::domain::Register::new(4, 5));
+        // +24 = two octaves up: 60 (C4) → 84 and 63 → 87, both above octave 5.
+        project.arrangement.segments[0].layers[0].pattern_instances[0].transpose = 24;
+
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let timeline = compile_project(&project).unwrap();
+
+        let note_ons: Vec<scorestrata_core::domain::MidiNote> = timeline
+            .events
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::NoteOn { pitch, .. } => Some(pitch),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(note_ons.len(), 2, "both notes compile");
+        assert!(
+            note_ons.iter().all(|p| (4..=5).contains(&p.octave())),
+            "all notes clamped into octave 4..5: {note_ons:?}"
+        );
+        // 84 (C6) clamps down to 72 (C5); 87 clamps to 75 — pitch class
+        // preserved while the octave is pulled back into the band.
+        assert!(note_ons.contains(&scorestrata_core::domain::MidiNote::new(72)));
+        assert!(note_ons.contains(&scorestrata_core::domain::MidiNote::new(75)));
+    }
+
+    #[test]
     fn rejects_early_project_status() {
         let mut project = build_project();
         project.status = ProjectStatus::BriefReceived;
