@@ -138,6 +138,7 @@ mod tests {
             fx: None,
             mix_gain_db: None,
             mix_pan: None,
+            group: None,
         }];
         project
     }
@@ -197,6 +198,7 @@ mod tests {
             fx: None,
             mix_gain_db: None,
             mix_pan: None,
+            group: None,
         }];
         let diagnostics = check_layer_registers(&project);
         assert!(

@@ -481,6 +481,7 @@ fn handle_new(name: &str, brief: Option<&str>) -> Result<()> {
         // The config is generated deterministically and schema-valid, so the
         // project starts pipeline-ready (ConfigApproved → ArrangementPlanned…).
         sound_bank: None,
+        bus_graph: None,
         status: ProjectStatus::ConfigApproved,
     };
 
@@ -918,6 +919,7 @@ fn render_config_for(
         master_gain_db: project.mixer.master_gain_db,
         stereo_width: project.mixer.stereo_width,
         sound_bank: project.sound_bank.clone(),
+        bus_graph: project.bus_graph.clone(),
     }
 }
 

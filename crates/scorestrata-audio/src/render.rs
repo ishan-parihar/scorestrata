@@ -85,6 +85,9 @@ pub struct RenderConfig {
     /// voices through the embedded sample bank; `None` keeps the legacy
     /// synth-drum path (R1 — bankless renders stay byte-identical).
     pub sound_bank: Option<String>,
+    /// Send/return + group-bus routing graph (B). `None` = flat per-layer
+    /// fold, byte-identical to pre-bus renders (R1).
+    pub bus_graph: Option<scorestrata_core::domain::BusGraph>,
 }
 
 impl Default for RenderConfig {
@@ -95,6 +98,7 @@ impl Default for RenderConfig {
             master_gain_db: 0.0,
             stereo_width: 1.0,
             sound_bank: None,
+            bus_graph: None,
         }
     }
 }
@@ -162,6 +166,8 @@ pub struct RenderFx {
     pub mix_gain_db: Option<f32>,
     /// Mix pan override; `None` = static panning.
     pub mix_pan: Option<f32>,
+    /// Group-bus assignment (B); `None` = direct to stereo sum.
+    pub group: Option<String>,
 }
 
 /// A CC automation lane feeding the renderer (G4).
@@ -241,6 +247,31 @@ pub struct Stem {
     /// SHA-256 of the WAV bytes (deterministic checksum).
     pub checksum: String,
     /// Level-4 analysis of this stem.
+    pub analysis: AudioAnalysis,
+}
+
+/// A per-layer stereo stem (Phase B — `render_stereo_stems`, replaces the
+/// mono fold for DAW-style export).
+///
+/// L/R are derived from the same deterministic mono layer buffer via the
+/// constant-power pan law used by the mixer, so the stems' summed stereo
+/// field matches the master's layer placement while the master remains the
+/// authoritative mixdown.
+#[derive(Debug, Clone)]
+pub struct StereoStem {
+    /// Layer name this stem belongs to.
+    pub layer_name: String,
+    /// Interleaved stereo WAV bytes (16-bit PCM).
+    pub wav_bytes: Vec<u8>,
+    /// Left-channel samples.
+    pub left: Vec<f32>,
+    /// Right-channel samples.
+    pub right: Vec<f32>,
+    /// Duration in seconds.
+    pub duration_seconds: f64,
+    /// SHA-256 of the WAV bytes (deterministic checksum).
+    pub checksum: String,
+    /// Level-4 stereo analysis of this stem.
     pub analysis: AudioAnalysis,
 }
 
@@ -365,6 +396,7 @@ pub fn render_notes_full(
     };
 
     let mut mixer = Mixer::new();
+    let mut bus_layers: Vec<crate::bus::BusLayerInput> = Vec::new();
 
     for layer_name in &layer_order {
         let layer_automation: Vec<&RenderAutomation> = automation
@@ -386,10 +418,14 @@ pub fn render_notes_full(
             &layer_automation,
             kit.as_ref(),
         );
-        // G5 — insert FX chain (HPF → EQ → compressor → reverb/delay sends).
+        // G5 — insert FX chain (HPF → EQ → compressor). The reverb/delay
+        // sends stay out of the inline fold when the bus graph (B) is
+        // enabled — they route to the shared returns instead.
         if let Some(rfx) = layer_fx {
             crate::fx::apply_fx_chain(&mut buffer, &rfx.fx, sample_rate);
-            crate::fx::apply_sends(&mut buffer, &rfx.fx.sends, sample_rate);
+            if config.bus_graph.is_none() {
+                crate::fx::apply_sends(&mut buffer, &rfx.fx.sends, sample_rate);
+            }
         }
         let gain = layer_fx
             .and_then(|f| f.mix_gain_db)
@@ -397,16 +433,31 @@ pub fn render_notes_full(
         let pan = layer_fx
             .and_then(|f| f.mix_pan)
             .unwrap_or_else(|| layer_pan(layer_name));
-        mixer.add_channel(MixerChannel {
-            name: layer_name.clone(),
-            gain,
-            pan: if config.stereo { pan } else { 0.0 },
-            muted: false,
-            data: buffer,
-        });
+        if config.bus_graph.is_some() {
+            // (B) Collect layers for bus routing; the graph handles sends.
+            bus_layers.push(crate::bus::BusLayerInput {
+                name: layer_name.clone(),
+                group: layer_fx.and_then(|f| f.group.clone()),
+                data: buffer,
+                gain,
+                pan: if config.stereo { pan } else { 0.0 },
+                sends: layer_fx.map_or_else(Default::default, |f| f.fx.sends),
+            });
+        } else {
+            mixer.add_channel(MixerChannel {
+                name: layer_name.clone(),
+                gain,
+                pan: if config.stereo { pan } else { 0.0 },
+                muted: false,
+                data: buffer,
+            });
+        }
     }
 
-    let (left, right) = mixer.mix();
+    let (left, right) = config.bus_graph.as_ref().map_or_else(
+        || mixer.mix(),
+        |graph| crate::bus::mix_bus_graph(&bus_layers, graph, sample_rate, config.stereo),
+    );
     // G5 — master bus: stereo width + master gain from `Project.mixer`,
     // applied before the limiter so the ceiling still protects the level.
     let (left, right) = apply_master_bus(left, right, config);
@@ -562,6 +613,7 @@ pub fn render_stems_full(
 
     let mut stems = Vec::new();
     let mut mixer = Mixer::new();
+    let mut bus_layers: Vec<crate::bus::BusLayerInput> = Vec::new();
 
     for layer_name in &layer_order {
         let layer_automation: Vec<&RenderAutomation> = automation
@@ -587,7 +639,9 @@ pub fn render_stems_full(
         // master stay in agreement.
         if let Some(rfx) = layer_fx {
             crate::fx::apply_fx_chain(&mut buffer, &rfx.fx, sample_rate);
-            crate::fx::apply_sends(&mut buffer, &rfx.fx.sends, sample_rate);
+            if config.bus_graph.is_none() {
+                crate::fx::apply_sends(&mut buffer, &rfx.fx.sends, sample_rate);
+            }
         }
 
         // Stem artifact (mono WAV per layer). Per-layer overlapping notes can
@@ -615,16 +669,30 @@ pub fn render_stems_full(
         let pan = layer_fx
             .and_then(|f| f.mix_pan)
             .unwrap_or_else(|| layer_pan(layer_name));
-        mixer.add_channel(MixerChannel {
-            name: layer_name.clone(),
-            gain,
-            pan: if config.stereo { pan } else { 0.0 },
-            muted: false,
-            data: buffer,
-        });
+        if config.bus_graph.is_some() {
+            bus_layers.push(crate::bus::BusLayerInput {
+                name: layer_name.clone(),
+                group: layer_fx.and_then(|f| f.group.clone()),
+                data: buffer,
+                gain,
+                pan: if config.stereo { pan } else { 0.0 },
+                sends: layer_fx.map_or_else(Default::default, |f| f.fx.sends),
+            });
+        } else {
+            mixer.add_channel(MixerChannel {
+                name: layer_name.clone(),
+                gain,
+                pan: if config.stereo { pan } else { 0.0 },
+                muted: false,
+                data: buffer,
+            });
+        }
     }
 
-    let (left, right) = mixer.mix();
+    let (left, right) = config.bus_graph.as_ref().map_or_else(
+        || mixer.mix(),
+        |graph| crate::bus::mix_bus_graph(&bus_layers, graph, sample_rate, config.stereo),
+    );
     // G5 — master bus, mirroring the master render so stems/master agree.
     let (left, right) = apply_master_bus(left, right, config);
     let mut mono: Vec<f32> = left
@@ -675,6 +743,66 @@ pub fn render_stems_full(
     };
 
     Ok((stems, master))
+}
+
+/// Render per-layer **stereo** stems plus the mastered mix (Phase B).
+///
+/// Replaces the mono-fold stem export with true L/R stems: each layer's
+/// deterministic mono buffer is panned into the stereo field with the same
+/// constant-power law the mixer uses (`pan_norm = midpoint(pan, 1.0)`), so
+/// the stems reassemble into the master's stereo placement. The master is
+/// still the authoritative mixdown; stems carry the layer audio for DAW
+/// rebalance.
+///
+/// The layer's pan comes from `fx[].mix_pan` when present, else the
+/// deterministic `layer_pan` default. Gain is deliberately *not* baked into
+/// the stem (mirroring the mono stem, which is the raw layer buffer) — the
+/// mixer applies gain at the fold.
+///
+/// # Errors
+///
+/// Returns an error if `sample_rate` is 0 (propagated from the mono pass).
+pub fn render_stereo_stems_full(
+    notes: &[RenderNote],
+    bpm: u32,
+    sample_rate: u32,
+    voices: &[RenderVoice],
+    automation: &[RenderAutomation],
+    fx: &[RenderFx],
+    config: &RenderConfig,
+) -> Result<(Vec<StereoStem>, RenderResult), ScorestrataError> {
+    let (mono_stems, master) =
+        render_stems_full(notes, bpm, sample_rate, voices, automation, fx, config)?;
+
+    let stereo_stems = mono_stems
+        .into_iter()
+        .map(|stem| {
+            let pan = fx
+                .iter()
+                .find(|f| f.layer_name == stem.layer_name)
+                .and_then(|f| f.mix_pan)
+                .unwrap_or_else(|| layer_pan(&stem.layer_name));
+            let pan_norm = f32::midpoint(pan, 1.0); // -1..1 → 0..1
+            let left_gain = (pan_norm * std::f32::consts::FRAC_PI_2).cos();
+            let right_gain = (pan_norm * std::f32::consts::FRAC_PI_2).sin();
+            let left: Vec<f32> = stem.samples.iter().map(|s| s * left_gain).collect();
+            let right: Vec<f32> = stem.samples.iter().map(|s| s * right_gain).collect();
+            let wav_bytes = write_wav_stereo(&left, &right, sample_rate, 16);
+            let checksum = sha256_hex(&wav_bytes);
+            let analysis = crate::analysis::analyze_stereo(&left, &right);
+            StereoStem {
+                layer_name: stem.layer_name,
+                wav_bytes,
+                left,
+                right,
+                duration_seconds: stem.duration_seconds,
+                checksum,
+                analysis,
+            }
+        })
+        .collect();
+
+    Ok((stereo_stems, master))
 }
 
 /// Render one layer's notes into a mono sample buffer.
@@ -1232,9 +1360,11 @@ mod tests {
                     reverb: 0.3,
                     delay: 0.0,
                 },
+                sidechain_amount: None,
             },
             mix_gain_db: Some(-6.0),
             mix_pan: None,
+            group: None,
         }];
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let fx_r = render_notes_full(&notes, 120, 48_000, &[], &[], &fx, &config).unwrap();
@@ -1313,6 +1443,7 @@ mod tests {
             master_gain_db: -6.0,
             stereo_width: 0.0,
             sound_bank: None,
+            bus_graph: None,
         };
         let wide = RenderConfig {
             stereo: true,
@@ -1320,6 +1451,7 @@ mod tests {
             master_gain_db: -6.0,
             stereo_width: 2.0,
             sound_bank: None,
+            bus_graph: None,
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let a = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &narrow).unwrap();
@@ -1696,5 +1828,137 @@ mod tests {
             drum_tail < tone_tail * 0.5,
             "drum decays faster than a sustained tone (drum {drum_tail:.4} vs tone {tone_tail:.4})"
         );
+    }
+
+    #[test]
+    fn bus_graph_disabled_is_byte_identical_to_flat_fold() {
+        // R1: enabling the bus-graph *field* but leaving it empty (no groups,
+        // no reverb IR) must not change the render at all.
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        let flat = RenderConfig::default();
+        let with_graph = RenderConfig {
+            bus_graph: Some(scorestrata_core::domain::BusGraph::default()),
+            ..RenderConfig::default()
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let a = render_notes_full(&notes, 120, 48_000, &[], &[], &[], &flat).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let b = render_notes_full(&notes, 120, 48_000, &[], &[], &[], &with_graph).unwrap();
+        assert_eq!(
+            a.wav_bytes, b.wav_bytes,
+            "empty bus graph is byte-identical"
+        );
+    }
+
+    #[test]
+    fn bus_graph_reverb_extends_render_audibly() {
+        // A layer with a reverb send through the convolution return must
+        // produce a longer tail than the dry-only flat fold.
+        let notes = vec![RenderNote {
+            pitch: 64,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.7,
+            layer_name: "pad".to_string(),
+        }];
+        let fx = vec![RenderFx {
+            layer_name: "pad".to_string(),
+            fx: scorestrata_core::domain::FxChain {
+                sends: scorestrata_core::domain::SendLevels {
+                    reverb: 0.6,
+                    delay: 0.0,
+                },
+                ..scorestrata_core::domain::FxChain::default()
+            },
+            mix_gain_db: None,
+            mix_pan: None,
+            group: None,
+        }];
+        let flat = RenderConfig::default();
+        let graph = scorestrata_core::domain::BusGraph {
+            reverb_ir: Some(scorestrata_core::domain::ReverbIr::Hall),
+            reverb_pre_delay_ms: Some(30.0),
+            ..scorestrata_core::domain::BusGraph::default()
+        };
+        let with_graph = RenderConfig {
+            bus_graph: Some(graph),
+            ..RenderConfig::default()
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let a = render_notes_full(&notes, 120, 48_000, &[], &[], &fx, &flat).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let b = render_notes_full(&notes, 120, 48_000, &[], &[], &fx, &with_graph).unwrap();
+        let dry_len = a.mono_samples.len();
+        let wet_len = b.mono_samples.len();
+        assert!(
+            wet_len > dry_len + 10_000,
+            "convolution reverb extends the render (dry {dry_len} vs wet {wet_len})"
+        );
+        // The tail after the dry end must actually carry energy.
+        let tail_energy: f32 = b.mono_samples[dry_len..].iter().map(|s| s * s).sum::<f32>()
+            / (wet_len - dry_len).max(1) as f32;
+        assert!(tail_energy > 1e-7, "wet tail carries audible energy");
+    }
+
+    #[test]
+    fn stereo_stems_should_pan_layers_into_lr_and_match_master_placement() {
+        let notes = vec![
+            RenderNote {
+                pitch: 60,
+                start_tick: 0,
+                duration_ticks: 240,
+                velocity: 0.9,
+                layer_name: "lead".to_string(),
+            },
+            RenderNote {
+                pitch: 36,
+                start_tick: 0,
+                duration_ticks: 240,
+                velocity: 0.9,
+                layer_name: "bass".to_string(),
+            },
+        ];
+        let voices = build_voices(&[("lead", "lead"), ("bass", "bass")]);
+        // lead defaults to pan +0.35 (right-heavy), bass to center.
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let (stems, _master) = render_stereo_stems_full(
+            &notes,
+            120,
+            48_000,
+            &voices,
+            &[],
+            &[],
+            &RenderConfig::default(),
+        )
+        .unwrap();
+        assert_eq!(stems.len(), 2, "one stereo stem per layer");
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let lead = stems.iter().find(|s| s.layer_name == "lead").unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let bass = stems.iter().find(|s| s.layer_name == "bass").unwrap();
+        assert_eq!(lead.left.len(), lead.right.len());
+        // Right-heavy layer: right energy exceeds left energy.
+        let l_energy: f32 = lead.left.iter().map(|s| s * s).sum();
+        let r_energy: f32 = lead.right.iter().map(|s| s * s).sum();
+        assert!(
+            r_energy > l_energy,
+            "lead pans right (L {l_energy} < R {r_energy})"
+        );
+        // Center layer: L ≈ R.
+        let b_l: f32 = bass.left.iter().map(|s| s * s).sum();
+        let b_r: f32 = bass.right.iter().map(|s| s * s).sum();
+        assert!(
+            (b_l - b_r).abs() < 1e-4 * b_l.max(b_r).max(1.0),
+            "bass stays centered (L {b_l} vs R {b_r})"
+        );
+        // Stereo WAV header says 2 channels.
+        let channels = u16::from_le_bytes([lead.wav_bytes[22], lead.wav_bytes[23]]);
+        assert_eq!(channels, 2, "stereo stem WAV is 2-channel");
     }
 }

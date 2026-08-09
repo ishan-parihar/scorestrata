@@ -284,6 +284,7 @@ mod tests {
                         fx: None,
                         mix_gain_db: None,
                         mix_pan: None,
+                        group: None,
                     }],
                 }],
                 energy_curve: Vec::new(),
@@ -292,6 +293,8 @@ mod tests {
             patterns: vec![],
             spectral_reference: None,
             mixer: scorestrata_core::domain::MixerState::default(),
+            sound_bank: None,
+            bus_graph: None,
             status: scorestrata_core::domain::ProjectStatus::ConfigApproved,
         }
     }

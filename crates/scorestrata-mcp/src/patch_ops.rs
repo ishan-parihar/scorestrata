@@ -514,6 +514,7 @@ fn apply_add_segment_layer(params: &ApplyPatchParams, project: &mut Project) -> 
         fx: None,
         mix_gain_db: None,
         mix_pan: None,
+        group: None,
     });
 
     let mut score_delta = BTreeMap::new();
@@ -734,6 +735,7 @@ mod tests {
             fx: None,
             mix_gain_db: None,
             mix_pan: None,
+            group: None,
         };
 
         Project {
@@ -780,6 +782,7 @@ mod tests {
             mixer: scorestrata_core::domain::MixerState::default(),
             status: scorestrata_core::domain::ProjectStatus::ConfigApproved,
             sound_bank: None,
+            bus_graph: None,
         }
     }
 

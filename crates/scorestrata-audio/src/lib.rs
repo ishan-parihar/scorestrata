@@ -18,6 +18,8 @@
 
 pub mod analysis;
 pub mod audit;
+pub mod bus;
+pub mod convolve;
 pub mod error;
 pub mod fx;
 pub mod mastering;

@@ -1638,6 +1638,92 @@ pub struct SampleBankCatalog {
     pub default: String,
 }
 
+/// The bus-graph routing map (Phase B) — group busses + send/return topology.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BusGraphView {
+    /// Group busses with their member-layer counts.
+    pub groups: Vec<GroupBusView>,
+    /// Reverb return character (`room` / `plate` / `hall` / `none`).
+    pub reverb_return: String,
+    /// Reverb pre-delay in ms.
+    pub pre_delay_ms: Option<f32>,
+    /// Total layer count routed through a group (`None` group = direct).
+    pub direct_layers: usize,
+}
+
+/// One group bus in the routing map.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupBusView {
+    /// Bus name.
+    pub name: String,
+    /// Layers routed into this bus.
+    pub layers: Vec<String>,
+    /// Bus insert summary (`HPF 120 Hz`, `comp`, ...).
+    pub inserts: Vec<String>,
+}
+
+/// Build the `bus_graph` resource view from a real project (Phase B).
+///
+/// Pure derivation (no storage): reads `project.bus_graph` and the layers'
+/// `group` assignments so the agent sees the exact Ableton-style routing map.
+#[must_use]
+pub fn bus_graph_resource(project: &scorestrata_core::domain::Project) -> BusGraphView {
+    let graph = project.bus_graph.clone().unwrap_or_default();
+    let mut groups: Vec<GroupBusView> = graph
+        .groups
+        .iter()
+        .map(|g| GroupBusView {
+            name: g.name.clone(),
+            layers: Vec::new(),
+            inserts: fx_chain_summary(&g.inserts),
+        })
+        .collect();
+    let mut direct_layers = 0usize;
+    for segment in &project.arrangement.segments {
+        for layer in &segment.layers {
+            match &layer.group {
+                Some(g) => {
+                    if let Some(view) = groups.iter_mut().find(|v| v.name == *g) {
+                        view.layers.push(layer.name.clone());
+                    }
+                }
+                None => direct_layers += 1,
+            }
+        }
+    }
+    BusGraphView {
+        groups,
+        reverb_return: graph.reverb_ir.map_or_else(
+            || "none (legacy schroeder-moorer)".to_string(),
+            |r| format!("{r:?}").to_ascii_lowercase(),
+        ),
+        pre_delay_ms: graph.reverb_pre_delay_ms,
+        direct_layers,
+    }
+}
+
+/// Compact human-readable summary of an insert chain for the bus map.
+#[must_use]
+pub fn fx_chain_summary(fx: &scorestrata_core::domain::FxChain) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(hz) = fx.high_pass_hz {
+        out.push(format!("HPF {hz} Hz"));
+    }
+    for band in &fx.eq {
+        out.push(format!("EQ {} dB @ {} Hz", band.gain_db, band.freq_hz));
+    }
+    if fx.compressor.is_some() {
+        out.push("comp".to_string());
+    }
+    if fx.sidechain_from_kick || fx.sidechain_amount.is_some() {
+        out.push("sidechain".to_string());
+    }
+    if out.is_empty() {
+        out.push("clean".to_string());
+    }
+    out
+}
+
 /// Build the `sample_bank_catalog` resource (Phase A).
 ///
 /// The catalog is derived from the audio crate's embedded `KIT_NAMES` so it

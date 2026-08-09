@@ -820,6 +820,7 @@ mod tests {
             fx: None,
             mix_gain_db: None,
             mix_pan: None,
+            group: None,
         });
         let diff = compute_snapshot_diff(&project_a, &project_b);
         assert!(

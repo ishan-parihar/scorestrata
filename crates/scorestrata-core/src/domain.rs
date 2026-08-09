@@ -326,6 +326,12 @@ pub struct Layer {
     /// Per-layer mix pan override (−1.0…1.0). `None` = static panning.
     #[serde(default)]
     pub mix_pan: Option<f32>,
+    /// Group-bus assignment (B): `Some("drums")` routes this layer through
+    /// the named group bus (with its inserts) before the stereo sum, and its
+    /// reverb/delay sends go to the shared returns. `None` = direct to sum
+    /// (legacy behavior, byte-identical to pre-bus renders).
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 /// An octave register — the vertical band a layer occupies on the timeline.
@@ -444,6 +450,54 @@ impl Default for SendLevels {
     }
 }
 
+/// Reverb impulse-response character for the convolution return bus (B).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReverbIr {
+    /// Small room — short tail, dense early reflections.
+    Room,
+    /// Plate — mid tail, smooth bright metallic bloom.
+    Plate,
+    /// Hall — long tail, sparse shimmering decay.
+    Hall,
+}
+
+/// One named group bus (B).
+///
+/// Layers assigned to the group sum here, then the bus inserts
+/// (EQ → comp → saturation) shape the summed group before the stereo sum.
+/// `None` group on a layer = direct routing (legacy).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[must_use]
+pub struct GroupBus {
+    /// Bus name — must match [`Layer::group`] to attract layers.
+    pub name: String,
+    /// Bus-level insert chain applied to the summed group.
+    pub inserts: FxChain,
+}
+
+/// The send/return + group-bus routing graph (Phase B).
+///
+/// Mirrors the DAW model: layers route into named group busses (drums /
+/// bass / harmony / lead / fx), each group applies its own inserts, and
+/// reverb/delay sends from every layer fold into shared returns. `None` on
+/// the project keeps the flat per-layer fold — byte-identical to pre-bus
+/// renders (R1).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[must_use]
+pub struct BusGraph {
+    /// Group busses in declaration order (first match wins by name).
+    pub groups: Vec<GroupBus>,
+    /// Convolution-reverb return character (B): `None` keeps the legacy
+    /// Schroeder–Moorer reverb for the reverb send.
+    pub reverb_ir: Option<ReverbIr>,
+    /// Reverb pre-delay in ms (10–100) separating the dry attack from the
+    /// wet tail; `None` = 0.
+    pub reverb_pre_delay_ms: Option<f32>,
+}
+
 /// A per-track insert FX chain (§8.1, production-plan §7.1) — the
 /// "production" in production-grade: high-pass, EQ scoops, compression,
 /// sidechain ducking, and reverb/delay sends.
@@ -464,6 +518,11 @@ pub struct FxChain {
     pub sidechain_from_kick: bool,
     /// Reverb / delay send amounts (0.0–1.0).
     pub sends: SendLevels,
+    /// Continuous sidechain duck amount (0.0–1.0) — the production-mix lane
+    /// (B). `None` = legacy on/off via [`Self::sidechain_from_kick`]; `Some`
+    /// drives the renderer's envelope follower with a continuous depth.
+    #[serde(default)]
+    pub sidechain_amount: Option<f32>,
 }
 
 /// The master-bus state of the project's mixer (§8.1 / §8.6, G5).
@@ -916,6 +975,10 @@ pub struct Project {
     /// (R1).
     #[serde(default)]
     pub sound_bank: Option<String>,
+    /// Send/return + group-bus routing graph (B). `None` = flat per-layer
+    /// fold, byte-identical to pre-bus renders (R1).
+    #[serde(default)]
+    pub bus_graph: Option<BusGraph>,
     /// Current status.
     pub status: ProjectStatus,
 }

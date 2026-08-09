@@ -145,6 +145,7 @@ mod tests {
                 fx: None,
                 mix_gain_db: None,
                 mix_pan: None,
+                group: None,
             }],
         };
         assert!(check_segment_has_layers(&segment).is_none());

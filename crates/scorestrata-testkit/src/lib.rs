@@ -65,6 +65,7 @@ pub fn minimal_project() -> Project {
                         fx: None,
                         mix_gain_db: None,
                         mix_pan: None,
+                        group: None,
                     }],
                 },
                 Segment {
@@ -83,6 +84,7 @@ pub fn minimal_project() -> Project {
                         fx: None,
                         mix_gain_db: None,
                         mix_pan: None,
+                        group: None,
                     }],
                 },
             ],
@@ -93,6 +95,7 @@ pub fn minimal_project() -> Project {
         spectral_reference: None,
         mixer: scorestrata_core::domain::MixerState::default(),
         sound_bank: None,
+        bus_graph: None,
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -181,6 +184,7 @@ pub fn planned_project(name: &str, brief: &str) -> Project {
         spectral_reference: None,
         mixer: scorestrata_core::domain::MixerState::default(),
         sound_bank: None,
+        bus_graph: None,
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -323,6 +327,7 @@ pub fn eight_bar_loop() -> Project {
                 fx: None,
                 mix_gain_db: None,
                 mix_pan: None,
+                group: None,
             },
             Layer {
                 id: LayerId::new(),
@@ -340,6 +345,7 @@ pub fn eight_bar_loop() -> Project {
                 fx: None,
                 mix_gain_db: None,
                 mix_pan: None,
+                group: None,
             },
             Layer {
                 id: LayerId::new(),
@@ -357,6 +363,7 @@ pub fn eight_bar_loop() -> Project {
                 fx: None,
                 mix_gain_db: None,
                 mix_pan: None,
+                group: None,
             },
         ],
     };
@@ -397,6 +404,7 @@ pub fn eight_bar_loop() -> Project {
         spectral_reference: None,
         mixer: scorestrata_core::domain::MixerState::default(),
         sound_bank: None,
+        bus_graph: None,
         status: ProjectStatus::ConfigApproved,
     }
 }

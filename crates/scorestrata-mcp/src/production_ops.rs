@@ -375,6 +375,7 @@ fn build_template_segments(
                     fx: None,
                     mix_gain_db: None,
                     mix_pan: None,
+                    group: None,
                 }
             })
             .collect();
@@ -674,6 +675,7 @@ pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<FxChain> {
                 reverb: 0.1,
                 delay: 0.05,
             },
+            sidechain_amount: None,
             ..Default::default()
         },
         "pad_synth" | "pad" | "chord" => FxChain {
@@ -693,6 +695,7 @@ pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<FxChain> {
                 },
                 delay: 0.0,
             },
+            sidechain_amount: None,
             ..Default::default()
         },
         "lead_synth" | "lead" | "bell" => FxChain {
@@ -706,6 +709,7 @@ pub fn genre_mix_chain(genre: &str, instrument: &str) -> Option<FxChain> {
                 reverb: if live_band { 0.25 } else { 0.15 },
                 delay: 0.2,
             },
+            sidechain_amount: None,
             ..Default::default()
         },
         "hat" | "percussion" | "clap" | "snare" => FxChain {

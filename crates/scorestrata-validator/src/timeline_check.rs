@@ -453,6 +453,7 @@ mod tests {
                 reverb: 0.2,
                 delay: 0.0,
             },
+            sidechain_amount: None,
             ..Default::default()
         });
         let diagnostics = check_timeline(&project);

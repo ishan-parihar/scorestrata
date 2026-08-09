@@ -4275,6 +4275,197 @@ pub fn get_arrangement_templates(params: &GetArrangementTemplatesParams) -> Tool
     }
 }
 
+/// Parameters for `set_bus_graph` tool (B) — bus-graph mutation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetBusGraphParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project to mutate.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+    /// Group busses (name + inserts), reverb IR character, and pre-delay.
+    /// Omitted fields keep the project's existing graph.
+    #[serde(default)]
+    pub groups: Option<Vec<scorestrata_core::domain::GroupBus>>,
+    /// Reverb return character (`room` / `plate` / `hall`).
+    #[serde(default)]
+    pub reverb_ir: Option<String>,
+    /// Reverb pre-delay in ms (10–100).
+    #[serde(default)]
+    pub reverb_pre_delay_ms: Option<f32>,
+    /// Clear the bus graph entirely (`None` groups + no IR) — restores the
+    /// flat per-layer fold (R1).
+    #[serde(default)]
+    pub clear: bool,
+}
+
+/// Configure the send/return + group-bus routing graph (Phase B).
+///
+/// Writes `project.bus_graph`; the next render routes layers through their
+/// group busses and folds reverb/delay sends into the shared returns.
+#[must_use]
+pub fn set_bus_graph(params: &SetBusGraphParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_bus_graph".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set bus graph for project '{}': no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_bus_graph", "project", &e),
+        };
+    let mut graph = project.bus_graph.clone().unwrap_or_default();
+    let mut warnings = vec![];
+    if params.clear {
+        project.bus_graph = None;
+        warnings.push("Bus graph cleared — flat per-layer fold restored (R1)".to_string());
+    } else {
+        if let Some(groups) = &params.groups {
+            graph.groups = groups.clone();
+        }
+        if let Some(ir) = &params.reverb_ir {
+            graph.reverb_ir = Some(match ir.as_str() {
+                "plate" => scorestrata_core::domain::ReverbIr::Plate,
+                "hall" => scorestrata_core::domain::ReverbIr::Hall,
+                _ => scorestrata_core::domain::ReverbIr::Room,
+            });
+        }
+        if let Some(pre) = params.reverb_pre_delay_ms {
+            graph.reverb_pre_delay_ms = Some(pre.clamp(0.0, 200.0));
+        }
+        if graph.groups.is_empty() && graph.reverb_ir.is_none() {
+            warnings.push(
+                "Bus graph is empty — renders stay byte-identical to the flat fold (R1)"
+                    .to_string(),
+            );
+        }
+        project.bus_graph = Some(graph);
+    }
+    let group_names: Vec<String> = project
+        .bus_graph
+        .as_ref()
+        .map(|g| g.groups.iter().map(|b| b.name.clone()).collect())
+        .unwrap_or_default();
+    let ir = project
+        .bus_graph
+        .as_ref()
+        .and_then(|g| g.reverb_ir)
+        .map_or_else(
+            || "none".to_string(),
+            |r| format!("{r:?}").to_ascii_lowercase(),
+        );
+    ToolReceipt {
+        tool: "set_bus_graph".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "bus graph: groups [{}], reverb return {ir}",
+            group_names.join(", ")
+        ),
+        score_delta: {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "bus_graph.groups".to_string(),
+                group_names.len().to_string(),
+            );
+            m.insert("bus_graph.reverb".to_string(), ir);
+            m
+        },
+        evidence_uris: vec!["system://bus-graph".to_string()],
+        focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+        next_actions: vec![
+            "get_bus_graph".to_string(),
+            "render_project".to_string(),
+            "render_stereo_stems".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings,
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `get_bus_graph` tool (B) — read-only bus-graph query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetBusGraphParams {
+    /// Project ID (used only for labeling evidence URIs).
+    #[serde(default)]
+    pub project_id: Option<String>,
+    /// Serialized project; when provided the receipt reports its routing.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Get the `bus_graph` resource (Phase B) — the Ableton-style routing map.
+///
+/// Read-only (§8.1 "tools mutate, resources inspect"): reports the group
+/// busses, which layers route into them, and the reverb return character so
+/// a producer can see the send/return topology before mutating it.
+#[must_use]
+pub fn get_bus_graph(params: &GetBusGraphParams) -> ToolReceipt {
+    let project_id = params.project_id.as_deref().unwrap_or("unknown");
+    let (groups, ir, pre_delay) = match &params.project {
+        Some(p) => serde_json::from_value::<scorestrata_core::domain::Project>(p.clone())
+            .ok()
+            .and_then(|proj| proj.bus_graph)
+            .map_or_else(
+                || (vec![], "none".to_string(), None),
+                |g| {
+                    let names: Vec<String> = g.groups.iter().map(|b| b.name.clone()).collect();
+                    let ir = g.reverb_ir.map_or_else(
+                        || "legacy schroeder-moorer".to_string(),
+                        |r| format!("{r:?}").to_ascii_lowercase(),
+                    );
+                    (names, ir, g.reverb_pre_delay_ms)
+                },
+            ),
+        None => (vec![], "unknown".to_string(), None),
+    };
+    ToolReceipt {
+        tool: "get_bus_graph".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "bus graph: groups [{}], reverb return {ir}, pre-delay {pre_delay:?}",
+            groups.join(", ")
+        ),
+        score_delta: BTreeMap::new(),
+        evidence_uris: vec!["system://bus-graph".to_string()],
+        focus_uris: vec![format!("project://{project_id}/render/latest")],
+        next_actions: vec![
+            "set_bus_graph".to_string(),
+            "render_project".to_string(),
+            "render_stereo_stems".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 1,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 /// Parameters for `get_sound_bank_catalog` tool (A) — read-only catalog query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSoundBankCatalogParams {
@@ -7378,6 +7569,7 @@ pub fn render_config_from_project(
         limiter,
         master_gain_db: project.mixer.master_gain_db,
         sound_bank: project.sound_bank.clone(),
+        bus_graph: project.bus_graph.clone(),
         stereo_width: project.mixer.stereo_width,
     }
 }
@@ -7427,6 +7619,7 @@ pub fn render_fx_from_project(
                 fx: layer.fx.clone().unwrap_or_default(),
                 mix_gain_db: layer.mix_gain_db,
                 mix_pan: layer.mix_pan,
+                group: layer.group.clone(),
             });
         }
     }
@@ -7955,6 +8148,164 @@ pub fn render_stems(params: &RenderStemsParams) -> ToolReceipt {
             tool: "render_stems".to_string(),
             status: ToolStatus::Failed,
             summary: format!("Stems render failed: {e}"),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_failure_report".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Render engine error".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        },
+    }
+}
+
+/// Parameters for `render_stereo_stems` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderStereoStemsParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project to render.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Render each layer to a **stereo** L/R stem plus a mixed master (Phase B).
+///
+/// Replaces the mono-fold stem export: every layer is panned into the stereo
+/// field with the mixer's constant-power law, so stems can be rebalanced in a
+/// DAW while the master stays authoritative. Deterministic checksums and
+/// per-stem Level-4 stereo analysis are included.
+#[must_use]
+pub fn render_stereo_stems(params: &RenderStereoStemsParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "render_stereo_stems".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Stereo-stems render requested for project '{}' but no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to render".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let project: scorestrata_core::domain::Project =
+        match serde_json::from_value(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolReceipt {
+                    tool: "render_stereo_stems".to_string(),
+                    status: ToolStatus::Failed,
+                    summary: format!("Could not deserialize project: {e}"),
+                    score_delta: BTreeMap::new(),
+                    evidence_uris: vec![],
+                    focus_uris: vec![],
+                    next_actions: vec!["get_project_summary".to_string()],
+                    cost: ToolCost::default(),
+                    warnings: vec!["Invalid project payload".to_string()],
+                    dry_run: false,
+                    diagnostics: vec![],
+                };
+            }
+        };
+
+    let timeline = match scorestrata_compiler::compile_project(&project) {
+        Ok(tl) => tl,
+        Err(e) => {
+            return ToolReceipt {
+                tool: "render_stereo_stems".to_string(),
+                status: ToolStatus::Failed,
+                summary: format!("Could not compile project: {e}"),
+                score_delta: BTreeMap::new(),
+                evidence_uris: vec![],
+                focus_uris: vec![],
+                next_actions: vec!["run_validation".to_string()],
+                cost: ToolCost::default(),
+                warnings: vec!["Compilation failed".to_string()],
+                dry_run: false,
+                diagnostics: vec![],
+            };
+        }
+    };
+
+    let (notes, voices, automation, fx) = timeline_render_inputs(&timeline, &project);
+    let config = render_config_from_project(&project);
+    match scorestrata_audio::render::render_stereo_stems_full(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &voices,
+        &automation,
+        &fx,
+        &config,
+    ) {
+        Ok((stems, master)) => {
+            let stem_summary = stems
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{}:L{:.1}/R{:.1}LUFS",
+                        s.layer_name, s.analysis.integrated_lufs, s.analysis.integrated_lufs
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let evidence_uris = stems
+                .iter()
+                .map(|s| {
+                    format!(
+                        "project://{}/render/stems/{}",
+                        params.project_id, s.layer_name
+                    )
+                })
+                .collect();
+            let mut score_delta = BTreeMap::new();
+            score_delta.insert(
+                "render.stereo_stems".to_string(),
+                format!("+{}", stems.len()),
+            );
+            score_delta.insert(
+                "audio.integrated_lufs".to_string(),
+                format!("{:.1}", master.analysis.integrated_lufs),
+            );
+
+            ToolReceipt {
+                tool: "render_stereo_stems".to_string(),
+                status: ToolStatus::Succeeded,
+                summary: format!(
+                    "Rendered {} stereo stems ({:.2}s master, sha256 {}): {stem_summary}",
+                    stems.len(),
+                    master.duration_seconds,
+                    &master.checksum[..8.min(master.checksum.len())]
+                ),
+                score_delta,
+                evidence_uris,
+                focus_uris: vec![format!("project://{}/render/stems", params.project_id)],
+                next_actions: vec!["render_project".to_string(), "run_validation".to_string()],
+                cost: ToolCost {
+                    cpu_ms: 24,
+                    tool_calls: u32::try_from(stems.len()).unwrap_or(u32::MAX),
+                    render_seconds: master.duration_seconds as f32,
+                },
+                warnings: vec![],
+                dry_run: false,
+                diagnostics: vec![],
+            }
+        }
+        Err(e) => ToolReceipt {
+            tool: "render_stereo_stems".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Stereo-stems render failed: {e}"),
             score_delta: BTreeMap::new(),
             evidence_uris: vec![],
             focus_uris: vec![],
@@ -8526,6 +8877,7 @@ mod tests {
                     fx: None,
                     mix_gain_db: None,
                     mix_pan: None,
+                    group: None,
                 })
                 .collect(),
         }
@@ -11925,6 +12277,40 @@ mod tests {
         );
         assert!(receipt.summary.contains("stems"));
         assert!(receipt.score_delta.contains_key("render.stems"));
+        assert!(!receipt.evidence_uris.is_empty());
+    }
+
+    #[test]
+    fn render_stereo_stems_without_payload_fails_cleanly() {
+        let params = RenderStereoStemsParams {
+            project_id: "proj_1".to_string(),
+            project: None,
+        };
+        let receipt = render_stereo_stems(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("No project payload"))
+        );
+    }
+
+    #[test]
+    fn render_stereo_stems_with_project_produces_stereo_stems() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let project_json = serde_json::to_value(&project).expect("project serializes");
+        let params = RenderStereoStemsParams {
+            project_id: project.id.to_string(),
+            project: Some(project_json),
+        };
+        let receipt = render_stereo_stems(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "stereo-stems render should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("stereo stems"));
+        assert!(receipt.score_delta.contains_key("render.stereo_stems"));
         assert!(!receipt.evidence_uris.is_empty());
     }
 

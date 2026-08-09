@@ -40,11 +40,11 @@ use crate::tools::{
     IsolateLayerParams, NormalizeLoudnessTargetParams, PlacePatternInSegmentParams,
     PlanArrangementParams, QuantizeLayerParams, RecordLessonParams, ReduceMaskingParams,
     RenderCandidatePreviewParams, RenderProjectParams, RenderSegmentParams, RenderStemsParams,
-    RepeatPatternInSegmentParams, RunAcceptanceTestsParams, RunValidationParams,
-    SetEnergyCurveParams, SetLayerInstrumentParams, SetLayerRegisterParams, SetSegmentGoalsParams,
-    SnapshotDiffParams, SoloSegmentParams, SubmitTaskResultParams, SuggestFixesParams, ToolCost,
-    ToolReceipt, ToolStatus, UpdateCalibrationProfileParams, UpdateDocsParams,
-    ValidateConfigParams, WritePatternNotesParams, WritePatternStepsParams,
+    RenderStereoStemsParams, RepeatPatternInSegmentParams, RunAcceptanceTestsParams,
+    RunValidationParams, SetEnergyCurveParams, SetLayerInstrumentParams, SetLayerRegisterParams,
+    SetSegmentGoalsParams, SnapshotDiffParams, SoloSegmentParams, SubmitTaskResultParams,
+    SuggestFixesParams, ToolCost, ToolReceipt, ToolStatus, UpdateCalibrationProfileParams,
+    UpdateDocsParams, ValidateConfigParams, WritePatternNotesParams, WritePatternStepsParams,
 };
 
 /// Deserialize `params` into `$ty` and forward to `$func`, mapping any
@@ -330,6 +330,14 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::render_stems
             )
         }
+        "render_stereo_stems" => {
+            route!(
+                tool_name,
+                params,
+                RenderStereoStemsParams,
+                crate::tools::render_stereo_stems
+            )
+        }
         "render_candidate_preview" => route!(
             tool_name,
             params,
@@ -487,6 +495,22 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 params,
                 crate::tools::GetSoundBankCatalogParams,
                 crate::tools::get_sound_bank_catalog
+            )
+        }
+        "set_bus_graph" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::SetBusGraphParams,
+                crate::tools::set_bus_graph
+            )
+        }
+        "get_bus_graph" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::GetBusGraphParams,
+                crate::tools::get_bus_graph
             )
         }
         "set_sound_bank" => {

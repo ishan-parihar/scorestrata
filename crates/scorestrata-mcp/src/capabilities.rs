@@ -391,6 +391,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
         ),
         ("render_stems", "render", false, "render", "high", "render"),
         (
+            "render_stereo_stems",
+            "render",
+            false,
+            "render",
+            "high",
+            "render",
+        ),
+        (
             "audit_layer_spectral",
             "read-only",
             false,
@@ -538,6 +546,15 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "low",
             "render",
         ),
+        (
+            "set_bus_graph",
+            "mutating",
+            false,
+            "write",
+            "low",
+            "composition",
+        ),
+        ("get_bus_graph", "read-only", false, "read", "low", "render"),
         (
             "set_sound_bank",
             "mutating",

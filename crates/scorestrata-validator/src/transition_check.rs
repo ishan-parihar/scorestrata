@@ -161,6 +161,7 @@ mod tests {
                     fx: None,
                     mix_gain_db: None,
                     mix_pan: None,
+                    group: None,
                 })
                 .collect(),
         }
