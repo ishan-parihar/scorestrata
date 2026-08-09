@@ -4113,6 +4113,58 @@ pub fn get_arrangement_templates(params: &GetArrangementTemplatesParams) -> Tool
     }
 }
 
+/// Parameters for `get_production_playbook` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetProductionPlaybookParams {
+    /// Optional genre filter (`rock`, `house`, `ambient`, `techno`, ...);
+    /// when omitted the general playbook is returned.
+    #[serde(default)]
+    pub genre: Option<String>,
+}
+
+/// Get the guided production playbook for a genre — the "skills" layer.
+///
+/// Read-only (`system://playbooks/<genre>`): returns the ordered workflow
+/// (configure → compose → arrange → register-discipline → automate → mix →
+/// master → validate) with the exact tools to call at every step, the
+/// genre's octave map, mix/master guidance, and common mistakes — so a
+/// producer is guided through the direct workflow instead of handed a bare
+/// tool list.
+#[must_use]
+pub fn get_production_playbook(params: &GetProductionPlaybookParams) -> ToolReceipt {
+    let genre = params.genre.as_deref().unwrap_or("general");
+    let playbook = crate::resources::production_playbook_for(genre);
+    let summary = serde_json::to_string(&playbook).unwrap_or_else(|_| "{}".to_string());
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("playbook.genre".to_string(), playbook.genre.clone());
+    score_delta.insert(
+        "playbook.steps".to_string(),
+        playbook.steps.len().to_string(),
+    );
+
+    ToolReceipt {
+        tool: "get_production_playbook".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!("production_playbook {summary}"),
+        score_delta,
+        evidence_uris: vec![format!("system://playbooks/{}", playbook.genre)],
+        focus_uris: vec![format!("system://playbooks/{}/view", playbook.genre)],
+        next_actions: vec![
+            "get_arrangement_templates".to_string(),
+            "generate_config_from_brief".to_string(),
+            "ss timeline".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 /// Parameters for `solo_segment` tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoloSegmentParams {
@@ -9296,6 +9348,52 @@ mod tests {
         );
         // And the sections use the default-table layout (16-bar intro).
         assert!(receipt.summary.contains("\"role\":\"intro\",\"bars\":16"));
+    }
+
+    #[test]
+    fn get_production_playbook_guides_rock_workflow() {
+        // The skills layer serves the full guided workflow for the genre:
+        // ordered steps naming the exact tools, plus octave/mix guidance.
+        let params = GetProductionPlaybookParams {
+            genre: Some("nu_metal".to_string()),
+        };
+        let receipt = get_production_playbook(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(
+            receipt.score_delta.get("playbook.genre"),
+            Some(&"nu_metal".to_string())
+        );
+        assert!(
+            receipt
+                .score_delta
+                .get("playbook.steps")
+                .is_some_and(|n| n.parse::<usize>().is_ok_and(|n| n >= 5)),
+            "guided workflow has ordered steps"
+        );
+        // The summary carries the tools and the guidance, not just names.
+        assert!(receipt.summary.contains("generate_config_from_brief"));
+        assert!(receipt.summary.contains("set_layer_register"));
+        assert!(receipt.summary.contains("apply_genre_mix_preset"));
+        assert!(receipt.summary.contains("\"octave_map\""));
+        assert!(
+            receipt
+                .evidence_uris
+                .iter()
+                .any(|u| u.contains("system://playbooks")),
+            "served from the playbooks resource"
+        );
+    }
+
+    #[test]
+    fn get_production_playbook_defaults_to_general() {
+        let params = GetProductionPlaybookParams { genre: None };
+        let receipt = get_production_playbook(&params);
+        assert!(matches!(receipt.status, ToolStatus::Succeeded));
+        assert_eq!(
+            receipt.score_delta.get("playbook.genre"),
+            Some(&"general".to_string())
+        );
+        assert!(receipt.summary.contains("\"steps\""));
     }
 
     #[test]

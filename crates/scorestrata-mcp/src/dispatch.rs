@@ -382,6 +382,14 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::get_arrangement_templates
             )
         }
+        "get_production_playbook" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::GetProductionPlaybookParams,
+                crate::tools::get_production_playbook
+            )
+        }
         "write_automation" => {
             route!(
                 tool_name,

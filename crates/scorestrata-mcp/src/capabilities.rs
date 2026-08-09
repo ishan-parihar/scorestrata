@@ -450,6 +450,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "debug",
         ),
         (
+            "get_production_playbook",
+            "read-only",
+            false,
+            "read",
+            "low",
+            "debug",
+        ),
+        (
             "write_automation",
             "mutating",
             false,
@@ -700,6 +708,7 @@ pub fn get_capabilities() -> CapabilityManifest {
             "project://<id>/lens/metric/<metric_id>",
             "project://<id>/lens/transition/<from>/<to>",
             "project://<id>/arrangement/templates",
+            "system://playbooks/<genre>",
             "project://<id>/render/jobs",
             "project://<id>/render/jobs/<job_id>",
             "project://<id>/human-review/latest",

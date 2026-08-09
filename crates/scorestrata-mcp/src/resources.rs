@@ -602,6 +602,421 @@ pub struct SectionTemplate {
     pub layers: Vec<String>,
 }
 
+/// One guided step in a production playbook: what to do, which tools to
+/// call, and what "done" looks like.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaybookStep {
+    /// Step name (e.g. "Compose the foundational loop").
+    pub name: String,
+    /// Why this step matters (the producer's intent).
+    pub purpose: String,
+    /// The exact tool(s) / CLI command(s) to call for this step.
+    pub tools: Vec<String>,
+    /// What must be true before moving on.
+    pub exit_criteria: String,
+}
+
+/// A genre production playbook — the "skills" layer.
+///
+/// Served to agents via `system://playbooks/<genre>` so a producer is
+/// guided through the direct workflow (configure → compose → arrange →
+/// register-discipline → automate → mix → master → validate) with the exact
+/// tools to call at every step, instead of being handed a bare tool list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProductionPlaybook {
+    /// Genre this playbook targets.
+    pub genre: String,
+    /// One-paragraph production strategy for the genre.
+    pub strategy: String,
+    /// The arrangement shape to aim for (bars per section).
+    pub arrangement_shape: String,
+    /// Per-instrument octave registers (§1.3 discipline).
+    pub octave_map: Vec<String>,
+    /// The ordered guided workflow.
+    pub steps: Vec<PlaybookStep>,
+    /// Mixing/mastering guidance specific to the genre.
+    pub mix_master: String,
+    /// Common mistakes to avoid (the "do not do" list).
+    pub common_mistakes: Vec<String>,
+}
+
+/// The guided production playbook for a genre (falls back to the general
+/// workflow for any genre without a specialized table).
+#[must_use]
+pub fn production_playbook_for(genre: &str) -> ProductionPlaybook {
+    let g = genre.to_lowercase();
+    if g.contains("rock") || g.contains("metal") || g.contains("nu_metal") || g.contains("punk") {
+        rock_playbook(genre)
+    } else if g.contains("house") {
+        house_playbook(genre)
+    } else if g.contains("ambient") || g.contains("drone") {
+        ambient_playbook(genre)
+    } else if g.contains("techno") || g.contains("trance") {
+        techno_playbook(genre)
+    } else {
+        general_playbook(genre)
+    }
+}
+
+/// The rock/nu-metal playbook (Linkin Park stress-test workflow).
+fn rock_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Rock/nu-metal lives on the verse→chorus energy ramp: a "
+            .to_string()
+            + "backbeat drum kit, a driving root-fifth bass, palm-muted "
+            + "power-chord guitars that open up into the chorus, and a "
+            + "vocal-range lead. Keep the guitar octaves 2–4 so the riff "
+            + "never collides with the bass (1–2) or the vocal (4–6).",
+        arrangement_shape: "intro 8 · verse 8 · chorus 32 · breakdown 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Sub bass / kick: octaves 1–2, dead center".to_string(),
+            "Bass guitar: octaves 1–2, sidechain optional (rock bass is driven, not ducked)".to_string(),
+            "Rhythm/lead guitar (power chords): octaves 2–4".to_string(),
+            "Lead vocal / melody: octaves 4–6".to_string(),
+            "Hats / cymbals: octaves 6–8, wide".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Set the scene".to_string(),
+                purpose: "A rock brief must land on the rock family with a rock tempo/key.".to_string(),
+                tools: vec![
+                    "generate_config_from_brief".to_string(),
+                    "validate_config".to_string(),
+                ],
+                exit_criteria: "Config genre is rock/nu_metal, BPM 90–130, minor key.".to_string(),
+            },
+            PlaybookStep {
+                name: "Compose the foundational loops".to_string(),
+                purpose: "Create the 1-bar atoms: backbeat drums, driving bass, power-chord guitar chug, vocal lead.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_notes".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "Drums have a snare backbeat on 2&4; guitar is root+fifth dyads in octaves 2–4.".to_string(),
+            },
+            PlaybookStep {
+                name: "Arrange the band".to_string(),
+                purpose: "Lay out verse → chorus with the full band peaking in the chorus.".to_string(),
+                tools: vec![
+                    "apply_arrangement_template".to_string(),
+                    "extend_arrangement".to_string(),
+                    "place_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "Arrangement covers the target bar count with a Chorus carrying guitar + lead.".to_string(),
+            },
+            PlaybookStep {
+                name: "Enforce octave discipline".to_string(),
+                purpose: "Assign registers so layers never fight (guitar 2–4, bass 1–2, lead 4–6).".to_string(),
+                tools: vec![
+                    "set_layer_register".to_string(),
+                    "run_validation".to_string(),
+                ],
+                exit_criteria: "No register-violation diagnostics; timeline shows per-layer octave bands.".to_string(),
+            },
+            PlaybookStep {
+                name: "Automate the dynamics".to_string(),
+                purpose: "Filter-cutoff / volume sweeps on guitars and lead give the rock the push-and-pull.".to_string(),
+                tools: vec![
+                    "write_automation".to_string(),
+                    "repeat_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "Timeline has control-change lanes; the build visibly opens up.".to_string(),
+            },
+            PlaybookStep {
+                name: "Mix the band".to_string(),
+                purpose: "Saturated guitars, punchy drum compression, driven bass.".to_string(),
+                tools: vec![
+                    "set_track_fx".to_string(),
+                    "set_track_mix".to_string(),
+                    "apply_genre_mix_preset".to_string(),
+                ],
+                exit_criteria: "Every layer has an FX chain; the rock preset is applied.".to_string(),
+            },
+            PlaybookStep {
+                name: "Master".to_string(),
+                purpose: "Loudness target with a limiter ceiling.".to_string(),
+                tools: vec!["ss mix master".to_string(), "ss render".to_string()],
+                exit_criteria: "True peak ≤ −1 dBTP; LUFS near −10.".to_string(),
+            },
+            PlaybookStep {
+                name: "Validate against the reference".to_string(),
+                purpose: "The spectral gate measures the render against a real track's profile.".to_string(),
+                tools: vec![
+                    "import_reference_profile".to_string(),
+                    "render_project".to_string(),
+                    "get_audit_summary".to_string(),
+                ],
+                exit_criteria: "Render deviation from the reference profile is below the gate.".to_string(),
+            },
+        ],
+        mix_master: "Rock drums get aggressive compression (threshold −16 dB, ratio 4:1); "
+            .to_string()
+            + "guitars get a presence lift at 2.5 kHz with short verb/delay sends; "
+            + "the bass is driven (boosted low-mid) and NOT sidechained; master to "
+            + "−1 dBTP ceiling.",
+        common_mistakes: vec![
+            "Putting power chords above octave 4 (they collide with the vocal)".to_string(),
+            "Sidechaining the rock bass to the kick (that is an electronic-music move)".to_string(),
+            "Writing a chorus with no guitar — the chorus is where the band peaks".to_string(),
+            "Leaving hats out of octave 6+ — rock hats need air".to_string(),
+        ],
+    }
+}
+
+/// The house playbook.
+fn house_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "House is a swung, offbeat groove: 4/4 kick, clap on 2&4, ".to_string()
+            + "offbeat stabs, pumping root-octave bass, filtered chords. "
+            + "Sidechain the bass and pads to the kick so the groove breathes.",
+        arrangement_shape: "intro 16 · build 8 · drop 16 · breakdown 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Kick: 20–60 Hz, mono".to_string(),
+            "Bass: octaves 1–2, sidechained to kick".to_string(),
+            "Chords/pads: octaves 3–5, voiced up".to_string(),
+            "Stabs/leads: octaves 5–7".to_string(),
+            "Hats: octaves 6–8, swung offbeats".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Compose the groove".to_string(),
+                purpose: "The swung offbeat hat + pump is what makes it house.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "Kick 1&3, clap 2&4, swung offbeat hats, pumping bass.".to_string(),
+            },
+            PlaybookStep {
+                name: "Arrange intro→drop".to_string(),
+                purpose: "Strip the bed down in the intro, peak at the drop.".to_string(),
+                tools: vec![
+                    "apply_arrangement_template".to_string(),
+                    "extend_arrangement".to_string(),
+                ],
+                exit_criteria: "Drop carries the full stack; intro is kick/hats only.".to_string(),
+            },
+            PlaybookStep {
+                name: "Sidechain the groove".to_string(),
+                purpose: "Bass and pads duck on every kick for the signature pump.".to_string(),
+                tools: vec![
+                    "set_track_fx".to_string(),
+                    "apply_genre_mix_preset".to_string(),
+                ],
+                exit_criteria: "Bass + pad layers have sidechain_from_kick set.".to_string(),
+            },
+            PlaybookStep {
+                name: "Master to club level".to_string(),
+                purpose: "Loud and wide for the dancefloor.".to_string(),
+                tools: vec!["ss mix master".to_string(), "ss render".to_string()],
+                exit_criteria: "True peak ≤ −1 dBTP, LUFS −8 to −10.".to_string(),
+            },
+        ],
+        mix_master: "Sidechain everything melodic to the kick; keep the low-mid ".to_string()
+            + "scooped on non-bass elements; master hot (−8 to −10 LUFS).",
+        common_mistakes: vec![
+            "Forgetting the swing on offbeat hats".to_string(),
+            "Not sidechaining the bass (loses the pump)".to_string(),
+            "Voicing chords low and muddy (keep them 3–5)".to_string(),
+        ],
+    }
+}
+
+/// The ambient playbook.
+fn ambient_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Ambient is space and evolution: sparse percussion, a drone ".to_string()
+            + "bass, bell tones and evolving pads. Let layers breathe with "
+            + "generous reverb and slow automation.",
+        arrangement_shape: "intro 32 · build 8 · drop 16 · breakdown 16 · outro 16".to_string(),
+        octave_map: vec![
+            "Drone bass: octave 1, sustained".to_string(),
+            "Pads: octaves 3–5, wide".to_string(),
+            "Bells/leads: octaves 5–7, sparse".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Lay the drone bed".to_string(),
+                purpose: "A sustained bass note anchors the whole piece.".to_string(),
+                tools: vec![
+                    "write_pattern_notes".to_string(),
+                    "place_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "A long-sustained drone note in octave 1.".to_string(),
+            },
+            PlaybookStep {
+                name: "Add evolving pads".to_string(),
+                purpose: "Pads in 3–5 with slow cutoff automation.".to_string(),
+                tools: vec![
+                    "write_pattern_notes".to_string(),
+                    "write_automation".to_string(),
+                ],
+                exit_criteria: "Pad layer with a slow filter sweep lane.".to_string(),
+            },
+            PlaybookStep {
+                name: "Space the mix".to_string(),
+                purpose: "Reverb sends are the instrument.".to_string(),
+                tools: vec![
+                    "set_track_fx".to_string(),
+                    "apply_genre_mix_preset".to_string(),
+                ],
+                exit_criteria: "Pads have substantial reverb sends.".to_string(),
+            },
+        ],
+        mix_master: "High-pass everything except the drone; keep master gain low ".to_string()
+            + "(−14 to −16 LUFS is fine for ambient).",
+        common_mistakes: vec![
+            "Too many notes — ambient is sparse".to_string(),
+            "Dry pads — reverb is the instrument".to_string(),
+        ],
+    }
+}
+
+/// The techno/trance playbook.
+fn techno_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "Techno is a continuous driving baseline: 4/4 kick, 16th hats, ".to_string()
+            + "root-fifth bass, arp lead, with elements swapping every 16/32 "
+            + "bars and a strip-down valley in the middle.",
+        arrangement_shape: "intro 16 · build 8 · drop 32 · breakdown 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Sub/kick: octaves 1–2, mono".to_string(),
+            "Bass: octaves 1–2, sidechained".to_string(),
+            "Arp/leads: octaves 5–7".to_string(),
+            "FX/risers: octaves 6–8, wide".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Set the baseline".to_string(),
+                purpose: "The 16th-note drive is the techno constant.".to_string(),
+                tools: vec![
+                    "write_pattern_steps".to_string(),
+                    "write_pattern_notes".to_string(),
+                ],
+                exit_criteria: "4/4 kick + 16th hats + driving bass.".to_string(),
+            },
+            PlaybookStep {
+                name: "Arrange the valley".to_string(),
+                purpose: "Long drop, then a mid-track breakdown for the strip-down.".to_string(),
+                tools: vec![
+                    "apply_arrangement_template".to_string(),
+                    "extend_arrangement".to_string(),
+                ],
+                exit_criteria: "A 32-bar drop and an 8-bar breakdown.".to_string(),
+            },
+            PlaybookStep {
+                name: "Sidechain + automate".to_string(),
+                purpose: "Pump the bass and open the filter through the build.".to_string(),
+                tools: vec!["set_track_fx".to_string(), "write_automation".to_string()],
+                exit_criteria: "Sidechain on bass; cutoff sweep lane in the build.".to_string(),
+            },
+        ],
+        mix_master: "Sidechain bass to kick; keep the low-mid clean; master to −8/−10 LUFS."
+            .to_string(),
+        common_mistakes: vec![
+            "Breaking the 4/4 drive in the first half".to_string(),
+            "Skipping the mid-track breakdown".to_string(),
+        ],
+    }
+}
+
+/// The general fallback playbook for any other genre.
+fn general_playbook(genre: &str) -> ProductionPlaybook {
+    ProductionPlaybook {
+        genre: genre.to_string(),
+        strategy: "General production workflow: compose the foundational loop, ".to_string()
+            + "arrange it across the timeline, assign octave registers per "
+            + "instrument, automate for movement, mix against a genre "
+            + "reference, and master with a limiter ceiling.",
+        arrangement_shape: "intro 16 · build 8 · drop 16 · breakdown 8 · outro 8".to_string(),
+        octave_map: vec![
+            "Sub/kick: octaves 1–2, mono".to_string(),
+            "Bass: octaves 1–2".to_string(),
+            "Chords/pads: octaves 3–5".to_string(),
+            "Leads: octaves 5–7".to_string(),
+            "Hats/air: octaves 6–8, wide".to_string(),
+        ],
+        steps: vec![
+            PlaybookStep {
+                name: "Configure from the brief".to_string(),
+                purpose: "Extract genre, BPM, key, duration.".to_string(),
+                tools: vec![
+                    "generate_config_from_brief".to_string(),
+                    "validate_config".to_string(),
+                ],
+                exit_criteria: "Validated config with the detected genre/tempo/key.".to_string(),
+            },
+            PlaybookStep {
+                name: "Compose foundational patterns".to_string(),
+                purpose: "The 1-bar atoms: drums, bass, harmony, lead.".to_string(),
+                tools: vec![
+                    "create_pattern".to_string(),
+                    "write_pattern_notes".to_string(),
+                    "write_pattern_steps".to_string(),
+                ],
+                exit_criteria: "In-key patterns for the whole band.".to_string(),
+            },
+            PlaybookStep {
+                name: "Arrange and extend".to_string(),
+                purpose: "Apply the genre template, then extend to the target length.".to_string(),
+                tools: vec![
+                    "apply_arrangement_template".to_string(),
+                    "extend_arrangement".to_string(),
+                ],
+                exit_criteria: "Segments sum to the target bar count.".to_string(),
+            },
+            PlaybookStep {
+                name: "Discipline registers".to_string(),
+                purpose: "Assign octave bands so layers don't fight.".to_string(),
+                tools: vec![
+                    "set_layer_register".to_string(),
+                    "run_validation".to_string(),
+                ],
+                exit_criteria: "No register violations.".to_string(),
+            },
+            PlaybookStep {
+                name: "Automate and repeat".to_string(),
+                purpose: "Movement via CC lanes and pattern repetition/transposition.".to_string(),
+                tools: vec![
+                    "write_automation".to_string(),
+                    "repeat_pattern_in_segment".to_string(),
+                ],
+                exit_criteria: "CC lanes visible in the timeline.".to_string(),
+            },
+            PlaybookStep {
+                name: "Mix and master".to_string(),
+                purpose: "FX chains, genre preset, master bus.".to_string(),
+                tools: vec![
+                    "set_track_fx".to_string(),
+                    "apply_genre_mix_preset".to_string(),
+                    "ss mix master".to_string(),
+                ],
+                exit_criteria: "Preset applied; master ceiling set.".to_string(),
+            },
+            PlaybookStep {
+                name: "Render and validate".to_string(),
+                purpose: "Prove the output against the gates.".to_string(),
+                tools: vec![
+                    "render_project".to_string(),
+                    "get_audit_summary".to_string(),
+                ],
+                exit_criteria: "Render passes the spectral/golden gates.".to_string(),
+            },
+        ],
+        mix_master: "Scoop 250–500 Hz on non-bass elements; master to a −1 dBTP ceiling."
+            .to_string(),
+        common_mistakes: vec![
+            "Overlapping octave registers between layers".to_string(),
+            "Skipping validation before render".to_string(),
+        ],
+    }
+}
+
 /// The per-genre arrangement template (G6).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArrangementTemplate {
@@ -1283,7 +1698,13 @@ mod tests {
             capabilities: "system://capabilities".to_string(),
             schemas: "system://contracts".to_string(),
             tools: "tool catalog".to_string(),
-            playbooks: vec!["repair".to_string(), "composition".to_string()],
+            playbooks: vec![
+                "general".to_string(),
+                "rock".to_string(),
+                "house".to_string(),
+                "ambient".to_string(),
+                "techno".to_string(),
+            ],
             failure_taxonomy: vec![FailureTaxonomyEntry {
                 code: "SCALE_VIOLATION".to_string(),
                 category: "harmony".to_string(),
@@ -1306,6 +1727,68 @@ mod tests {
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let json = serde_json::to_string_pretty(&onboarding).unwrap();
         assert!(json.contains("system_map"));
+    }
+
+    #[test]
+    fn rock_playbook_guides_the_full_band_workflow() {
+        // The skills layer: a rock producer gets the ordered workflow with
+        // the exact tools, the octave map, mix/master guidance, and the
+        // common mistakes — not a bare tool list.
+        let playbook = production_playbook_for("nu_metal");
+        assert_eq!(playbook.genre, "nu_metal");
+        assert!(
+            playbook.steps.len() >= 5,
+            "rock playbook has the full workflow: {}",
+            playbook.steps.len()
+        );
+        // Register discipline is explicit: guitar 2–4, vocal 4–6, bass 1–2.
+        assert!(playbook.octave_map.iter().any(|o| o.contains("2–4")));
+        assert!(playbook.octave_map.iter().any(|o| o.contains("1–2")));
+        // The workflow names real tools in order.
+        let first_tools = &playbook.steps[0].tools;
+        assert!(
+            first_tools
+                .iter()
+                .any(|t| t == "generate_config_from_brief")
+        );
+        assert!(
+            playbook
+                .steps
+                .iter()
+                .any(|s| s.tools.iter().any(|t| t == "apply_arrangement_template"))
+        );
+        assert!(
+            playbook
+                .steps
+                .iter()
+                .any(|s| s.tools.iter().any(|t| t == "set_layer_register"))
+        );
+        // Mix/master + mistakes complete the guidance.
+        assert!(!playbook.mix_master.is_empty());
+        assert!(
+            playbook
+                .common_mistakes
+                .iter()
+                .any(|m| m.to_lowercase().contains("sidechain")),
+            "warns against sidechaining the rock bass"
+        );
+    }
+
+    #[test]
+    fn every_named_genre_has_a_playbook() {
+        for genre in [
+            "techno",
+            "house",
+            "ambient",
+            "trance",
+            "dubstep",
+            "rock",
+            "unknown_genre",
+        ] {
+            let playbook = production_playbook_for(genre);
+            assert_eq!(playbook.genre, genre);
+            assert!(!playbook.steps.is_empty(), "{genre} has guided steps");
+        }
     }
 
     #[test]

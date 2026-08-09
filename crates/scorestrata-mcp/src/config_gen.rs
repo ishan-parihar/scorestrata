@@ -89,7 +89,7 @@ fn detect_bpm(text: &str) -> Option<u32> {
         }
         let token = &lower[start..i];
         if let Ok(n) = token.parse::<u32>() {
-            let rest = lower[i..].trim_start_matches([' ', '-', '_']);
+            let rest = lower[i..].trim_start_matches([' ', '-', '_', '\n', '\t']);
             let is_bar_count = rest.starts_with("bar");
             if !is_bar_count && (100..=240).contains(&n) {
                 if best.is_none_or(|b| !(100..=240).contains(&b)) {
@@ -388,6 +388,13 @@ mod tests {
         let explicit = generate_config("Riff", "hard rock, 120 bpm, 32 bars");
         assert_eq!(explicit.bpm, 120);
         assert_eq!(explicit.duration_bars, 32);
+
+        // A multi-line brief with the bar count on its own line must not
+        // be read as a tempo either (the "N bar" lookahead trims newlines).
+        let multiline = generate_config("Riff", "rock\n128 bars");
+        assert_eq!(multiline.genre, "rock");
+        assert_eq!(multiline.bpm, 112, "multi-line bar count not read as tempo");
+        assert_eq!(multiline.duration_bars, 128);
     }
 
     #[test]
