@@ -179,7 +179,10 @@ impl Velocity {
 // ── Note & Step ─────────────────────────────────────────────────────
 
 /// A musical note with pitch, position, duration, and velocity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Partial equality is deliberate (not `Eq`): the optional
+/// [`Articulation::Portamento`] carries `f32` glide milliseconds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Note {
     /// Unique identifier for this note.
     pub id: NoteId,
@@ -194,6 +197,10 @@ pub struct Note {
     /// Whether this note is tied to the next.
     #[serde(default)]
     pub tied: bool,
+    /// Per-note articulation (C) — accent/staccato/legato/portamento/pedal.
+    /// `None` = unarticulated (legacy behavior, byte-identical renders).
+    #[serde(default)]
+    pub articulation: Option<Articulation>,
 }
 
 /// A step in a step-sequencer pattern (e.g. for drums).
@@ -475,6 +482,63 @@ pub struct GroupBus {
     pub name: String,
     /// Bus-level insert chain applied to the summed group.
     pub inserts: FxChain,
+}
+
+/// Per-note performance articulation (Phase C).
+///
+/// Resolved by the compiler into timeline effects: accents boost velocity,
+/// staccato/legato scale gate length, portamento emits a pitch-bend glide
+/// curve, pedal emits sustain. `None` on a note = unarticulated (legacy).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub enum Articulation {
+    /// Emphasize: velocity boost + slight gate cut.
+    Accent,
+    /// Short, separated: gate length ~50 %.
+    Staccato,
+    /// Full length, smooth: gate length ~100 %.
+    #[default]
+    Legato,
+    /// Pitch glide from the written pitch up/down by `semitones` over
+    /// `glide_ms` (emitted as a pitch-bend CC curve).
+    Portamento {
+        /// Glide distance in semitones (positive = up).
+        semitones: i32,
+        /// Glide time in milliseconds.
+        glide_ms: f32,
+    },
+    /// Sustain pedal: hold the note past its written gate.
+    Pedal,
+}
+
+/// Opt-in performance layer (Phase C) — the "humanize" that kills the
+/// grid-perfect synthetic tell (plan §1.2, FL Studio `Alt+R` / Ableton
+/// Groove Pool semantics).
+///
+/// All variation is **seeded and deterministic** (R2): the same spec on the
+/// same project always produces the same performance, and `None` on the
+/// project (or `enabled: false`) keeps renders byte-identical to Phase B
+/// (R1). Per-voice streams derive from `(seed, layer_id)` so chords don't
+/// shift as rigid blocks (Ableton Random semantics).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[must_use]
+pub struct HumanizeSpec {
+    /// Master switch; `false` = identical to an un-humanized render (R1).
+    pub enabled: bool,
+    /// PRNG seed; `None` = derived deterministically from the project
+    /// content hash (stable across runs, unique per project).
+    pub seed: Option<u64>,
+    /// Gaussian velocity spread as a fraction of 127 (typical 0.02–0.08).
+    pub velocity_sigma: f32,
+    /// Gaussian note-on timing jitter in ms (tight 1–5, loose up to 30).
+    pub timing_sigma_ms: f32,
+    /// Gate-length variation as a fraction of each note's written length.
+    pub gate_length_jitter: f32,
+    /// Groove template name (`swing16`, `laid_back`, `driving`, …);
+    /// `None` = straight timing.
+    pub groove: Option<String>,
+    /// Groove strength (0.0–1.0); scaled linearly by the renderer.
+    pub groove_amount: f32,
 }
 
 /// The send/return + group-bus routing graph (Phase B).
@@ -979,6 +1043,10 @@ pub struct Project {
     /// fold, byte-identical to pre-bus renders (R1).
     #[serde(default)]
     pub bus_graph: Option<BusGraph>,
+    /// Opt-in performance layer (C): humanize + groove + articulation.
+    /// `None` = today's behavior, byte-identical renders (R1).
+    #[serde(default)]
+    pub humanize: Option<HumanizeSpec>,
     /// Current status.
     pub status: ProjectStatus,
 }

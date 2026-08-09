@@ -111,6 +111,7 @@ mod tests {
             duration: scorestrata_core::domain::Duration::quarter(),
             velocity: Velocity::default_vel(),
             tied: false,
+            articulation: None,
         }
     }
 

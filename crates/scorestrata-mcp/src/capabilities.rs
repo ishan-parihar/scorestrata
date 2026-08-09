@@ -556,6 +556,22 @@ fn tool_catalog() -> Vec<ToolCapability> {
         ),
         ("get_bus_graph", "read-only", false, "read", "low", "render"),
         (
+            "set_humanize",
+            "mutating",
+            false,
+            "write",
+            "low",
+            "composition",
+        ),
+        (
+            "set_articulation",
+            "mutating",
+            false,
+            "write",
+            "low",
+            "composition",
+        ),
+        (
             "set_sound_bank",
             "mutating",
             false,

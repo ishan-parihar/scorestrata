@@ -575,6 +575,7 @@ mod tests {
             duration,
             velocity: Velocity::new(80),
             tied: false,
+            articulation: None,
         });
 
         let diagnostics = check_timeline(&project);
@@ -610,6 +611,7 @@ mod tests {
             duration: Duration::whole(),
             velocity: Velocity::new(80),
             tied: false,
+            articulation: None,
         });
 
         let diagnostics = check_timeline(&project);

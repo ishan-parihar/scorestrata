@@ -482,6 +482,7 @@ fn handle_new(name: &str, brief: Option<&str>) -> Result<()> {
         // project starts pipeline-ready (ConfigApproved → ArrangementPlanned…).
         sound_bank: None,
         bus_graph: None,
+        humanize: None,
         status: ProjectStatus::ConfigApproved,
     };
 

@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod incremental;
 pub mod midi_export;
 pub mod passes;
+pub mod performance;
 pub mod plan;
 pub mod timeline;
 

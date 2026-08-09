@@ -113,13 +113,35 @@ pub(crate) fn compile_segment_events(
                         .0;
                 }
 
+                // Phase C — resolve per-note articulation into the emitted
+                // events (accent → velocity boost + gate cut; staccato →
+                // short gate; legato → full gate; portamento → glide CC
+                // curve; pedal → sustain CC). Unarticulated notes pass
+                // through with their written values (R1).
+                let mut emit_cc = |cc: u8, value: u8| {
+                    events.push(TimelineEvent {
+                        id: next_event_id,
+                        tick: scorestrata_core::domain::Tick::new(abs_tick),
+                        kind: EventKind::ControlChange {
+                            controller: cc,
+                            value,
+                        },
+                        track_id: track_id_for_layer(&layer.id),
+                        segment_id: segment.id,
+                        layer_id: layer.id,
+                        pattern_id: Some(pattern.id),
+                    });
+                    next_event_id += 1;
+                };
+                let (velocity, gate_ticks) = articulation_resolution(note, &mut emit_cc);
+
                 let track_id = track_id_for_layer(&layer.id);
                 events.push(TimelineEvent {
                     id: next_event_id,
                     tick: scorestrata_core::domain::Tick::new(abs_tick),
                     kind: EventKind::NoteOn {
                         pitch: scorestrata_core::domain::MidiNote::new(pitch),
-                        velocity: note.velocity,
+                        velocity,
                     },
                     track_id,
                     segment_id: segment.id,
@@ -130,7 +152,7 @@ pub(crate) fn compile_segment_events(
 
                 events.push(TimelineEvent {
                     id: next_event_id,
-                    tick: scorestrata_core::domain::Tick::new(abs_tick + note.duration.0),
+                    tick: scorestrata_core::domain::Tick::new(abs_tick + gate_ticks),
                     kind: EventKind::NoteOff {
                         pitch: scorestrata_core::domain::MidiNote::new(pitch),
                     },
@@ -190,6 +212,48 @@ pub(crate) fn compile_segment_events(
     Ok(events)
 }
 
+/// Resolve a note's optional articulation into `(velocity, gate_ticks)`.
+///
+/// Side-channel CC events (pitch-bend for portamento, sustain for pedal) are
+/// emitted through `emit_cc` at the note's start tick. Unarticulated notes
+/// return the written velocity and duration unchanged (R1).
+fn articulation_resolution<F: FnMut(u8, u8)>(
+    note: &scorestrata_core::domain::Note,
+    emit_cc: &mut F,
+) -> (scorestrata_core::domain::Velocity, u64) {
+    use scorestrata_core::domain::Articulation;
+    match note.articulation {
+        None | Some(Articulation::Legato) => (note.velocity, note.duration.0),
+        Some(Articulation::Accent) => {
+            let boosted =
+                scorestrata_core::domain::Velocity::new(note.velocity.0.saturating_add(24));
+            (boosted, note.duration.0 * 9 / 10)
+        }
+        Some(Articulation::Staccato) => (note.velocity, note.duration.0 / 2),
+        Some(Articulation::Portamento {
+            semitones,
+            glide_ms,
+        }) => {
+            // Pitch-bend send (CC 84) opening the glide, then its depth.
+            emit_cc(84, 127);
+            #[expect(
+                clippy::cast_sign_loss,
+                reason = "Depth clamped to 0-127 before narrowing to u8"
+            )]
+            let depth = (semitones.clamp(-24, 24) + 64).clamp(0, 127) as u8;
+            emit_cc(85, depth);
+            let _ = glide_ms;
+            (note.velocity, note.duration.0)
+        }
+        Some(Articulation::Pedal) => {
+            // Sustain (CC 64) down at the note start; released by the
+            // renderer at the note end.
+            emit_cc(64, 127);
+            (note.velocity, note.duration.0 * 12 / 10)
+        }
+    }
+}
+
 /// Compile a project into a deterministic timeline IR.
 ///
 /// The pipeline:
@@ -238,6 +302,16 @@ pub fn compile_project(project: &Project) -> Result<TimelineIR, ScorestrataError
     // Deterministic ordering: tick first, then id for stable tie-breaking.
     events.sort_by_key(|e| (e.tick, e.id));
 
+    // Phase C — performance layer: groove → humanize. Applied to the flat IR
+    // before hashing so the manifest captures the performed timeline (R4).
+    // Disabled (or `None` on the project) is a no-op: byte-identical to the
+    // un-humanized render (R1).
+    if let Some(spec) = &project.humanize {
+        let seed = spec.seed.unwrap_or_else(|| content_seed(&events));
+        crate::performance::apply_performance_passes(&mut events, spec, seed, project.config.bpm);
+        events.sort_by_key(|e| (e.tick, e.id));
+    }
+
     let total_ticks = events.iter().map(|e| e.tick.0).max().unwrap_or(0);
 
     let mut timeline = TimelineIR {
@@ -252,6 +326,35 @@ pub fn compile_project(project: &Project) -> Result<TimelineIR, ScorestrataError
 
     timeline.input_hash = timeline.content_hash();
     Ok(timeline)
+}
+
+/// Derive a deterministic project seed from the pre-performance event
+/// content (used when `HumanizeSpec.seed` is `None`).
+///
+/// Stable across runs, unique per project: it hashes the grid ticks, pitches,
+/// velocities, and layer ids before any performance jitter is applied, so the
+/// same project always produces the same performance.
+fn content_seed(events: &[TimelineEvent]) -> u64 {
+    let mut h: u64 = 0xCBF2_9CE4_8422_2325;
+    for e in events {
+        h = (h ^ e.tick.0).wrapping_mul(0x1000_0000_01B3);
+        // Fold the layer UUID so two layers with identical note content still
+        // seed differently, and the same project always seeds the same.
+        for b in e.layer_id.to_string().as_bytes() {
+            h = (h ^ u64::from(*b)).wrapping_mul(0x1000_0000_01B3);
+        }
+        match &e.kind {
+            EventKind::NoteOn { pitch, velocity } => {
+                h = (h ^ u64::from(pitch.0)).wrapping_mul(0x1000_0000_01B3);
+                h = (h ^ u64::from(velocity.0)).wrapping_mul(0x1000_0000_01B3);
+            }
+            EventKind::NoteOff { pitch } => {
+                h = (h ^ u64::from(pitch.0) ^ 0xFFFF).wrapping_mul(0x1000_0000_01B3);
+            }
+            _ => {}
+        }
+    }
+    h
 }
 
 /// Compile only events for a specific segment.
@@ -347,6 +450,7 @@ mod tests {
                     duration: Duration::quarter(),
                     velocity: Velocity::new(100),
                     tied: false,
+                    articulation: None,
                 },
                 Note {
                     id: NoteId::new(),
@@ -355,6 +459,7 @@ mod tests {
                     duration: Duration::quarter(),
                     velocity: Velocity::new(90),
                     tied: false,
+                    articulation: None,
                 },
             ],
             steps: Vec::new(),
@@ -423,6 +528,7 @@ mod tests {
             mixer: scorestrata_core::domain::MixerState::default(),
             sound_bank: None,
             bus_graph: None,
+            humanize: None,
             status: ProjectStatus::ConfigApproved,
         }
     }

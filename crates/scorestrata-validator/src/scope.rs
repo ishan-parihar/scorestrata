@@ -295,6 +295,7 @@ mod tests {
             mixer: scorestrata_core::domain::MixerState::default(),
             sound_bank: None,
             bus_graph: None,
+            humanize: None,
             status: scorestrata_core::domain::ProjectStatus::ConfigApproved,
         }
     }

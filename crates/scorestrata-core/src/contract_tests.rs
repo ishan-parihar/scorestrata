@@ -49,6 +49,7 @@ fn valid_note() -> Note {
         duration: Duration::quarter(),
         velocity: Velocity::new(100),
         tied: false,
+        articulation: None,
     }
 }
 

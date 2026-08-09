@@ -684,6 +684,10 @@ mod tests {
     };
     use scorestrata_core::ids::{NoteId, PatternId, PatternInstanceId, ProjectId};
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Test fixture spells out the full project literal for patch assertions"
+    )]
     fn out_of_scale_project() -> Project {
         let pattern = Pattern {
             id: PatternId::new(),
@@ -698,6 +702,7 @@ mod tests {
                     duration: Duration::quarter(),
                     velocity: Velocity::new(100),
                     tied: false,
+                    articulation: None,
                 },
                 Note {
                     id: NoteId::new(),
@@ -706,6 +711,7 @@ mod tests {
                     duration: Duration::quarter(),
                     velocity: Velocity::new(90),
                     tied: false,
+                    articulation: None,
                 },
                 Note {
                     id: NoteId::new(),
@@ -714,6 +720,7 @@ mod tests {
                     duration: Duration::quarter(),
                     velocity: Velocity::new(80),
                     tied: false,
+                    articulation: None,
                 },
             ],
             steps: Vec::new(),
@@ -780,6 +787,7 @@ mod tests {
             patterns: vec![pattern],
             spectral_reference: None,
             mixer: scorestrata_core::domain::MixerState::default(),
+            humanize: None,
             status: scorestrata_core::domain::ProjectStatus::ConfigApproved,
             sound_bank: None,
             bus_graph: None,

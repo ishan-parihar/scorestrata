@@ -254,6 +254,7 @@ mod tests {
                     duration: Duration::quarter(),
                     velocity: Velocity::new(100),
                     tied: false,
+                    articulation: None,
                 })
                 .collect(),
             steps: Vec::new(),

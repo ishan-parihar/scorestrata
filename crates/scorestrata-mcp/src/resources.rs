@@ -1724,6 +1724,61 @@ pub fn fx_chain_summary(fx: &scorestrata_core::domain::FxChain) -> Vec<String> {
     out
 }
 
+/// The performance-layer view (Phase C) — humanize spec + articulation count.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HumanizationView {
+    /// Whether the performance layer is enabled.
+    pub enabled: bool,
+    /// Resolved seed (`None` = derived from project content).
+    pub seed: Option<u64>,
+    /// Gaussian velocity spread (fraction of 127).
+    pub velocity_sigma: f32,
+    /// Timing jitter in ms.
+    pub timing_sigma_ms: f32,
+    /// Gate-length jitter (fraction).
+    pub gate_length_jitter: f32,
+    /// Groove template or `straight`.
+    pub groove: String,
+    /// Groove strength 0.0–1.0.
+    pub groove_amount: f32,
+    /// How many notes currently carry an articulation.
+    pub articulated_notes: usize,
+    /// First few articulations (for the agent's eyes).
+    pub articulations: Vec<String>,
+}
+
+/// Build the `humanization_view` resource from a real project (Phase C).
+///
+/// Pure derivation (no storage): reads `project.humanize` and scans patterns
+/// for per-note articulations.
+#[must_use]
+pub fn humanization_resource(project: &scorestrata_core::domain::Project) -> HumanizationView {
+    let spec = project.humanize.clone().unwrap_or_default();
+    let mut articulated_notes = 0usize;
+    let mut articulations: Vec<String> = Vec::new();
+    for pattern in &project.patterns {
+        for note in &pattern.notes {
+            if let Some(a) = note.articulation {
+                articulated_notes += 1;
+                if articulations.len() < 12 {
+                    articulations.push(format!("{a:?}"));
+                }
+            }
+        }
+    }
+    HumanizationView {
+        enabled: spec.enabled,
+        seed: spec.seed,
+        velocity_sigma: spec.velocity_sigma,
+        timing_sigma_ms: spec.timing_sigma_ms,
+        gate_length_jitter: spec.gate_length_jitter,
+        groove: spec.groove.unwrap_or_else(|| "straight".to_string()),
+        groove_amount: spec.groove_amount,
+        articulated_notes,
+        articulations,
+    }
+}
+
 /// Build the `sample_bank_catalog` resource (Phase A).
 ///
 /// The catalog is derived from the audio crate's embedded `KIT_NAMES` so it

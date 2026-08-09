@@ -1202,6 +1202,7 @@ fn mvas_step_19_composition_and_patch_mutations() {
                 duration: scorestrata_core::domain::Duration(480),
                 velocity: scorestrata_core::domain::Velocity::new(110),
                 tied: false,
+                articulation: None,
             },
             scorestrata_core::domain::Note {
                 id: scorestrata_core::ids::NoteId::new(),
@@ -1210,6 +1211,7 @@ fn mvas_step_19_composition_and_patch_mutations() {
                 duration: scorestrata_core::domain::Duration(480),
                 velocity: scorestrata_core::domain::Velocity::new(110),
                 tied: false,
+                articulation: None,
             },
         ]);
     }
@@ -1373,6 +1375,7 @@ fn mvas_step_20_mcp_dispatcher_wire_protocol() {
             duration: scorestrata_core::domain::Duration(480),
             velocity: scorestrata_core::domain::Velocity::new(100),
             tied: false,
+            articulation: None,
         });
     }
     let project_json = serde_json::to_value(&project).expect("project serializes");
@@ -3272,6 +3275,7 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
                 duration: Duration::quarter(),
                 velocity: Velocity::new(100),
                 tied: false,
+                articulation: None,
             },
             Note {
                 id: scorestrata_core::ids::NoteId::new(),
@@ -3280,6 +3284,7 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
                 duration: Duration::quarter(),
                 velocity: Velocity::new(90),
                 tied: false,
+                articulation: None,
             },
             Note {
                 id: scorestrata_core::ids::NoteId::new(),
@@ -3288,6 +3293,7 @@ fn project_with_out_of_scale_lead() -> scorestrata_core::domain::Project {
                 duration: Duration::quarter(),
                 velocity: Velocity::new(80),
                 tied: false,
+                articulation: None,
             },
         ],
         steps: Vec::new(),

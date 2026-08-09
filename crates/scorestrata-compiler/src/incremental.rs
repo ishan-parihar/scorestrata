@@ -493,6 +493,7 @@ mod tests {
                     duration: Duration::quarter(),
                     velocity: Velocity::new(100),
                     tied: false,
+                    articulation: None,
                 },
                 Note {
                     id: NoteId::new(),
@@ -501,6 +502,7 @@ mod tests {
                     duration: Duration::quarter(),
                     velocity: Velocity::new(90),
                     tied: false,
+                    articulation: None,
                 },
             ],
             steps: Vec::new(),
@@ -569,6 +571,7 @@ mod tests {
             mixer: scorestrata_core::domain::MixerState::default(),
             sound_bank: None,
             bus_graph: None,
+            humanize: None,
             status: scorestrata_core::domain::ProjectStatus::ConfigApproved,
         }
     }
@@ -624,6 +627,7 @@ mod tests {
             duration: Duration::quarter(),
             velocity: Velocity::new(80),
             tied: false,
+            articulation: None,
         });
 
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
@@ -662,6 +666,7 @@ mod tests {
             duration: Duration::quarter(),
             velocity: Velocity::new(85),
             tied: false,
+            articulation: None,
         });
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let after = cache.changed_segments(&project).unwrap();

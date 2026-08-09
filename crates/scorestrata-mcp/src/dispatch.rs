@@ -521,6 +521,22 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::set_sound_bank
             )
         }
+        "set_humanize" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::SetHumanizeParams,
+                crate::tools::set_humanize
+            )
+        }
+        "set_articulation" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::SetArticulationParams,
+                crate::tools::set_articulation
+            )
+        }
         "repeat_pattern_in_segment" => {
             route!(
                 tool_name,

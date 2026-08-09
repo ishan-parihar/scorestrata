@@ -513,6 +513,7 @@ fn pipeline_register_discipline_flags_escaped_notes() {
                 duration: scorestrata_core::domain::Duration(480),
                 velocity: scorestrata_core::domain::Velocity::new(100),
                 tied: false,
+                articulation: None,
             });
         }
     }

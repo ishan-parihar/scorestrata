@@ -383,6 +383,7 @@ fn bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration: half,
             velocity: Velocity::new(105),
             tied: false,
+            articulation: None,
         },
         Note {
             id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
@@ -391,6 +392,7 @@ fn bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration: quarter,
             velocity: Velocity::new(90),
             tied: false,
+            articulation: None,
         },
         Note {
             id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
@@ -399,6 +401,7 @@ fn bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration: half,
             velocity: Velocity::new(100),
             tied: false,
+            articulation: None,
         },
     ];
 
@@ -468,6 +471,7 @@ fn lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration: Duration::eighth(),
             velocity: Velocity::new(95),
             tied: false,
+            articulation: None,
         });
     }
 
@@ -561,6 +565,7 @@ fn house_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 100, ids),
@@ -593,6 +598,7 @@ fn house_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     // Stabs land on the "and" of each beat for an off-grid, plucky feel.
     let notes = vec![
@@ -622,6 +628,7 @@ fn house_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::half(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 64, ids),
@@ -677,6 +684,7 @@ fn ambient_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::whole(),
         velocity: Velocity::new(85),
         tied: false,
+        articulation: None,
     }];
     Pattern {
         id: PatternId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
@@ -700,6 +708,7 @@ fn ambient_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration: Duration::half(),
             velocity: Velocity::new(80),
             tied: false,
+            articulation: None,
         },
         Note {
             id: NoteId::from_uuid(uuid::Uuid::from_u128(ids.next_u128())),
@@ -708,6 +717,7 @@ fn ambient_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration: Duration::half(),
             velocity: Velocity::new(72),
             tied: false,
+            articulation: None,
         },
     ];
     Pattern {
@@ -737,6 +747,7 @@ fn ambient_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration,
             velocity: Velocity::new(velocity),
             tied: false,
+            articulation: None,
         };
     let notes = vec![
         note(root, 0, Duration::half(), 70, ids),
@@ -801,6 +812,7 @@ fn rock_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     // Driving eighths with the fifth on beat 3 and an offbeat pickup.
     let notes = vec![
@@ -841,6 +853,7 @@ fn rock_guitar_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration,
             velocity: Velocity::new(velocity),
             tied: false,
+            articulation: None,
         };
     let chug = Duration::sixteenth();
     let mut notes = Vec::new();
@@ -873,6 +886,7 @@ fn rock_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration,
             velocity: Velocity::new(velocity),
             tied: false,
+            articulation: None,
         };
     let notes = vec![
         note(third, 0, Duration::quarter(), 100, ids),
@@ -943,6 +957,7 @@ fn jazz_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::quarter(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 100, ids),
@@ -971,6 +986,7 @@ fn jazz_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(third, 0, 98, ids),
@@ -999,6 +1015,7 @@ fn jazz_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::half(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 66, ids),
@@ -1038,6 +1055,7 @@ fn hiphop_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 102, ids),
@@ -1066,6 +1084,7 @@ fn hiphop_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, eighth * 3, 94, ids),
@@ -1092,6 +1111,7 @@ fn hiphop_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::whole(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 60, ids),
@@ -1129,6 +1149,7 @@ fn dnb_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 100, ids),
@@ -1161,6 +1182,7 @@ fn dnb_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(third, eighth * 2, 94, ids),
@@ -1187,6 +1209,7 @@ fn dnb_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::whole(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 62, ids),
@@ -1223,6 +1246,7 @@ fn cinematic_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::half(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![note(root, 0, 90, ids), note(fifth, half, 78, ids)];
     Pattern {
@@ -1246,6 +1270,7 @@ fn cinematic_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::half(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![note(third, 0, 88, ids), note(fifth, half, 80, ids)];
     Pattern {
@@ -1268,6 +1293,7 @@ fn cinematic_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::whole(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 64, ids),
@@ -1305,6 +1331,7 @@ fn pop_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 102, ids),
@@ -1338,6 +1365,7 @@ fn pop_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration,
             velocity: Velocity::new(velocity),
             tied: false,
+            articulation: None,
         };
     let notes = vec![
         note(third, 0, Duration::quarter(), 100, ids),
@@ -1366,6 +1394,7 @@ fn pop_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::half(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 64, ids),
@@ -1406,6 +1435,7 @@ fn funk_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::sixteenth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 102, ids),
@@ -1436,6 +1466,7 @@ fn funk_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(third, sixteenth * 4, 96, ids),
@@ -1463,6 +1494,7 @@ fn funk_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::quarter(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, quarter * 3, 66, ids),
@@ -1500,6 +1532,7 @@ fn blues_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 0, 100, ids),
@@ -1533,6 +1566,7 @@ fn blues_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration,
             velocity: Velocity::new(velocity),
             tied: false,
+            articulation: None,
         };
     let notes = vec![
         note(third, 0, Duration::quarter(), 96, ids),
@@ -1560,6 +1594,7 @@ fn blues_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::whole(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 60, ids),
@@ -1597,6 +1632,7 @@ fn synthwave_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::eighth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = (0..8)
         .map(|i| {
@@ -1625,6 +1661,7 @@ fn synthwave_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::sixteenth(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let pattern_notes = [root, third, fifth, octave, fifth, third];
     let notes = pattern_notes
@@ -1652,6 +1689,7 @@ fn synthwave_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::whole(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 60, ids),
@@ -1689,6 +1727,7 @@ fn lofi_bass_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::half(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![note(root, 0, 86, ids), note(octave, half, 74, ids)];
     Pattern {
@@ -1713,6 +1752,7 @@ fn lofi_lead_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
             duration,
             velocity: Velocity::new(velocity),
             tied: false,
+            articulation: None,
         };
     let notes = vec![
         note(third, 0, Duration::half(), 84, ids),
@@ -1739,6 +1779,7 @@ fn lofi_pad_pattern(scale: &Scale, ids: &mut IdSeq) -> Pattern {
         duration: Duration::whole(),
         velocity: Velocity::new(velocity),
         tied: false,
+        articulation: None,
     };
     let notes = vec![
         note(root, 58, ids),

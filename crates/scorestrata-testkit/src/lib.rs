@@ -96,6 +96,7 @@ pub fn minimal_project() -> Project {
         mixer: scorestrata_core::domain::MixerState::default(),
         sound_bank: None,
         bus_graph: None,
+        humanize: None,
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -112,6 +113,7 @@ pub fn test_pattern() -> Pattern {
             duration: Duration::quarter(),
             velocity: Velocity::new(100),
             tied: false,
+            articulation: None,
         },
         Note {
             id: NoteId::new(),
@@ -120,6 +122,7 @@ pub fn test_pattern() -> Pattern {
             duration: Duration::quarter(),
             velocity: Velocity::new(90),
             tied: false,
+            articulation: None,
         },
         Note {
             id: NoteId::new(),
@@ -128,6 +131,7 @@ pub fn test_pattern() -> Pattern {
             duration: Duration::quarter(),
             velocity: Velocity::new(80),
             tied: false,
+            articulation: None,
         },
     ];
 
@@ -185,6 +189,7 @@ pub fn planned_project(name: &str, brief: &str) -> Project {
         mixer: scorestrata_core::domain::MixerState::default(),
         sound_bank: None,
         bus_graph: None,
+        humanize: None,
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -279,6 +284,7 @@ pub fn bass_pattern(key: &str) -> Pattern {
                 duration: Duration::half(),
                 velocity: Velocity::new(105),
                 tied: false,
+                articulation: None,
             },
             Note {
                 id: NoteId::new(),
@@ -287,6 +293,7 @@ pub fn bass_pattern(key: &str) -> Pattern {
                 duration: Duration::half(),
                 velocity: Velocity::new(100),
                 tied: false,
+                articulation: None,
             },
         ],
         steps: Vec::new(),
@@ -409,6 +416,7 @@ pub fn eight_bar_loop() -> Project {
         mixer: scorestrata_core::domain::MixerState::default(),
         sound_bank: None,
         bus_graph: None,
+        humanize: None,
         status: ProjectStatus::ConfigApproved,
     }
 }

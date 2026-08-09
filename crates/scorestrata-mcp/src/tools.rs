@@ -1024,6 +1024,7 @@ pub fn harmonize_melody(params: &HarmonizeMelodyParams) -> ToolReceipt {
                     note.velocity.0.saturating_sub(10),
                 ),
                 tied: false,
+                articulation: None,
             });
             harmony_notes += 1;
         }
@@ -1349,6 +1350,7 @@ pub fn increase_segment_density(params: &IncreaseSegmentDensityParams) -> ToolRe
                         note.velocity.0.saturating_sub(velocity_cut),
                     ),
                     tied: false,
+                    articulation: None,
                 });
                 notes_added += 1;
             }
@@ -1786,6 +1788,7 @@ pub fn write_pattern_notes(params: &WritePatternNotesParams) -> ToolReceipt {
             duration: scorestrata_core::domain::Duration(spec.duration),
             velocity: scorestrata_core::domain::Velocity::new(spec.velocity),
             tied: false,
+            articulation: None,
         });
         written += 1;
     }
@@ -2492,6 +2495,260 @@ pub fn set_sound_bank(params: &SetSoundBankParams) -> ToolReceipt {
         warnings: vec![],
         dry_run: false,
         diagnostics: vec![],
+    }
+}
+
+/// Parameters for `set_humanize` tool (Phase C).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetHumanizeParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project to mutate.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+    /// Enable/disable the performance layer.
+    pub enabled: bool,
+    /// PRNG seed (None = derived from the project content).
+    #[serde(default)]
+    pub seed: Option<u64>,
+    /// Gaussian velocity spread (fraction of 127, e.g. 0.05).
+    #[serde(default)]
+    pub velocity_sigma: f32,
+    /// Gaussian note-on timing jitter in ms.
+    #[serde(default)]
+    pub timing_sigma_ms: f32,
+    /// Gate-length variation (fraction of each note's length).
+    #[serde(default)]
+    pub gate_length_jitter: f32,
+    /// Groove template (`swing16`, `laid_back`, `driving`); empty = straight.
+    #[serde(default)]
+    pub groove: String,
+    /// Groove strength 0.0–1.0.
+    #[serde(default)]
+    pub groove_amount: f32,
+}
+
+/// Set the project's performance layer (Phase C humanize/groove spec).
+///
+/// Writes `project.humanize`; the next compile applies the seeded passes so
+/// the render, stems, and audit all hear the same performed timeline.
+#[must_use]
+pub fn set_humanize(params: &SetHumanizeParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_humanize".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set humanize for project '{}': no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_humanize", "project", &e),
+        };
+    let groove = params.groove.trim().to_string();
+    project.humanize = Some(scorestrata_core::domain::HumanizeSpec {
+        enabled: params.enabled,
+        seed: params.seed,
+        velocity_sigma: params.velocity_sigma.clamp(0.0, 0.3),
+        timing_sigma_ms: params.timing_sigma_ms.clamp(0.0, 30.0),
+        gate_length_jitter: params.gate_length_jitter.clamp(0.0, 0.5),
+        groove: if groove.is_empty() {
+            None
+        } else {
+            Some(groove)
+        },
+        groove_amount: params.groove_amount.clamp(0.0, 1.0),
+    });
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "render.humanize".to_string(),
+        if params.enabled {
+            "on".to_string()
+        } else {
+            "off".to_string()
+        },
+    );
+    ToolReceipt {
+        tool: "set_humanize".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Humanize {} (vel σ {}, timing σ {} ms, groove '{}' @ {})",
+            if params.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            params.velocity_sigma,
+            params.timing_sigma_ms,
+            project
+                .humanize
+                .as_ref()
+                .and_then(|h| h.groove.as_deref())
+                .unwrap_or("straight"),
+            params.groove_amount,
+        ),
+        score_delta,
+        evidence_uris: vec!["system://humanization-view".to_string()],
+        focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+        next_actions: vec![
+            "render_project".to_string(),
+            "compare_to_reference".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parameters for `set_articulation` tool (Phase C).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetArticulationParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project to mutate.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+    /// Articulation to attach (`accent`, `staccato`, `legato`, `pedal`, or
+    /// `portamento:<semitones>:<glide_ms>`).
+    pub articulation: String,
+    /// Layer name to target (empty = all layers).
+    #[serde(default)]
+    pub layer: String,
+    /// Beat positions (1-based) to articulate; empty = every note in range.
+    #[serde(default)]
+    pub beats: Vec<u32>,
+}
+
+/// Attach an articulation to selected notes (Phase C).
+///
+/// Writes `Note.articulation` on matching notes across the project's patterns;
+/// the compiler resolves it into velocity/gate/CC effects at compile time.
+#[must_use]
+pub fn set_articulation(params: &SetArticulationParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_articulation".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set articulation for project '{}': no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_articulation", "project", &e),
+        };
+    let Some(articulation) = parse_articulation(&params.articulation) else {
+        return ToolReceipt {
+            tool: "set_articulation".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Unknown articulation '{}' — use accent|staccato|legato|pedal|portamento:<semitones>:<glide_ms>",
+                params.articulation
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let sixteenth = u64::from(scorestrata_core::domain::PPQ) / 4;
+    let mut matched = 0usize;
+    for pattern in &mut project.patterns {
+        for note in &mut pattern.notes {
+            let beat_of_note = 1 + note.start.0 / sixteenth / 4; // 1-based beat
+            let layer_matches = params.layer.is_empty()
+                || pattern
+                    .name
+                    .to_lowercase()
+                    .contains(&params.layer.to_lowercase());
+            let beat_matches =
+                params.beats.is_empty() || params.beats.contains(&(beat_of_note as u32));
+            if layer_matches && beat_matches {
+                note.articulation = Some(articulation);
+                matched += 1;
+            }
+        }
+    }
+
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert("render.articulation".to_string(), matched.to_string());
+    ToolReceipt {
+        tool: "set_articulation".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!("Applied {matched} articulations ({})", params.articulation),
+        score_delta,
+        evidence_uris: vec!["system://humanization-view".to_string()],
+        focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+        next_actions: vec!["render_project".to_string(), "run_validation".to_string()],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
+/// Parse an articulation string into the domain enum.
+fn parse_articulation(s: &str) -> Option<scorestrata_core::domain::Articulation> {
+    use scorestrata_core::domain::Articulation;
+    match s.trim() {
+        "accent" => Some(Articulation::Accent),
+        "staccato" => Some(Articulation::Staccato),
+        "legato" => Some(Articulation::Legato),
+        "pedal" => Some(Articulation::Pedal),
+        other => {
+            let parts: Vec<&str> = other.split(':').collect();
+            if parts.first().copied() == Some("portamento") && parts.len() >= 3 {
+                let semitones = parts[1].parse::<i32>().ok()?;
+                let glide_ms = parts[2].parse::<f32>().ok()?;
+                Some(Articulation::Portamento {
+                    semitones,
+                    glide_ms,
+                })
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -3436,6 +3693,7 @@ pub fn clone_pattern_transposed(params: &ClonePatternTransposedParams) -> ToolRe
                 duration: n.duration,
                 velocity: n.velocity,
                 tied: n.tied,
+                articulation: None,
             })
             .collect(),
         steps: source.steps.clone(),
@@ -9584,6 +9842,7 @@ mod tests {
                 duration: scorestrata_core::domain::Duration(480),
                 velocity: scorestrata_core::domain::Velocity::new(100),
                 tied: false,
+                articulation: None,
             });
         }
     }
@@ -9685,6 +9944,7 @@ mod tests {
                 duration: scorestrata_core::domain::Duration(480),
                 velocity: scorestrata_core::domain::Velocity::new(100),
                 tied: false,
+                articulation: None,
             });
         }
         let params = HarmonizeMelodyParams {
@@ -9756,6 +10016,7 @@ mod tests {
                     duration: scorestrata_core::domain::Duration(480),
                     velocity: scorestrata_core::domain::Velocity::new(110),
                     tied: false,
+                    articulation: None,
                 },
                 scorestrata_core::domain::Note {
                     id: scorestrata_core::ids::NoteId::new(),
@@ -9764,6 +10025,7 @@ mod tests {
                     duration: scorestrata_core::domain::Duration(480),
                     velocity: scorestrata_core::domain::Velocity::new(110),
                     tied: false,
+                    articulation: None,
                 },
             ]);
         }
@@ -12312,6 +12574,150 @@ mod tests {
         assert!(receipt.summary.contains("stereo stems"));
         assert!(receipt.score_delta.contains_key("render.stereo_stems"));
         assert!(!receipt.evidence_uris.is_empty());
+    }
+
+    #[test]
+    fn set_humanize_without_payload_fails_cleanly() {
+        let params = SetHumanizeParams {
+            project_id: "proj_1".to_string(),
+            project: None,
+            enabled: true,
+            seed: Some(1),
+            velocity_sigma: 0.05,
+            timing_sigma_ms: 4.0,
+            gate_length_jitter: 0.1,
+            groove: "swing16".to_string(),
+            groove_amount: 0.5,
+        };
+        let receipt = set_humanize(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+    }
+
+    #[test]
+    fn set_humanize_writes_spec_onto_project() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let project_json = serde_json::to_value(&project).expect("project serializes");
+        let params = SetHumanizeParams {
+            project_id: project.id.to_string(),
+            project: Some(project_json),
+            enabled: true,
+            seed: Some(7),
+            velocity_sigma: 0.06,
+            timing_sigma_ms: 6.0,
+            gate_length_jitter: 0.15,
+            groove: "swing16".to_string(),
+            groove_amount: 0.6,
+        };
+        let receipt = set_humanize(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "set_humanize should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("Humanize enabled"));
+    }
+
+    #[test]
+    fn set_articulation_marks_matching_notes() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let project_json = serde_json::to_value(&project).expect("project serializes");
+        let params = SetArticulationParams {
+            project_id: project.id.to_string(),
+            project: Some(project_json),
+            articulation: "accent".to_string(),
+            layer: String::new(),
+            beats: vec![1],
+        };
+        let receipt = set_articulation(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "set_articulation should succeed, got {receipt:#?}"
+        );
+        let count: usize = receipt
+            .score_delta
+            .get("render.articulation")
+            .map_or(0, |v| v.parse().unwrap_or(0));
+        assert!(count > 0, "at least one note on beat 1 articulated");
+    }
+
+    #[test]
+    fn humanize_same_seed_renders_byte_identical_and_disabled_equals_phase_b() {
+        // Same seed twice → identical; disabled → identical to the baseline
+        // (un-humanized) render, i.e. the Phase B byte-identity (R1).
+        let project = scorestrata_testkit::melodic_techno_project();
+        let mut with_spec = project.clone();
+        with_spec.humanize = Some(scorestrata_core::domain::HumanizeSpec {
+            enabled: true,
+            seed: Some(1234),
+            velocity_sigma: 0.05,
+            timing_sigma_ms: 4.0,
+            gate_length_jitter: 0.1,
+            groove: Some("swing16".to_string()),
+            groove_amount: 0.5,
+        });
+        let render = |p: &scorestrata_core::domain::Project| {
+            let timeline = scorestrata_compiler::compile_project(p).expect("compiles");
+            let mut layer_names = std::collections::HashMap::new();
+            let mut layer_instruments: Vec<(&str, &str)> = Vec::new();
+            for segment in &p.arrangement.segments {
+                for layer in &segment.layers {
+                    layer_names.insert(layer.id.to_string(), layer.name.clone());
+                    if !layer_instruments
+                        .iter()
+                        .any(|(n, _)| *n == layer.name.as_str())
+                    {
+                        layer_instruments.push((layer.name.as_str(), layer.instrument.as_str()));
+                    }
+                }
+            }
+            let notes: Vec<scorestrata_audio::render::RenderNote> = timeline
+                .events
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    scorestrata_compiler::timeline::EventKind::NoteOn { pitch, velocity } => {
+                        Some(scorestrata_audio::render::RenderNote {
+                            pitch: pitch.0,
+                            start_tick: e.tick.0,
+                            duration_ticks: crate::patch_ops::next_note_off_duration(&timeline, e),
+                            velocity: velocity.as_f32(),
+                            layer_name: layer_names
+                                .get(&e.layer_id.to_string())
+                                .cloned()
+                                .unwrap_or_else(|| e.layer_id.to_string()),
+                        })
+                    }
+                    _ => None,
+                })
+                .collect();
+            let voices = scorestrata_audio::render::build_voices(&layer_instruments);
+            scorestrata_audio::render::render_stems(
+                &notes,
+                timeline.bpm,
+                scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+                &voices,
+            )
+            .expect("renders")
+            .1
+            .wav_bytes
+        };
+
+        let baseline = render(&project);
+        let a = render(&with_spec);
+        let b = render(&with_spec);
+        assert_eq!(a, b, "same seed → byte-identical render");
+        assert_ne!(
+            baseline, a,
+            "enabled humanize must differ from the Phase B baseline"
+        );
+        let mut disabled = project;
+        disabled.humanize = Some(scorestrata_core::domain::HumanizeSpec {
+            enabled: false,
+            ..scorestrata_core::domain::HumanizeSpec::default()
+        });
+        let baseline_with_disabled = render(&disabled);
+        assert_eq!(
+            baseline, baseline_with_disabled,
+            "disabled humanize → byte-identical to Phase B (R1)"
+        );
     }
 
     #[test]
