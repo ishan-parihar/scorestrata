@@ -970,6 +970,167 @@ pub fn canonical_matrix() -> TraceabilityMatrix {
         eval_result: Some("pass".to_string()),
     });
 
+    // ── Re-architecture upgrade plan (docs/planning/re-architecture-upgrade-plan.md) ──
+
+    matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-REARCH-A".to_string(),
+        title: "Phase A — sound bank & sampled percussion (realism win)".to_string(),
+        phase: "A".to_string(),
+        tasks: vec!["REARCH-A".to_string()],
+        code: vec![
+            "scorestrata_audio::samplebank".to_string(),
+            "scorestrata_mcp::tools::set_sound_bank".to_string(),
+            "scorestrata_mcp::tools::get_sound_bank_catalog".to_string(),
+        ],
+        tests: vec![
+            "tools::tests::set_sound_bank_*".to_string(),
+            "resources::tests::sample_bank_catalog_*".to_string(),
+            "scorestrata_audio samplebank tests".to_string(),
+        ],
+        mcp_tools: vec![
+            "set_sound_bank".to_string(),
+            "list_sound_bank".to_string(),
+            "get_sound_bank_catalog".to_string(),
+        ],
+        cli_commands: vec![
+            "ss sample-bank list".to_string(),
+            "ss sample-bank set".to_string(),
+        ],
+        docs: vec!["re-architecture-upgrade-plan.md §Phase A".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-REARCH-B".to_string(),
+        title: "Phase B — convolution reverb + bus graph routing".to_string(),
+        phase: "B".to_string(),
+        tasks: vec!["REARCH-B".to_string()],
+        code: vec![
+            "scorestrata_audio::fx".to_string(),
+            "scorestrata_mcp::tools::set_bus_graph".to_string(),
+            "scorestrata_mcp::tools::get_bus_graph".to_string(),
+            "scorestrata_audio::render::render_stereo_stems".to_string(),
+        ],
+        tests: vec![
+            "tools::tests::set_bus_graph_*".to_string(),
+            "resources::tests::bus_graph_*".to_string(),
+            "scorestrata_audio render/stems tests".to_string(),
+        ],
+        mcp_tools: vec![
+            "set_bus_graph".to_string(),
+            "get_bus_graph".to_string(),
+            "render_stereo_stems".to_string(),
+        ],
+        cli_commands: vec![],
+        docs: vec!["re-architecture-upgrade-plan.md §Phase B".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-REARCH-C".to_string(),
+        title: "Phase C — humanize + articulation performance passes".to_string(),
+        phase: "C".to_string(),
+        tasks: vec!["REARCH-C".to_string()],
+        code: vec![
+            "scorestrata_audio::render humanize/groove/articulation passes".to_string(),
+            "scorestrata_mcp::tools::set_humanize".to_string(),
+            "scorestrata_mcp::tools::set_articulation".to_string(),
+            "scorestrata_mcp::resources::humanization_resource".to_string(),
+        ],
+        tests: vec![
+            "tools::tests::set_humanize_*".to_string(),
+            "tools::tests::set_articulation_*".to_string(),
+            "resources::tests::humanization_*".to_string(),
+        ],
+        mcp_tools: vec!["set_humanize".to_string(), "set_articulation".to_string()],
+        cli_commands: vec![],
+        docs: vec!["re-architecture-upgrade-plan.md §Phase C".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-REARCH-D".to_string(),
+        title: "Phase D — mastering chain (multiband, saturation, loudness target)".to_string(),
+        phase: "D".to_string(),
+        tasks: vec!["REARCH-D".to_string()],
+        code: vec![
+            "scorestrata_audio::mastering".to_string(),
+            "scorestrata_core::domain::MasterChain".to_string(),
+            "scorestrata_mcp::tools::set_master_chain".to_string(),
+            "scorestrata_mcp::resources::master_chain_resource".to_string(),
+        ],
+        tests: vec![
+            "mastering::tests".to_string(),
+            "tools::tests::set_master_chain_*".to_string(),
+            "resources::tests::master_chain_*".to_string(),
+        ],
+        mcp_tools: vec!["set_master_chain".to_string()],
+        cli_commands: vec![
+            "ss render --rate".to_string(),
+            "ss render --bits".to_string(),
+            "ss render --dither".to_string(),
+            "ss mix master".to_string(),
+        ],
+        docs: vec!["re-architecture-upgrade-plan.md §Phase D".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-REARCH-E".to_string(),
+        title: "Phase E — reference-driven debug loop + render caching".to_string(),
+        phase: "E".to_string(),
+        tasks: vec!["REARCH-E".to_string()],
+        code: vec![
+            "scorestrata_mcp::tools::load_reference_track".to_string(),
+            "scorestrata_mcp::tools::compare_to_reference".to_string(),
+            "scorestrata_mcp::tools::apply_audit_patch".to_string(),
+            "scorestrata_mcp::tools::extract_groove_from_reference".to_string(),
+            "scorestrata_audio::render::RenderCache".to_string(),
+            "scorestrata_audio::render::render_cache_key".to_string(),
+            "scorestrata_mcp::resources::reference_profile_resource".to_string(),
+            "scorestrata_mcp::tools::get_reference_profile".to_string(),
+        ],
+        tests: vec![
+            "tools::tests::shared_render_cache_*".to_string(),
+            "tools::tests::get_reference_profile_*".to_string(),
+            "resources::tests::reference_profile_*".to_string(),
+            "render::tests::render_cache_*".to_string(),
+        ],
+        mcp_tools: vec![
+            "load_reference_track".to_string(),
+            "compare_to_reference".to_string(),
+            "apply_audit_patch".to_string(),
+            "extract_groove_from_reference".to_string(),
+            "get_reference_profile".to_string(),
+        ],
+        cli_commands: vec![
+            "ss audit --reference".to_string(),
+            "ss render --grid".to_string(),
+        ],
+        docs: vec!["re-architecture-upgrade-plan.md §Phase E".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
+    matrix.add_entry(TraceabilityEntry {
+        spec_id: "SPEC-REARCH-F".to_string(),
+        title: "Phase F — polyphony budget + anti-masking + hardening".to_string(),
+        phase: "F".to_string(),
+        tasks: vec!["REARCH-F".to_string()],
+        code: vec![
+            "scorestrata_validator::polyphony".to_string(),
+            "scorestrata_validator::scope::ValidationScope::Polyphony".to_string(),
+        ],
+        tests: vec![
+            "polyphony::tests".to_string(),
+            "scope::tests::parse_accepts_all_spec_scopes".to_string(),
+            "scope::tests::full_scope_covers_all_symbolic_planes".to_string(),
+        ],
+        mcp_tools: vec!["run_validation".to_string()],
+        cli_commands: vec!["ss validate --scope polyphony".to_string()],
+        docs: vec!["re-architecture-upgrade-plan.md §Phase F".to_string()],
+        eval_result: Some("pass".to_string()),
+    });
+
     matrix
 }
 

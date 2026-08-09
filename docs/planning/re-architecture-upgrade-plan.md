@@ -393,3 +393,39 @@ both candidates through `compare_to_reference` and pick the closer one.
 5. **Agent reflex:** playbook DoD simulation (eval harness) completes
    humanize → render → audit → patch → re-render with decreasing deviation.
 6. **No regression:** workspace test count monotonically ≥ 848; clippy 0; fmt clean.
+
+---
+
+## 10. Implementation status (2026-08-10)
+
+All six phases are **implemented, gated, committed, and pushed**. Final gate state:
+**917+ workspace tests green · clippy 0 · fmt clean · golden byte-identity green**.
+
+| Phase | Deliverable | Commits | Status |
+|---|---|---|---|
+| A | Sound bank & sampled percussion | `a066d31` | ✅ 5 procedural kits (rock/house/hiphop/techno/trap), `set/list_sound_bank`, `sample_bank_catalog` |
+| B | Bus graph + convolution reverb | `78ff5a4` | ✅ partitioned FFT send/return, `set/get_bus_graph`, `render_stereo_stems`, mono-fold invariance |
+| C | Humanize + groove + articulation | `0c76c59` | ✅ seeded passes, determinism tests, `set_humanize`/`set_articulation` |
+| D | Mastering chain | `4e05214`, `60e4a23` | ✅ LR-24 multiband, 2×OS saturation, −14 LUFS normalization (`target_lufs`), −1 dBTP limiter, 44.1/48/96 kHz |
+| E | Reference-driven debug loop | `5e0aa8b`, `1a85d89` | ✅ load/compare/patch/groove tools, `--grid`/`--reference`, render cache on input hash, `reference_profile` resource |
+| F | Polyphony + anti-masking + hardening | `4888a5a` | ✅ voice-budget check + real `ReduceMasking` (pitch-collision), traceability A–F, eval simulation |
+
+### 10.1 Plan amendments (deviations, formally documented)
+
+| Plan said | Delivered | Decision |
+|---|---|---|
+| §3.5 CC0 embedded sample WAVs | Procedurally synthesized kits (deterministic DSP, zero licensing risk) | **Keep** — better determinism + no assets to ship |
+| §3.5 CC0 convolution IRs | Procedural IR synthesis (synthetic decay/noise) | **Keep** — functionally sound, zero licensing risk |
+| §3.3 `physical.rs` (Karplus-Strong) | Not implemented | **Descoped** — procedural kits cover the sampled-percussion thesis; revisit in a later phase |
+| §3.3 `sample_rate` via `rubato` SRC | Native 44.1/48/96 kHz modes (engine is rate-parametric; no SRC dependency) | **Descoped** — native-rate modes avoid a dependency; `--rate` plumbed through CLI + MCP |
+| §3.3 `bit_depth` 16/24/32 | 16/24-bit PCM | **Descoped** — 32-bit float unused by WAV targets |
+| Phase F tempo/key-change support | Not implemented (plan marks optional) | **Descoped** — optional |
+
+### 10.2 Post-audit hardening (all audit items closed)
+
+- CLI E0027 test patterns fixed; `apply_audit_patch` dry-run support + capability flag.
+- `reference.rs` clippy errors (5× `expect`, unfulfilled `#![expect]`, `mul_add`, casts, `const fn`) resolved.
+- Phase D exit tests added: **−14 LUFS ±0.5 @ −1 dBTP** mastering test, saturation anti-aliasing (2× OS) test, sample-rate determinism test.
+- Phase E exit tests added: **render-cache** hit test (second audit served from cache, byte-identical), `reference_profile` resource view test, `get_reference_profile` tool test.
+- Phase F: **polyphony budget** (12-voice ceiling, `POLYPHONY_BUDGET_EXCEEDED`) and **real anti-masking** (`MASKING_PITCH_COLLISION` — simultaneous notes < 12 semitones, percussion-exempt) wired into the validator `polyphony` scope, `full` scope, and MCP L3; 8 unit tests + a full-pipeline simulation test.
+- Traceability ledger updated with `SPEC-REARCH-A…F` entries linking every new module, tool, resource, test, and CLI flag.

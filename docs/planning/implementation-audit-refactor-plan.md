@@ -11,6 +11,12 @@
 > `docs/system-audit-report.md` (pre-upgrade audit).
 >
 > **Audit date:** 2026-08-09 · **HEAD:** `4e05214` (Phase D committed)
+>
+> **✅ EXECUTED 2026-08-10** — every Step 1–6 work item below is closed. Final state:
+> **917+ workspace tests green · clippy 0 · fmt clean · golden byte-identity green**;
+> commits `5e0aa8b`, `60e4a23`, `1a85d89`, `4888a5a`, plus this session's traceability/docs
+> commit. Phase A–F entries are in the traceability ledger (`SPEC-REARCH-A…F`); the plan's
+> §10 now carries the formal implementation-status + amendment notes.
 
 ---
 

@@ -558,3 +558,110 @@ fn pipeline_every_segment_compiles_standalone() {
         );
     }
 }
+
+/// Phase F — polyphony budget + anti-masking through the real L3 pipeline: a
+/// layer pair voicing identical pitches at the same tick flags
+/// `MASKING_PITCH_COLLISION` (real `ReduceMasking`), and the production fix —
+/// re-voicing one layer an octave up — clears it. This closes the plan's
+/// Phase F exit for the validator on the wire path.
+#[test]
+fn pipeline_polyphony_scope_flags_then_clears_masking() {
+    let mut project = scorestrata_testkit::melodic_techno_project();
+    // Build a melodic masking pair explicitly: two non-percussion layers
+    // voicing identical pitches at the same tick (the testkit's own Drums
+    // layer is percussion with no notes, so it can never be the culprit).
+    let pattern = scorestrata_core::domain::Pattern {
+        id: scorestrata_core::ids::PatternId::new(),
+        name: "mask_pair".to_string(),
+        bars: 4,
+        time_signature: scorestrata_core::domain::TimeSignature::default(),
+        notes: vec![scorestrata_core::domain::Note {
+            id: scorestrata_core::ids::NoteId::new(),
+            pitch: scorestrata_core::domain::MidiNote::new(60),
+            start: scorestrata_core::domain::Tick::new(0),
+            duration: scorestrata_core::domain::Duration::whole(),
+            velocity: scorestrata_core::domain::Velocity::new(100),
+            tied: false,
+            articulation: None,
+        }],
+        steps: Vec::new(),
+    };
+    let make_layer = |name: &str, pattern_id: scorestrata_core::ids::PatternId| {
+        scorestrata_core::domain::Layer {
+            id: scorestrata_core::ids::LayerId::new(),
+            name: name.to_string(),
+            instrument: "lead_synth".to_string(),
+            pattern_instances: vec![scorestrata_core::domain::PatternInstance {
+                id: scorestrata_core::ids::PatternInstanceId::new(),
+                pattern_id,
+                start_tick: scorestrata_core::domain::Tick::new(0),
+                transpose: 0,
+                velocity_multiplier: 1.0,
+            }],
+            register: None,
+            automation: vec![],
+            fx: None,
+            mix_gain_db: None,
+            mix_pan: None,
+            group: None,
+        }
+    };
+    project.patterns.push(pattern.clone());
+    project.arrangement.segments[0].layers.extend(vec![
+        make_layer("Lead_A", pattern.id),
+        make_layer("Lead_B", pattern.id),
+    ]);
+
+    let run = |project: &scorestrata_core::domain::Project| {
+        scorestrata_mcp::tools::run_validation_with_project(
+            &scorestrata_mcp::tools::RunValidationParams {
+                project_id: project.id.to_string(),
+                scope: "polyphony".to_string(),
+                segment_ids: vec![],
+                layer_ids: vec![],
+                min_energy_delta: 0.15,
+            },
+            project,
+            3,
+        )
+    };
+
+    let receipt = run(&project);
+    let codes: Vec<&str> = receipt
+        .diagnostics
+        .iter()
+        .map(|d| d.code.as_str())
+        .collect();
+    assert!(
+        codes.contains(&"MASKING_PITCH_COLLISION"),
+        "twin layers voicing identical pitches must flag: {codes:?}"
+    );
+    assert!(
+        receipt
+            .diagnostics
+            .iter()
+            .flat_map(|d| d.suggested_patches.iter())
+            .any(|p| p.op == "reduce_masking"),
+        "masking diagnostics must carry the reduce_masking patch"
+    );
+
+    // The reduce_masking fix: transpose Lead_B an octave up — the one
+    // re-voicing that stays clean by construction (diff becomes exactly 12).
+    for layer in &mut project.arrangement.segments[0].layers {
+        if layer.name == "Lead_B" {
+            for instance in &mut layer.pattern_instances {
+                instance.transpose += 12;
+            }
+        }
+    }
+    let receipt = run(&project);
+    let codes: Vec<&str> = receipt
+        .diagnostics
+        .iter()
+        .map(|d| d.code.as_str())
+        .collect();
+    assert!(
+        !codes.contains(&"MASKING_PITCH_COLLISION"),
+        "octave re-voicing must clear the mask: {codes:?}"
+    );
+}
