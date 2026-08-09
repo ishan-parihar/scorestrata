@@ -1477,6 +1477,31 @@ fn handle_analyze(path: &str) -> Result<()> {
         "  Waveform:          {}",
         artifact.waveform_path.display().to_string().green()
     );
+
+    // S2 — layer-wise spectral audit: render per-layer stems and report each
+    // layer's own spectral footprint (centroid, rolloff, band energies, genre
+    // deviation) with a per-layer spectrogram PNG. The master graph alone
+    // hides which layer is muddy, thin, or aliased.
+    let layers_dir = render_dir.join("audit").join("layers");
+    match scorestrata_mcp::tools::render_project_to_layer_audit_files(&project, &layers_dir) {
+        Ok((layer_entries, _)) => {
+            println!("\n  Layer-wise spectral audit (per-layer stems):");
+            print!(
+                "{}",
+                scorestrata_audio::audit::layer_audit_text(&layer_entries)
+            );
+            println!(
+                "  Layer spectrograms: {}",
+                layers_dir.display().to_string().green()
+            );
+            for entry in &layer_entries {
+                if let Some(png) = &entry.spectrogram_path {
+                    println!("    - {}", png.green());
+                }
+            }
+        }
+        Err(e) => println!("\n  Layer-wise audit skipped: {e}"),
+    }
     Ok(())
 }
 

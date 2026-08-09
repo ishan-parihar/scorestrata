@@ -6992,10 +6992,20 @@ pub struct RenderProjectParams {
 /// Single source for the event→note→render mapping shared by
 /// [`render_project`] and the L4 validation plane, so the audio path stays
 /// deterministic and consistent everywhere.
-pub(crate) fn render_timeline_to_analysis(
+/// The render inputs shared by the master, stems, and layer-audit paths:
+/// per-layer notes, voices, automation lanes, and FX chains.
+///
+/// Extracted so every consumer (L4 validation, `render_stems`, the layer
+/// audit) converts a timeline + project to audio-engine inputs identically.
+fn timeline_render_inputs(
     timeline: &scorestrata_compiler::TimelineIR,
     project: &scorestrata_core::domain::Project,
-) -> Result<scorestrata_audio::render::RenderResult, String> {
+) -> (
+    Vec<scorestrata_audio::render::RenderNote>,
+    Vec<scorestrata_audio::render::RenderVoice>,
+    Vec<scorestrata_audio::render::RenderAutomation>,
+    Vec<scorestrata_audio::render::RenderFx>,
+) {
     // Map layer IDs to human-readable names for voice assignment, and gather
     // each layer's instrument so the render path gets real per-instrument
     // timbres. (The first-listen defect: an empty voice table rendered every
@@ -7039,6 +7049,14 @@ pub(crate) fn render_timeline_to_analysis(
     let voices = scorestrata_audio::render::build_voices(&layer_instruments);
     let automation = automation_lanes_from_timeline(timeline, &layer_names);
     let fx = render_fx_from_project(project);
+    (notes, voices, automation, fx)
+}
+
+pub(crate) fn render_timeline_to_analysis(
+    timeline: &scorestrata_compiler::TimelineIR,
+    project: &scorestrata_core::domain::Project,
+) -> Result<scorestrata_audio::render::RenderResult, String> {
+    let (notes, voices, automation, fx) = timeline_render_inputs(timeline, project);
     scorestrata_audio::render::render_notes_full(
         &notes,
         timeline.bpm,
@@ -7049,6 +7067,95 @@ pub(crate) fn render_timeline_to_analysis(
         &scorestrata_audio::render::RenderConfig::default(),
     )
     .map_err(|e| e.to_string())
+}
+
+/// Compile and render a project to per-layer stems, then audit each layer
+/// stem independently (S2 layer-wise spectrograph).
+///
+/// Returns the per-layer audit entries sorted by layer name plus the master
+/// render result. The layer view exposes each instrument's own spectral
+/// footprint (centroid, rolloff, band energies, genre deviation) so an agent
+/// can see which layer is muddy, thin, or aliased — the master graph alone
+/// hides that.
+pub fn render_project_to_layer_audit(
+    project: &scorestrata_core::domain::Project,
+) -> Result<
+    (
+        Vec<scorestrata_audio::audit::LayerAuditEntry>,
+        scorestrata_audio::render::RenderResult,
+    ),
+    String,
+> {
+    let timeline = scorestrata_compiler::compile_project(project).map_err(|e| e.to_string())?;
+    let (notes, voices, automation, fx) = timeline_render_inputs(&timeline, project);
+    let (stems, master) = scorestrata_audio::render::render_stems_full(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &voices,
+        &automation,
+        &fx,
+        &scorestrata_audio::render::RenderConfig::default(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let genre = Some(project.config.genre.as_str());
+    let layers: Vec<(&str, &[f32])> = stems
+        .iter()
+        .map(|s| (s.layer_name.as_str(), s.samples.as_slice()))
+        .collect();
+    // In-memory reports (no file writes here — the CLI writes the PNGs);
+    // spectrogram_path is filled by the CLI's file-writing step.
+    let entries = scorestrata_audio::audit::layer_audit_reports(
+        &layers,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        genre,
+    );
+    Ok((entries, master))
+}
+
+/// Like [`render_project_to_layer_audit`] but also writes a per-layer
+/// spectrogram PNG into `dir` (the CLI's `ss audit` path).
+///
+/// # Errors
+///
+/// Returns an error if compilation, rendering, or PNG writing fails.
+pub fn render_project_to_layer_audit_files(
+    project: &scorestrata_core::domain::Project,
+    dir: &std::path::Path,
+) -> Result<
+    (
+        Vec<scorestrata_audio::audit::LayerAuditEntry>,
+        scorestrata_audio::render::RenderResult,
+    ),
+    String,
+> {
+    let timeline = scorestrata_compiler::compile_project(project).map_err(|e| e.to_string())?;
+    let (notes, voices, automation, fx) = timeline_render_inputs(&timeline, project);
+    let (stems, master) = scorestrata_audio::render::render_stems_full(
+        &notes,
+        timeline.bpm,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        &voices,
+        &automation,
+        &fx,
+        &scorestrata_audio::render::RenderConfig::default(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let genre = Some(project.config.genre.as_str());
+    let layers: Vec<(&str, &[f32])> = stems
+        .iter()
+        .map(|s| (s.layer_name.as_str(), s.samples.as_slice()))
+        .collect();
+    let entries = scorestrata_audio::audit::write_layer_audit_files(
+        &layers,
+        scorestrata_audio::render::DEFAULT_SAMPLE_RATE,
+        genre,
+        dir,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((entries, master))
 }
 
 /// Build [`RenderAutomation`] lanes from a timeline's CC events (G4).
@@ -7632,6 +7739,138 @@ pub fn render_stems(params: &RenderStemsParams) -> ToolReceipt {
             evidence_uris: vec![],
             focus_uris: vec![],
             next_actions: vec!["get_failure_report".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec!["Render engine error".to_string()],
+            dry_run: false,
+            diagnostics: vec![],
+        },
+    }
+}
+
+/// Parameters for `audit_layer_spectral` tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditLayerSpectralParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project payload (when provided, the audit runs on real
+    /// per-layer stems — the layer-wise spectral debug log).
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+}
+
+/// Per-layer spectral audit — the layer-wise "debug log" for generated
+/// music (S2).
+///
+/// Renders the project to per-layer stems and reports each layer's own
+/// spectral footprint (centroid, rolloff, band energies, aliasing, genre
+/// deviation) — the master graph alone hides whether the *bass* or the
+/// *hats* are the layer that is muddy, thin, or aliased. Agents use this to
+/// target a single layer for patching instead of guessing from the blend.
+#[must_use]
+pub fn audit_layer_spectral(params: &AuditLayerSpectralParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "audit_layer_spectral".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Layer spectral audit requested for project '{}' but no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to audit its layers"
+                    .to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+
+    let project: scorestrata_core::domain::Project =
+        match serde_json::from_value(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return ToolReceipt {
+                    tool: "audit_layer_spectral".to_string(),
+                    status: ToolStatus::Failed,
+                    summary: format!("Could not deserialize project: {e}"),
+                    score_delta: BTreeMap::new(),
+                    evidence_uris: vec![],
+                    focus_uris: vec![],
+                    next_actions: vec!["get_project_summary".to_string()],
+                    cost: ToolCost::default(),
+                    warnings: vec!["Invalid project payload".to_string()],
+                    dry_run: false,
+                    diagnostics: vec![],
+                };
+            }
+        };
+
+    match render_project_to_layer_audit(&project) {
+        Ok((entries, master)) => {
+            let layer_summary = entries
+                .iter()
+                .map(|e| {
+                    format!(
+                        "{}:cen{:.0}Hz/roll{:.0}Hz/{:.0}%>16k",
+                        e.layer_name,
+                        e.report.spectral_centroid_hz,
+                        e.report.spectral_rolloff_hz,
+                        e.report.aliasing_ratio * 100.0
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let evidence_uris = entries
+                .iter()
+                .map(|e| {
+                    format!(
+                        "project://{}/audit/layers/{}",
+                        params.project_id, e.layer_name
+                    )
+                })
+                .collect();
+            let mut score_delta = BTreeMap::new();
+            score_delta.insert("audit.layers".to_string(), format!("+{}", entries.len()));
+            score_delta.insert(
+                "audio.integrated_lufs".to_string(),
+                format!("{:.1}", master.analysis.integrated_lufs),
+            );
+
+            ToolReceipt {
+                tool: "audit_layer_spectral".to_string(),
+                status: ToolStatus::Succeeded,
+                summary: format!(
+                    "Audited {} layers ({:.2}s master): {layer_summary}",
+                    entries.len(),
+                    master.duration_seconds
+                ),
+                score_delta,
+                evidence_uris,
+                focus_uris: vec![format!("project://{}/audit/layers", params.project_id)],
+                next_actions: vec!["get_audit_summary".to_string(), "suggest_fixes".to_string()],
+                cost: ToolCost {
+                    cpu_ms: 30,
+                    tool_calls: 2,
+                    render_seconds: master.duration_seconds as f32,
+                },
+                warnings: vec![],
+                dry_run: false,
+                diagnostics: vec![],
+            }
+        }
+        Err(e) => ToolReceipt {
+            tool: "audit_layer_spectral".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!("Layer spectral audit failed: {e}"),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["run_validation".to_string()],
             cost: ToolCost::default(),
             warnings: vec!["Render engine error".to_string()],
             dry_run: false,
@@ -11466,6 +11705,60 @@ mod tests {
         assert!(receipt.summary.contains("stems"));
         assert!(receipt.score_delta.contains_key("render.stems"));
         assert!(!receipt.evidence_uris.is_empty());
+    }
+
+    #[test]
+    fn audit_layer_spectral_without_project_fails_cleanly() {
+        let params = AuditLayerSpectralParams {
+            project_id: "proj_1".to_string(),
+            project: None,
+        };
+        let receipt = audit_layer_spectral(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
+        assert!(
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w.contains("No project payload")),
+            "expected missing-payload warning, got {:#?}",
+            receipt.warnings
+        );
+    }
+
+    #[test]
+    fn audit_layer_spectral_reports_each_layer_separately() {
+        // A real multi-layer project renders per-layer stems; the audit must
+        // surface each layer's own spectral footprint (the layer-wise view
+        // the master graph hides).
+        let project = scorestrata_testkit::melodic_techno_project();
+        let params = AuditLayerSpectralParams {
+            project_id: project.id.to_string(),
+            project: Some(serde_json::to_value(&project).expect("project serializes")),
+        };
+        let receipt = audit_layer_spectral(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "layer audit should succeed, got {:#?}",
+            receipt
+        );
+        assert!(receipt.summary.contains("Audited"));
+        assert!(
+            receipt.score_delta.contains_key("audit.layers"),
+            "audit.layers score present: {:#?}",
+            receipt.score_delta
+        );
+        assert!(
+            !receipt.evidence_uris.is_empty(),
+            "per-layer evidence URIs present"
+        );
+        assert!(
+            receipt
+                .evidence_uris
+                .iter()
+                .any(|uri| uri.contains("/audit/layers/")),
+            "evidence URIs point at layer audits: {:#?}",
+            receipt.evidence_uris
+        );
     }
 
     #[test]

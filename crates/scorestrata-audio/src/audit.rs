@@ -90,6 +90,114 @@ impl AuditReport {
     }
 }
 
+/// One layer's spectral audit entry — the per-layer "debug log" an agent
+/// iterates on. Unlike the master audit (a single blended graph), the layer
+/// view reports each instrument's footprint separately so a muddy bass or
+/// aliased hat is visible as *its own* deviation, not hidden in the mix.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayerAuditEntry {
+    /// Layer name.
+    pub layer_name: String,
+    /// Spectral report of the layer's rendered stem.
+    pub report: AuditReport,
+    /// Written spectrogram PNG path (relative to the audit dir), if written.
+    pub spectrogram_path: Option<String>,
+}
+
+/// Audit a set of rendered layer stems in memory (no file writes).
+///
+/// The layer-wise view the master audit cannot give: each layer's
+/// centroid / rolloff / band energies / aliasing / genre deviation are
+/// reported separately, so the agent sees exactly which layer is muddy,
+/// thin, or aliased and can patch that layer in place. Entries are sorted
+/// by layer name and carry no spectrogram path (the writer sets it).
+#[must_use]
+pub fn layer_audit_reports(
+    layers: &[(&str, &[f32])],
+    sample_rate: u32,
+    genre: Option<&str>,
+) -> Vec<LayerAuditEntry> {
+    let mut entries: Vec<LayerAuditEntry> = layers
+        .iter()
+        .map(|(layer_name, samples)| LayerAuditEntry {
+            layer_name: (*layer_name).to_string(),
+            report: audit_mono(samples, sample_rate, genre),
+            spectrogram_path: None,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.layer_name.cmp(&b.layer_name));
+    entries
+}
+
+/// Audit a set of rendered layer stems independently and write a per-layer
+/// spectrogram PNG into `dir`.
+///
+/// This is the layer-wise view the master audit cannot give: each layer's
+/// centroid / rolloff / band energies / aliasing / genre deviation are
+/// reported separately, so the agent sees exactly which layer is muddy,
+/// thin, or aliased and can patch that layer in place.
+///
+/// # Errors
+///
+/// Returns [`AudioError::Io`] on filesystem errors and
+/// [`AudioError::Visualization`] when a PNG render fails.
+pub fn write_layer_audit_files(
+    layers: &[(&str, &[f32])],
+    sample_rate: u32,
+    genre: Option<&str>,
+    dir: &std::path::Path,
+) -> Result<Vec<LayerAuditEntry>, AudioError> {
+    std::fs::create_dir_all(dir)?;
+    let mut entries = layer_audit_reports(layers, sample_rate, genre);
+    for entry in &mut entries {
+        let samples = layers
+            .iter()
+            .find(|(name, _)| *name == entry.layer_name)
+            .map_or(&[][..], |(_, samples)| *samples);
+        let safe = entry.layer_name.replace([' ', '/', '\\'], "_");
+        let png_path = dir.join(format!("{safe}.png"));
+        spectrogram_png(samples, sample_rate, &png_path)?;
+        entry.spectrogram_path = Some(png_path.display().to_string());
+    }
+    Ok(entries)
+}
+
+/// Human-readable per-layer audit table (the layer-wise debug log).
+#[must_use]
+pub fn layer_audit_text(entries: &[LayerAuditEntry]) -> String {
+    let mut out = String::new();
+    out.push_str("LAYER AUDIT:\n");
+    for entry in entries {
+        let r = &entry.report;
+        out.push_str(&format!(
+            "  {:<22} centroid {:>7.0} Hz  rolloff {:>7.0} Hz  >16k {:>5.1}%  peak {:>6.1} dBFS  rms {:>5.1} dB\n",
+            entry.layer_name,
+            r.spectral_centroid_hz,
+            r.spectral_rolloff_hz,
+            r.aliasing_ratio * 100.0,
+            r.peak_dbfs,
+            r.rms_db
+        ));
+        let bands: Vec<String> = r
+            .band_energy
+            .iter()
+            .map(|b| format!("{}:{:.0}%", b.label, b.share * 100.0))
+            .collect();
+        out.push_str(&format!("      bands: {}\n", bands.join(" ")));
+        if let Some(dev) = r.genre_fingerprint_deviation {
+            out.push_str(&format!(
+                "      genre deviation: {dev:.2}  {}\n",
+                if dev > crate::analysis::DRIFT_THRESHOLD {
+                    "DRIFT"
+                } else {
+                    "match"
+                }
+            ));
+        }
+    }
+    out
+}
+
 /// Audited artifact (report plus rendered debug logs).
 #[derive(Debug, Clone)]
 pub struct AuditArtifact {
@@ -881,6 +989,79 @@ mod tests {
         assert_eq!(&png[0..8], b"\x89PNG\r\n\x1a\n", "spectrogram is a PNG");
         let wav_png = std::fs::read(&artifact.waveform_path).expect("reads waveform");
         assert_eq!(&wav_png[0..8], b"\x89PNG\r\n\x1a\n", "waveform is a PNG");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn layer_audit_reports_each_layer_independently() {
+        // A low sine (dark bass) and a bright noise-like layer must produce
+        // two distinct reports — the layer-wise view the master graph hides.
+        let bass = sine(48_000, 110.0, 0.5);
+        let bright: Vec<f32> = (0..(48_000 / 2))
+            .map(|i| {
+                #[expect(clippy::cast_precision_loss, reason = "Test index")]
+                let t = i as f32 / 48_000.0;
+                (2.0 * std::f32::consts::PI * 4000.0 * t).sin() * 0.3
+                    + (2.0 * std::f32::consts::PI * 9000.0 * t).sin() * 0.2
+            })
+            .collect();
+        let layers = [("Bass", bass.as_slice()), ("Lead", bright.as_slice())];
+        let dir = std::env::temp_dir().join("ss_layer_audit_test");
+        let entries = write_layer_audit_files(&layers, 48_000, None, &dir).expect("writes");
+        // Sorted by layer name.
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].layer_name, "Bass");
+        assert_eq!(entries[1].layer_name, "Lead");
+        // Distinct spectral footprints: bass centroid low, lead high.
+        assert!(
+            entries[1].report.spectral_centroid_hz > entries[0].report.spectral_centroid_hz * 4.0,
+            "lead centroid {} must exceed bass centroid {}",
+            entries[1].report.spectral_centroid_hz,
+            entries[0].report.spectral_centroid_hz
+        );
+        // Each layer got its own spectrogram PNG.
+        for entry in &entries {
+            let png_path = entry.spectrogram_path.as_ref().expect("png path");
+            let png = std::fs::read(png_path).expect("reads png");
+            assert_eq!(
+                &png[0..8],
+                b"\x89PNG\r\n\x1a\n",
+                "per-layer spectrogram is a PNG"
+            );
+        }
+        // Text table names both layers.
+        let text = layer_audit_text(&entries);
+        assert!(text.contains("Bass"), "table lists Bass");
+        assert!(text.contains("Lead"), "table lists Lead");
+        assert!(
+            text.contains("LAYER AUDIT:"),
+            "table has LAYER AUDIT header"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn layer_audit_sanitizes_names_for_paths() {
+        let samples = sine(48_000, 220.0, 0.3);
+        let layers = [("Lead Octave / main", samples.as_slice())];
+        let dir = std::env::temp_dir().join("ss_layer_audit_safe_test");
+        let entries = write_layer_audit_files(&layers, 48_000, None, &dir).expect("writes");
+        let path = entries[0].spectrogram_path.as_ref().expect("png path");
+        // Spaces and slashes sanitized so the path is a single file name.
+        assert!(
+            std::path::Path::new(path).is_file(),
+            "sanitized path is a real file: {path}"
+        );
+        let file_name = std::path::Path::new(path)
+            .file_name()
+            .expect("file name")
+            .to_string_lossy()
+            .to_string();
+        assert!(!file_name.contains('/'), "slash removed: {file_name}");
+        assert!(
+            !file_name.contains(' '),
+            "space removed from file name: {file_name}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

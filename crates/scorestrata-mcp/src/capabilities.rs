@@ -384,6 +384,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
         ),
         ("render_stems", "render", false, "render", "high", "render"),
         (
+            "audit_layer_spectral",
+            "read-only",
+            false,
+            "read",
+            "low",
+            "validation",
+        ),
+        (
             "render_candidate_preview",
             "render",
             false,
