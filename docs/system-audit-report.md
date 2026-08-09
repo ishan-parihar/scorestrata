@@ -1,5 +1,9 @@
 # Scorestrata System Audit Report
 
+> **Companion plan:** `docs/planning/re-architecture-upgrade-plan.md` (R) — the
+> full re-architecture roadmap that transcends the gaps in §3 while retaining
+> this system's determinism and pipeline (no-regression rules R1–R8).
+
 > Status of the system architecture as of the S1–S4 hardening iterations
 > (synthesis upgrade, layer-wise spectrograph audit, genre expansion).
 > This document records what the system **is** today, where it still falls
