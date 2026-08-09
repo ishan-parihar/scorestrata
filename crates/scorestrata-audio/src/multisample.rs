@@ -109,7 +109,7 @@ pub struct MultiSampleInstrument {
 
 impl MultiSampleInstrument {
     /// Find the first zone covering the hit.
-    fn zone_for(&self, pitch: u8, velocity: f32) -> Option<&SampleZone> {
+    pub(crate) fn zone_for(&self, pitch: u8, velocity: f32) -> Option<&SampleZone> {
         self.zones
             .iter()
             .find(|z| z.covers(pitch, velocity.clamp(0.0, 1.0)))

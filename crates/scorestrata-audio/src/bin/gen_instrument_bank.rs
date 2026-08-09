@@ -41,8 +41,11 @@ fn main() {
     std::fs::create_dir_all(&out_dir).expect("create assets dir");
 
     // ── Guitar ─────────────────────────────────────────────────────────
-    // Zones at A2/E3/B3/E4, each with soft + hard velocity layers.
-    let guitar_roots = [45u8, 52, 59, 66];
+    // Zones at C2/A2/E3/B3/E4, each with soft + hard velocity layers. The
+    // C2 root is essential: rock power-chords sit in octaves 2–4 (MIDI
+    // 36–59) per the §1.3 register map, and the planner can voice them as
+    // low as MIDI 36.
+    let guitar_roots = [36u8, 45, 52, 59, 66];
     for (i, root) in guitar_roots.iter().enumerate() {
         for (hard, name) in [(false, "soft"), (true, "hard")] {
             let pluck = plucked_string(
@@ -58,8 +61,9 @@ fn main() {
     }
 
     // ── Bass ───────────────────────────────────────────────────────────
-    // Zones at A1/C2/G2, soft + hard layers.
-    let bass_roots = [29u8, 36, 43];
+    // Zones at C1/A1/C2/G2, soft + hard layers. The C1 root covers the
+    // planner's bass register (octaves 1–2, MIDI 12–36).
+    let bass_roots = [24u8, 29, 36, 43];
     for (i, root) in bass_roots.iter().enumerate() {
         for (hard, name) in [(false, "soft"), (true, "hard")] {
             let pluck = plucked_string(
