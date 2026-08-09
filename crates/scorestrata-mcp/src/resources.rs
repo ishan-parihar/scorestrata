@@ -1779,6 +1779,70 @@ pub fn humanization_resource(project: &scorestrata_core::domain::Project) -> Hum
     }
 }
 
+/// Snapshot of the Phase D mastering chain for the `master_chain_view` resource.
+#[must_use]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MasterChainView {
+    /// Whether the full chain is armed.
+    pub enabled: bool,
+    /// Multiband stage on/off.
+    pub multiband_enabled: bool,
+    /// Low/mid crossover in Hz.
+    pub low_crossover_hz: f32,
+    /// Mid/high crossover in Hz.
+    pub high_crossover_hz: f32,
+    /// Per-band makeup gains in dB.
+    pub low_gain_db: f32,
+    /// Per-band makeup gains in dB.
+    pub mid_gain_db: f32,
+    /// Per-band makeup gains in dB.
+    pub high_gain_db: f32,
+    /// Per-band widths (1.0 = neutral).
+    pub low_width: f32,
+    /// Per-band widths (1.0 = neutral).
+    pub mid_width: f32,
+    /// Per-band widths (1.0 = neutral).
+    pub high_width: f32,
+    /// Mono-below threshold in Hz.
+    pub mono_below_hz: f32,
+    /// Saturation stage; `None` = bypassed.
+    pub saturation: Option<String>,
+    /// Export depth + dither state; `None` = 16-bit, no dither.
+    pub dither: Option<String>,
+}
+
+/// Build the `master_chain_view` resource (Phase D).
+pub fn master_chain_resource(project: &scorestrata_core::domain::Project) -> MasterChainView {
+    let chain = project.master_chain.clone().unwrap_or_default();
+    MasterChainView {
+        enabled: chain.enabled,
+        multiband_enabled: chain.multiband.enabled,
+        low_crossover_hz: chain.multiband.low_crossover_hz,
+        high_crossover_hz: chain.multiband.high_crossover_hz,
+        low_gain_db: chain.multiband.low_gain_db,
+        mid_gain_db: chain.multiband.mid_gain_db,
+        high_gain_db: chain.multiband.high_gain_db,
+        low_width: chain.multiband.low_width,
+        mid_width: chain.multiband.mid_width,
+        high_width: chain.multiband.high_width,
+        mono_below_hz: chain.multiband.mono_below_hz,
+        saturation: chain.saturation.map(|s| {
+            format!(
+                "drive {:.1} dB, softness {:.2}, {:.0}× OS, trim {:.1} dB",
+                s.drive_db, s.softness, s.oversample, s.trim_db
+            )
+        }),
+        dither: chain.dither.map(|d| {
+            format!(
+                "{} bit, TPDF {}",
+                d.bits,
+                if d.enabled { "on" } else { "off" }
+            )
+        }),
+    }
+}
+
 /// Build the `sample_bank_catalog` resource (Phase A).
 ///
 /// The catalog is derived from the audio crate's embedded `KIT_NAMES` so it
@@ -2343,6 +2407,62 @@ mod tests {
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let json = serde_json::to_string_pretty(&templates).unwrap();
         assert!(json.contains("total_templates"));
+
+        let chain = MasterChainView {
+            enabled: true,
+            multiband_enabled: true,
+            low_crossover_hz: 120.0,
+            high_crossover_hz: 3_000.0,
+            low_gain_db: 0.0,
+            mid_gain_db: 0.0,
+            high_gain_db: 0.0,
+            low_width: 1.0,
+            mid_width: 1.0,
+            high_width: 1.0,
+            mono_below_hz: 200.0,
+            saturation: Some("drive 6.0 dB".to_string()),
+            dither: Some("24 bit, TPDF on".to_string()),
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let json = serde_json::to_string_pretty(&chain).unwrap();
+        assert!(json.contains("monoBelowHz"));
+        assert!(json.contains("multibandEnabled"));
+    }
+
+    #[test]
+    fn master_chain_resource_reflects_project_state() {
+        let mut project = scorestrata_testkit::melodic_techno_project();
+        let view = master_chain_resource(&project);
+        assert!(!view.enabled, "testkit project has no chain by default");
+        project.master_chain = Some(scorestrata_core::domain::MasterChain {
+            enabled: true,
+            multiband: scorestrata_core::domain::MultibandCfg {
+                enabled: true,
+                low_crossover_hz: 150.0,
+                ..Default::default()
+            },
+            saturation: Some(scorestrata_core::domain::SaturationCfg::default()),
+            dither: Some(scorestrata_core::domain::DitherCfg {
+                bits: 24,
+                enabled: true,
+            }),
+        });
+        let view = master_chain_resource(&project);
+        assert!(view.enabled);
+        assert!(view.multiband_enabled);
+        assert!((view.low_crossover_hz - 150.0).abs() < 1e-6);
+        assert!(
+            view.saturation
+                .as_deref()
+                .unwrap_or_default()
+                .contains("drive")
+        );
+        assert!(
+            view.dither
+                .as_deref()
+                .unwrap_or_default()
+                .contains("24 bit")
+        );
     }
 
     #[test]

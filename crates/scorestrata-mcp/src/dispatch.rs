@@ -537,6 +537,14 @@ pub fn dispatch_tool(tool_name: &str, params: serde_json::Value) -> ToolReceipt 
                 crate::tools::set_articulation
             )
         }
+        "set_master_chain" => {
+            route!(
+                tool_name,
+                params,
+                crate::tools::SetMasterChainParams,
+                crate::tools::set_master_chain
+            )
+        }
         "repeat_pattern_in_segment" => {
             route!(
                 tool_name,

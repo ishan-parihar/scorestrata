@@ -572,6 +572,14 @@ fn tool_catalog() -> Vec<ToolCapability> {
             "composition",
         ),
         (
+            "set_master_chain",
+            "mutating",
+            false,
+            "write",
+            "low",
+            "composition",
+        ),
+        (
             "set_sound_bank",
             "mutating",
             false,

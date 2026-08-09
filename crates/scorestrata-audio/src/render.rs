@@ -28,7 +28,7 @@ use scorestrata_core::domain::PPQ;
 use scorestrata_core::error::ScorestrataError;
 
 use crate::analysis::AudioAnalysis;
-use crate::mastering::{LimiterConfig, apply_limiter};
+use crate::mastering::{LimiterConfig, apply_limiter, apply_master_chain, dither_buffer};
 use crate::mixer::{Mixer, MixerChannel};
 use crate::synth::{SynthParams, Waveform, drum_kind_for_pitch, render_drum_note, render_note};
 use crate::wav::{write_wav, write_wav_stereo};
@@ -88,6 +88,13 @@ pub struct RenderConfig {
     /// Send/return + group-bus routing graph (B). `None` = flat per-layer
     /// fold, byte-identical to pre-bus renders (R1).
     pub bus_graph: Option<scorestrata_core::domain::BusGraph>,
+    /// Phase D mastering chain (multiband → saturation → limiter). `None` =
+    /// the legacy width/gain/limiter path, byte-identical to pre-Phase-D
+    /// renders (R1).
+    pub master_chain: Option<scorestrata_core::domain::MasterChain>,
+    /// PCM export depth for the WAV (16 or 24). The master chain's dither
+    /// `bits` wins when a chain is present; otherwise this applies.
+    pub bits_per_sample: u16,
 }
 
 impl Default for RenderConfig {
@@ -99,6 +106,8 @@ impl Default for RenderConfig {
             stereo_width: 1.0,
             sound_bank: None,
             bus_graph: None,
+            master_chain: None,
+            bits_per_sample: 16,
         }
     }
 }
@@ -471,11 +480,35 @@ pub fn render_notes_full(
     if config.stereo {
         let mut left = left;
         let mut right = right;
-        if let Some(limiter) = &config.limiter {
-            apply_limiter(&mut left, limiter);
-            apply_limiter(&mut right, limiter);
-        }
-        let wav_bytes = write_wav_stereo(&left, &right, sample_rate, 16);
+        let bits = match &config.master_chain {
+            // Phase D: the mastering chain owns the limiter and export depth.
+            // A present-but-disabled chain falls through to the legacy path
+            // so renders stay byte-identical (R1).
+            Some(chain) if chain.enabled => {
+                apply_master_chain(
+                    &mut left,
+                    &mut right,
+                    chain,
+                    sample_rate,
+                    config.limiter.as_ref(),
+                );
+                let dither = chain.dither.as_ref();
+                if let Some(d) = dither.filter(|d| d.enabled) {
+                    dither_buffer(&mut left, d);
+                    dither_buffer(&mut right, d);
+                }
+                dither.map_or(config.bits_per_sample, |d| d.bits)
+            }
+            // R1: legacy limiter path, 16-bit by default.
+            _ => {
+                if let Some(limiter) = &config.limiter {
+                    apply_limiter(&mut left, limiter);
+                    apply_limiter(&mut right, limiter);
+                }
+                config.bits_per_sample
+            }
+        };
+        let wav_bytes = write_wav_stereo(&left, &right, sample_rate, bits);
         let checksum = sha256_hex(&wav_bytes);
         let analysis = crate::analysis::analyze_stereo(&left, &right);
         // `mono_samples` must always be the *mastered* fold so it agrees with
@@ -496,10 +529,28 @@ pub fn render_notes_full(
         })
     } else {
         let mut mono = mono;
-        if let Some(limiter) = &config.limiter {
-            apply_limiter(&mut mono, limiter);
-        }
-        let wav_bytes = write_wav(&mono, sample_rate, 16);
+        let bits = match &config.master_chain {
+            // A present-but-disabled chain falls through to the legacy path (R1).
+            Some(chain) if chain.enabled => {
+                // The chain is stereo; processing an identical L/R pair leaves
+                // a mono fold unchanged (M/S width of equal signals is
+                // unity), so the left channel holds the mastered mono after.
+                let mut right = mono.clone();
+                apply_master_chain(&mut mono, &mut right, chain, sample_rate, None);
+                let dither = chain.dither.as_ref();
+                if let Some(d) = dither.filter(|d| d.enabled) {
+                    dither_buffer(&mut mono, d);
+                }
+                dither.map_or(config.bits_per_sample, |d| d.bits)
+            }
+            _ => {
+                if let Some(limiter) = &config.limiter {
+                    apply_limiter(&mut mono, limiter);
+                }
+                config.bits_per_sample
+            }
+        };
+        let wav_bytes = write_wav(&mono, sample_rate, bits);
         let checksum = sha256_hex(&wav_bytes);
         let analysis = crate::analysis::analyze_mono(&mono);
         Ok(RenderResult {
@@ -1444,6 +1495,8 @@ mod tests {
             stereo_width: 0.0,
             sound_bank: None,
             bus_graph: None,
+            master_chain: None,
+            bits_per_sample: 16,
         };
         let wide = RenderConfig {
             stereo: true,
@@ -1452,6 +1505,8 @@ mod tests {
             stereo_width: 2.0,
             sound_bank: None,
             bus_graph: None,
+            master_chain: None,
+            bits_per_sample: 16,
         };
         #[expect(clippy::unwrap_used, reason = "Test assertions")]
         let a = render_notes_full(&notes, 120, 48_000, &voices, &[], &[], &narrow).unwrap();
@@ -1853,6 +1908,99 @@ mod tests {
         assert_eq!(
             a.wav_bytes, b.wav_bytes,
             "empty bus graph is byte-identical"
+        );
+    }
+
+    #[test]
+    fn master_chain_disabled_is_byte_identical_to_legacy_path() {
+        // R1: a master chain present-but-disabled must not change the render.
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 0.8,
+            layer_name: "lead".to_string(),
+        }];
+        let plain = RenderConfig {
+            stereo: true,
+            ..RenderConfig::default()
+        };
+        let mut chain = scorestrata_core::domain::MasterChain {
+            enabled: false,
+            multiband: scorestrata_core::domain::MultibandCfg::default(),
+            saturation: None,
+            dither: None,
+        };
+        chain.dither = Some(scorestrata_core::domain::DitherCfg {
+            bits: 16,
+            enabled: false,
+        });
+        let with_chain = RenderConfig {
+            stereo: true,
+            master_chain: Some(chain),
+            ..RenderConfig::default()
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let a = render_notes_full(&notes, 120, 48_000, &[], &[], &[], &plain).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let b = render_notes_full(&notes, 120, 48_000, &[], &[], &[], &with_chain).unwrap();
+        assert_eq!(
+            a.wav_bytes, b.wav_bytes,
+            "disabled master chain is byte-identical (R1)"
+        );
+    }
+
+    #[test]
+    fn master_chain_enabled_changes_the_render_and_respects_bit_depth() {
+        // The chain actually processes: louder input, multiband + saturation
+        // + limiter → output differs from the plain path, and a 24-bit dither
+        // yields a 24-bit WAV.
+        let notes = vec![RenderNote {
+            pitch: 60,
+            start_tick: 0,
+            duration_ticks: u64::from(PPQ),
+            velocity: 1.0,
+            layer_name: "lead".to_string(),
+        }];
+        let plain = RenderConfig {
+            stereo: true,
+            ..RenderConfig::default()
+        };
+        let with_chain = RenderConfig {
+            stereo: true,
+            master_chain: Some(scorestrata_core::domain::MasterChain {
+                enabled: true,
+                multiband: scorestrata_core::domain::MultibandCfg::default(),
+                saturation: Some(scorestrata_core::domain::SaturationCfg {
+                    drive_db: 6.0,
+                    softness: 0.4,
+                    trim_db: -3.0,
+                    oversample: 2,
+                }),
+                dither: Some(scorestrata_core::domain::DitherCfg {
+                    bits: 24,
+                    enabled: true,
+                }),
+            }),
+            ..RenderConfig::default()
+        };
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let a = render_notes_full(&notes, 120, 48_000, &[], &[], &[], &plain).unwrap();
+        #[expect(clippy::unwrap_used, reason = "Test assertions")]
+        let b = render_notes_full(&notes, 120, 48_000, &[], &[], &[], &with_chain).unwrap();
+        assert_ne!(
+            a.wav_bytes, b.wav_bytes,
+            "an enabled chain must alter the audio"
+        );
+        // 24-bit header: bits-per-sample at offset 34.
+        let bits = u16::from_le_bytes([b.wav_bytes[34], b.wav_bytes[35]]);
+        assert_eq!(bits, 24, "24-bit dither chain must export 24-bit PCM");
+        // Mastered render must not exceed the limiter ceiling.
+        let analysis = &b.analysis;
+        assert!(
+            analysis.true_peak_dbtp <= -0.9,
+            "mastered true peak must respect the −1 dBTP ceiling, got {}",
+            analysis.true_peak_dbtp
         );
     }
 

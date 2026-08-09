@@ -483,6 +483,7 @@ fn handle_new(name: &str, brief: Option<&str>) -> Result<()> {
         sound_bank: None,
         bus_graph: None,
         humanize: None,
+        master_chain: None,
         status: ProjectStatus::ConfigApproved,
     };
 
@@ -921,6 +922,12 @@ fn render_config_for(
         stereo_width: project.mixer.stereo_width,
         sound_bank: project.sound_bank.clone(),
         bus_graph: project.bus_graph.clone(),
+        master_chain: project.master_chain.clone(),
+        bits_per_sample: project
+            .master_chain
+            .as_ref()
+            .and_then(|c| c.dither.as_ref())
+            .map_or(16, |d| d.bits),
     }
 }
 

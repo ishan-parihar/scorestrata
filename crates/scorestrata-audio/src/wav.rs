@@ -5,7 +5,7 @@
 //! reader powers the post-generation audit (`ss analyze`): a rendered WAV
 //! is decoded, spectrally analyzed, and visualized.
 //!
-//! The writer supports 16-bit PCM; the reader supports 8/16-bit PCM and
+//! The writer supports 16/24-bit PCM; the reader supports 8/16-bit PCM and
 //! 32-bit float, mono or stereo.
 
 // WAV byte offsets and sample counts are bounded by the file size, so the
@@ -19,9 +19,10 @@ use crate::error::AudioError;
 
 /// Write a stereo WAV file from interleaved L/R f32 sample slices.
 ///
-/// Returns the WAV file bytes. Supports 16-bit PCM only; other values of
-/// `bits_per_sample` are clamped to 16. Length is the min of the two
-/// channel lengths.
+/// Returns the WAV file bytes. Supports 16-bit and 24-bit PCM; other values
+/// of `bits_per_sample` clamp to the nearest supported depth (16 or 24).
+/// The 16-bit path is byte-identical to the pre-Phase-D writer (R1). Length
+/// is the min of the two channel lengths.
 #[must_use]
 pub fn write_wav_stereo(
     left: &[f32],
@@ -29,7 +30,7 @@ pub fn write_wav_stereo(
     sample_rate: u32,
     bits_per_sample: u16,
 ) -> Vec<u8> {
-    let bits = bits_per_sample.min(16);
+    let bits = if bits_per_sample >= 24 { 24 } else { 16 };
     let num_channels: u16 = 2;
     let frames = left.len().min(right.len());
     let byte_rate = sample_rate * u32::from(num_channels) * u32::from(bits) / 8;
@@ -56,8 +57,8 @@ pub fn write_wav_stereo(
     write_u32_le(&mut wav, data_size);
 
     for i in 0..frames {
-        write_i16_sample(&mut wav, left[i]);
-        write_i16_sample(&mut wav, right[i]);
+        write_pcm_sample(&mut wav, left[i], bits);
+        write_pcm_sample(&mut wav, right[i], bits);
     }
     wav
 }
@@ -69,8 +70,9 @@ pub fn write_wav_stereo(
 /// clamped to 16.
 #[must_use]
 pub fn write_wav(samples: &[f32], sample_rate: u32, bits_per_sample: u16) -> Vec<u8> {
-    // Only support 16-bit PCM
-    let bits = bits_per_sample.min(16);
+    // Support 16-bit and 24-bit PCM; the 16-bit path is byte-identical to
+    // the pre-Phase-D writer (R1).
+    let bits = if bits_per_sample >= 24 { 24 } else { 16 };
     let num_channels: u16 = 1;
     let byte_rate = sample_rate * u32::from(num_channels) * u32::from(bits) / 8;
     let block_align = num_channels * bits / 8;
@@ -102,7 +104,7 @@ pub fn write_wav(samples: &[f32], sample_rate: u32, bits_per_sample: u16) -> Vec
     write_u32_le(&mut wav, data_size);
 
     for &sample in samples {
-        write_i16_sample(&mut wav, sample);
+        write_pcm_sample(&mut wav, sample, bits);
     }
 
     wav
@@ -112,15 +114,35 @@ pub fn write_wav(samples: &[f32], sample_rate: u32, bits_per_sample: u16) -> Vec
 ///
 /// Rounds to nearest (instead of truncating) so the quantization error is
 /// bounded by half an LSB symmetrically, keeping f32 round-trips faithful.
-fn write_i16_sample(wav: &mut Vec<u8>, sample: f32) {
+/// Encode one PCM sample at the given depth (16 or 24 bits).
+///
+/// The 16-bit branch reproduces the legacy `write_i16_sample` encoding bit
+/// for bit (R1); the 24-bit branch scales to `±8_388_607` and emits three
+/// little-endian bytes.
+fn write_pcm_sample(wav: &mut Vec<u8>, sample: f32, bits: u16) {
     let clamped = sample.clamp(-1.0, 1.0);
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "Clamped f32 fits in i16 range"
-    )]
-    let int_sample = (clamped * 32767.0).round() as i16;
-    #[expect(clippy::cast_sign_loss, reason = "i16-to-u16 is safe for WAV encoding")]
-    write_u16_le(wav, int_sample as u16);
+    if bits == 24 {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Clamped f32 fits in i24 range"
+        )]
+        let int_sample = (clamped * 8_388_607.0).round() as i32;
+        #[expect(clippy::cast_sign_loss, reason = "Masked i24 bytes are non-negative")]
+        {
+            wav.push((int_sample & 0xFF) as u8);
+            wav.push(((int_sample >> 8) & 0xFF) as u8);
+            wav.push(((int_sample >> 16) & 0xFF) as u8);
+        }
+    } else {
+        let clamped = sample.clamp(-1.0, 1.0);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "Clamped f32 fits in i16 range"
+        )]
+        let int_sample = (clamped * 32767.0).round() as i16;
+        #[expect(clippy::cast_sign_loss, reason = "i16-to-u16 is safe for WAV encoding")]
+        write_u16_le(wav, int_sample as u16);
+    }
 }
 
 fn write_u32_le(buf: &mut Vec<u8>, value: u32) {
@@ -330,6 +352,78 @@ mod tests {
     }
 
     #[test]
+    fn write_wav_stereo_24_bit_has_correct_header_and_size() {
+        let left: Vec<f32> = vec![0.0, 0.25, -0.5, 0.75];
+        let right: Vec<f32> = vec![0.1, -0.2, 0.3, -0.4];
+        let wav = write_wav_stereo(&left, &right, 48_000, 24);
+        // fmt header: bits per sample at offset 34 (u16 LE).
+        let bits = u16::from_le_bytes([wav[34], wav[35]]);
+        assert_eq!(bits, 24, "header must advertise 24-bit PCM");
+        // block align = 2 ch × 3 bytes = 6 at offset 32.
+        let block_align = u16::from_le_bytes([wav[32], wav[33]]);
+        assert_eq!(block_align, 6);
+        // data chunk: 4 frames × 6 bytes.
+        let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]);
+        assert_eq!(data_size, 24);
+        assert_eq!(wav.len(), 44 + 24, "44-byte header + data");
+    }
+
+    #[test]
+    fn write_wav_24_bit_data_payload_is_three_bytes_per_sample() {
+        let samples: Vec<f32> = vec![1.0, -1.0, 0.0];
+        let wav = write_wav(&samples, 48_000, 24);
+        // data starts at 44; 3 samples × 3 bytes = 9 bytes total.
+        assert_eq!(wav.len(), 44 + 9);
+        // +1.0 → 8_388_607 (0x7F_FFFF little-endian).
+        assert_eq!(&wav[44..47], &[0xFF, 0xFF, 0x7F]);
+        // −1.0 → −8_388_607 → 0x80_0001 little-endian.
+        assert_eq!(&wav[47..50], &[0x01, 0x00, 0x80]);
+        // 0.0 → 0.
+        assert_eq!(&wav[50..53], &[0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn write_wav_stereo_16_bit_is_byte_identical_to_legacy_path() {
+        let left: Vec<f32> = vec![0.0, 0.25, -0.5, 0.75, -1.0];
+        let right: Vec<f32> = vec![0.1, -0.2, 0.3, -0.4, 0.5];
+        let now = write_wav_stereo(&left, &right, 48_000, 16);
+        // The 16-bit branch re-emits the exact same encoding as the pre-D
+        // writer: clamp × 32767, round, i16 LE. Reconstruct it manually.
+        let mut expected: Vec<u8> = Vec::new();
+        let frames = 5;
+        let byte_rate = 48_000 * 2 * 2;
+        expected.extend_from_slice(b"RIFF");
+        write_u32_le(&mut expected, 36 + frames * 4);
+        expected.extend_from_slice(b"WAVE");
+        expected.extend_from_slice(b"fmt ");
+        write_u32_le(&mut expected, 16);
+        write_u16_le(&mut expected, 1);
+        write_u16_le(&mut expected, 2);
+        write_u32_le(&mut expected, 48_000);
+        write_u32_le(&mut expected, byte_rate);
+        write_u16_le(&mut expected, 4);
+        write_u16_le(&mut expected, 16);
+        expected.extend_from_slice(b"data");
+        write_u32_le(&mut expected, frames * 4);
+        for i in 0..frames as usize {
+            for s in [left[i], right[i]] {
+                let clamped = s.clamp(-1.0, 1.0);
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "Clamped f32 fits in i16 range"
+                )]
+                let int_sample = (clamped * 32767.0).round() as i16;
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "i16-to-u16 is the legacy WAV encoding"
+                )]
+                write_u16_le(&mut expected, int_sample as u16);
+            }
+        }
+        assert_eq!(now, expected, "16-bit path must stay byte-identical (R1)");
+    }
+
+    #[test]
     fn read_wav_rejects_non_wav_bytes() {
         assert!(read_wav_stereo(b"not a wav file at all").is_err());
     }
@@ -425,12 +519,14 @@ mod tests {
     }
 
     #[test]
-    fn write_wav_clamps_to_16bit() {
+    fn write_wav_clamps_above_24_to_24() {
         let samples = vec![0.0; 10];
         let wav_32 = write_wav(&samples, 44100, 32);
-        let wav_16 = write_wav(&samples, 44100, 16);
-        // Both should produce same output (32 clamped to 16)
-        assert_eq!(wav_32.len(), wav_16.len());
+        let wav_24 = write_wav(&samples, 44100, 24);
+        // Unsupported depths above 24 clamp to 24.
+        assert_eq!(wav_32.len(), wav_24.len());
+        let bits_32 = u16::from_le_bytes([wav_32[34], wav_32[35]]);
+        assert_eq!(bits_32, 24);
     }
 
     #[test]

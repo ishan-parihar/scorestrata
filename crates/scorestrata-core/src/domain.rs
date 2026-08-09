@@ -541,6 +541,121 @@ pub struct HumanizeSpec {
     pub groove_amount: f32,
 }
 
+/// Three-band Linkwitz–Riley 24 dB/oct multiband config (Phase D).
+///
+/// Crossovers at the classic low/mid and mid/high split points
+/// (~120 Hz and ~3 kHz, plan §1.3). Each band gets its own makeup gain
+/// and optional per-band width; a mid/side matrix is applied per band so
+/// the widest element (highs) can be pushed and the low end kept mono.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[must_use]
+pub struct MultibandCfg {
+    /// Enable the multiband stage (`false` = bypass, R1).
+    pub enabled: bool,
+    /// Low/mid crossover in Hz (default 120).
+    pub low_crossover_hz: f32,
+    /// Mid/high crossover in Hz (default 3000).
+    pub high_crossover_hz: f32,
+    /// Low-band makeup gain in dB (default 0).
+    pub low_gain_db: f32,
+    /// Mid-band makeup gain in dB (default 0).
+    pub mid_gain_db: f32,
+    /// High-band makeup gain in dB (default 0).
+    pub high_gain_db: f32,
+    /// Per-band width (1.0 = neutral; <1 mono-izes, >1 widens).
+    pub low_width: f32,
+    /// Per-band width (1.0 = neutral).
+    pub mid_width: f32,
+    /// Per-band width (1.0 = neutral).
+    pub high_width: f32,
+    /// Keep everything below this Hz fully mono (side = 0). Default 200.
+    pub mono_below_hz: f32,
+}
+
+impl Default for MultibandCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            low_crossover_hz: 120.0,
+            high_crossover_hz: 3000.0,
+            low_gain_db: 0.0,
+            mid_gain_db: 0.0,
+            high_gain_db: 0.0,
+            low_width: 1.0,
+            mid_width: 1.0,
+            high_width: 1.0,
+            mono_below_hz: 200.0,
+        }
+    }
+}
+
+/// Soft-clip saturation stage (Phase D) — analog-ish drive with 2×
+/// oversampling so harmonics above Nyquist fold cleanly (no aliasing).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[must_use]
+pub struct SaturationCfg {
+    /// Drive: input gain in dB before the soft clip (default 6).
+    pub drive_db: f32,
+    /// Softness of the clip curve (0 = hard-ish, 1 = gentle tape).
+    pub softness: f32,
+    /// Oversampling factor applied before saturation (default 2).
+    pub oversample: u32,
+    /// Output trim in dB after the stage (default −3 to compensate drive).
+    pub trim_db: f32,
+}
+
+impl Default for SaturationCfg {
+    fn default() -> Self {
+        Self {
+            drive_db: 6.0,
+            softness: 0.5,
+            oversample: 2,
+            trim_db: -3.0,
+        }
+    }
+}
+
+/// TPDF dither + bit-depth config (Phase D).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[must_use]
+pub struct DitherCfg {
+    /// Target bit depth for export (16 or 24).
+    pub bits: u16,
+    /// Enable triangular-PDF dither (kills quantization distortion).
+    pub enabled: bool,
+}
+
+impl Default for DitherCfg {
+    fn default() -> Self {
+        Self {
+            bits: 16,
+            enabled: true,
+        }
+    }
+}
+
+/// The mastering chain (Phase D) — the full "mastered" signal flow.
+///
+/// Stages (§1.3): multiband dynamics/width → saturation → limiter → dither.
+/// `None` on the project keeps the current width+gain+limiter path
+/// byte-identical (R1).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[must_use]
+pub struct MasterChain {
+    /// Master switch; `false` = current path (R1).
+    pub enabled: bool,
+    /// 3-band LR-24 multiband with per-band width + mono-below.
+    pub multiband: MultibandCfg,
+    /// Soft-clip saturation stage; `None` = bypass.
+    pub saturation: Option<SaturationCfg>,
+    /// TPDF dither + bit-depth for the export; `None` = 16-bit no dither.
+    pub dither: Option<DitherCfg>,
+}
+
 /// The send/return + group-bus routing graph (Phase B).
 ///
 /// Mirrors the DAW model: layers route into named group busses (drums /
@@ -1047,6 +1162,10 @@ pub struct Project {
     /// `None` = today's behavior, byte-identical renders (R1).
     #[serde(default)]
     pub humanize: Option<HumanizeSpec>,
+    /// Opt-in mastering chain (D): multiband + saturation + dither.
+    /// `None` = current width+gain+limiter path, byte-identical (R1).
+    #[serde(default)]
+    pub master_chain: Option<MasterChain>,
     /// Current status.
     pub status: ProjectStatus,
 }

@@ -788,6 +788,7 @@ mod tests {
             spectral_reference: None,
             mixer: scorestrata_core::domain::MixerState::default(),
             humanize: None,
+            master_chain: None,
             status: scorestrata_core::domain::ProjectStatus::ConfigApproved,
             sound_bank: None,
             bus_graph: None,

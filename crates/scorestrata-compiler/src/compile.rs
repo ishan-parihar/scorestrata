@@ -529,6 +529,7 @@ mod tests {
             sound_bank: None,
             bus_graph: None,
             humanize: None,
+            master_chain: None,
             status: ProjectStatus::ConfigApproved,
         }
     }

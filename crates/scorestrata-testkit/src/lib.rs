@@ -97,6 +97,7 @@ pub fn minimal_project() -> Project {
         sound_bank: None,
         bus_graph: None,
         humanize: None,
+        master_chain: None,
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -190,6 +191,7 @@ pub fn planned_project(name: &str, brief: &str) -> Project {
         sound_bank: None,
         bus_graph: None,
         humanize: None,
+        master_chain: None,
         status: ProjectStatus::ConfigApproved,
     }
 }
@@ -417,6 +419,7 @@ pub fn eight_bar_loop() -> Project {
         sound_bank: None,
         bus_graph: None,
         humanize: None,
+        master_chain: None,
         status: ProjectStatus::ConfigApproved,
     }
 }

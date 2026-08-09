@@ -2638,6 +2638,193 @@ pub struct SetArticulationParams {
     pub beats: Vec<u32>,
 }
 
+/// Parameters for `set_master_chain` (Phase D).
+#[must_use]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetMasterChainParams {
+    /// Project ID.
+    pub project_id: String,
+    /// Serialized project to mutate.
+    #[serde(default)]
+    pub project: Option<serde_json::Value>,
+    /// Master switch for the full mastering chain.
+    pub enabled: bool,
+    /// Multiband stage: enable the LR-24 split.
+    #[serde(default)]
+    pub multiband_enabled: bool,
+    /// Low/mid crossover in Hz (default 120).
+    #[serde(default = "default_crossover_low")]
+    pub low_crossover_hz: f32,
+    /// Mid/high crossover in Hz (default 3000).
+    #[serde(default = "default_crossover_high")]
+    pub high_crossover_hz: f32,
+    /// Low-band makeup gain in dB.
+    #[serde(default)]
+    pub low_gain_db: f32,
+    /// Mid-band makeup gain in dB.
+    #[serde(default)]
+    pub mid_gain_db: f32,
+    /// High-band makeup gain in dB.
+    #[serde(default)]
+    pub high_gain_db: f32,
+    /// Per-band widths (1.0 = neutral).
+    #[serde(default = "default_width")]
+    pub low_width: f32,
+    /// Per-band widths (1.0 = neutral).
+    #[serde(default = "default_width")]
+    pub mid_width: f32,
+    /// Per-band widths (1.0 = neutral).
+    #[serde(default = "default_width")]
+    pub high_width: f32,
+    /// Keep everything below this Hz fully mono (default 200).
+    #[serde(default = "default_mono_below")]
+    pub mono_below_hz: f32,
+    /// Saturation stage: `None`/0 disables; drive in dB (default 6).
+    #[serde(default)]
+    pub saturation_drive_db: Option<f32>,
+    /// Saturation softness 0.0–1.0 (default 0.5).
+    #[serde(default)]
+    pub saturation_softness: f32,
+    /// Saturation oversampling (1 or 2; default 2).
+    #[serde(default)]
+    pub saturation_oversample: u32,
+    /// Output trim after saturation in dB (default −3).
+    #[serde(default)]
+    pub saturation_trim_db: f32,
+    /// Export bit depth (16 or 24) when dither is on.
+    #[serde(default)]
+    pub dither_bits: u16,
+    /// Enable TPDF dither on export.
+    #[serde(default)]
+    pub dither_enabled: bool,
+}
+
+const fn default_crossover_low() -> f32 {
+    120.0
+}
+
+const fn default_crossover_high() -> f32 {
+    3000.0
+}
+
+const fn default_width() -> f32 {
+    1.0
+}
+
+const fn default_mono_below() -> f32 {
+    200.0
+}
+
+/// Configure the Phase D mastering chain (multiband → saturation → dither).
+///
+/// Writes `Project.master_chain`; the next `render_project` applies the full
+/// mastered signal flow. Setting `enabled = false` restores the legacy
+/// width/gain/limiter path (R1 byte-identity).
+#[must_use]
+pub fn set_master_chain(params: &SetMasterChainParams) -> ToolReceipt {
+    let Some(project_json) = &params.project else {
+        return ToolReceipt {
+            tool: "set_master_chain".to_string(),
+            status: ToolStatus::Failed,
+            summary: format!(
+                "Cannot set master chain for project '{}': no project payload provided",
+                params.project_id
+            ),
+            score_delta: BTreeMap::new(),
+            evidence_uris: vec![],
+            focus_uris: vec![],
+            next_actions: vec!["get_project_summary".to_string()],
+            cost: ToolCost::default(),
+            warnings: vec![
+                "No project payload — supply the serialized project to mutate".to_string(),
+            ],
+            dry_run: false,
+            diagnostics: vec![],
+        };
+    };
+    let mut project =
+        match serde_json::from_value::<scorestrata_core::domain::Project>(project_json.clone()) {
+            Ok(p) => p,
+            Err(e) => return deserialize_error_receipt("set_master_chain", "project", &e),
+        };
+    let dither = (params.dither_bits >= 16).then_some(scorestrata_core::domain::DitherCfg {
+        bits: if params.dither_bits >= 24 { 24 } else { 16 },
+        enabled: params.dither_enabled,
+    });
+    let saturation =
+        params
+            .saturation_drive_db
+            .map(|drive_db| scorestrata_core::domain::SaturationCfg {
+                drive_db: drive_db.clamp(-12.0, 24.0),
+                softness: params.saturation_softness.clamp(0.0, 1.0),
+                oversample: params.saturation_oversample.clamp(1, 4),
+                trim_db: params.saturation_trim_db.clamp(-24.0, 12.0),
+            });
+    project.master_chain = Some(scorestrata_core::domain::MasterChain {
+        enabled: params.enabled,
+        multiband: scorestrata_core::domain::MultibandCfg {
+            enabled: params.multiband_enabled,
+            low_crossover_hz: params.low_crossover_hz.clamp(20.0, 1000.0),
+            high_crossover_hz: params.high_crossover_hz.clamp(200.0, 16_000.0),
+            low_gain_db: params.low_gain_db.clamp(-24.0, 24.0),
+            mid_gain_db: params.mid_gain_db.clamp(-24.0, 24.0),
+            high_gain_db: params.high_gain_db.clamp(-24.0, 24.0),
+            low_width: params.low_width.clamp(0.0, 4.0),
+            mid_width: params.mid_width.clamp(0.0, 4.0),
+            high_width: params.high_width.clamp(0.0, 4.0),
+            mono_below_hz: params.mono_below_hz.clamp(20.0, 1000.0),
+        },
+        saturation,
+        dither,
+    });
+    let mut score_delta = BTreeMap::new();
+    score_delta.insert(
+        "master.chain".to_string(),
+        if params.enabled {
+            "on".to_string()
+        } else {
+            "off".to_string()
+        },
+    );
+    score_delta.insert("master.bits".to_string(), params.dither_bits.to_string());
+    ToolReceipt {
+        tool: "set_master_chain".to_string(),
+        status: ToolStatus::Succeeded,
+        summary: format!(
+            "Master chain {} (multiband {}, saturation {}, dither {} @ {} bit)",
+            if params.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            if params.multiband_enabled {
+                "LR-24 on"
+            } else {
+                "off"
+            },
+            if saturation.is_some() { "on" } else { "off" },
+            if params.dither_enabled { "on" } else { "off" },
+            if params.dither_bits >= 24 { 24 } else { 16 },
+        ),
+        score_delta,
+        evidence_uris: vec!["system://master-chain-view".to_string()],
+        focus_uris: vec![format!("project://{}/render/latest", params.project_id)],
+        next_actions: vec![
+            "render_project".to_string(),
+            "compare_to_reference".to_string(),
+        ],
+        cost: ToolCost {
+            cpu_ms: 2,
+            tool_calls: 1,
+            ..Default::default()
+        },
+        warnings: vec![],
+        dry_run: false,
+        diagnostics: vec![],
+    }
+}
+
 /// Attach an articulation to selected notes (Phase C).
 ///
 /// Writes `Note.articulation` on matching notes across the project's patterns;
@@ -7829,6 +8016,12 @@ pub fn render_config_from_project(
         sound_bank: project.sound_bank.clone(),
         bus_graph: project.bus_graph.clone(),
         stereo_width: project.mixer.stereo_width,
+        master_chain: project.master_chain.clone(),
+        bits_per_sample: project
+            .master_chain
+            .as_ref()
+            .and_then(|c| c.dither.as_ref())
+            .map_or(16, |d| d.bits),
     }
 }
 
@@ -12614,6 +12807,72 @@ mod tests {
             "set_humanize should succeed, got {receipt:#?}"
         );
         assert!(receipt.summary.contains("Humanize enabled"));
+    }
+
+    #[test]
+    fn set_master_chain_writes_chain_onto_project() {
+        let project = scorestrata_testkit::melodic_techno_project();
+        let project_json = serde_json::to_value(&project).expect("project serializes");
+        let params = SetMasterChainParams {
+            project_id: project.id.to_string(),
+            project: Some(project_json),
+            enabled: true,
+            multiband_enabled: true,
+            low_crossover_hz: 150.0,
+            high_crossover_hz: 4_000.0,
+            low_gain_db: 1.0,
+            mid_gain_db: -1.0,
+            high_gain_db: 0.5,
+            low_width: 1.0,
+            mid_width: 1.2,
+            high_width: 1.4,
+            mono_below_hz: 120.0,
+            saturation_drive_db: Some(4.0),
+            saturation_softness: 0.5,
+            saturation_oversample: 2,
+            saturation_trim_db: -2.0,
+            dither_bits: 24,
+            dither_enabled: true,
+        };
+        let receipt = set_master_chain(&params);
+        assert!(
+            matches!(receipt.status, ToolStatus::Succeeded),
+            "set_master_chain should succeed, got {receipt:#?}"
+        );
+        assert!(receipt.summary.contains("Master chain enabled"));
+        assert!(receipt.summary.contains("24 bit"));
+        assert!(
+            receipt
+                .evidence_uris
+                .contains(&"system://master-chain-view".to_string())
+        );
+    }
+
+    #[test]
+    fn set_master_chain_without_project_fails_cleanly() {
+        let params = SetMasterChainParams {
+            project_id: "proj_1".to_string(),
+            project: None,
+            enabled: true,
+            multiband_enabled: false,
+            low_crossover_hz: 120.0,
+            high_crossover_hz: 3_000.0,
+            low_gain_db: 0.0,
+            mid_gain_db: 0.0,
+            high_gain_db: 0.0,
+            low_width: 1.0,
+            mid_width: 1.0,
+            high_width: 1.0,
+            mono_below_hz: 200.0,
+            saturation_drive_db: None,
+            saturation_softness: 0.5,
+            saturation_oversample: 2,
+            saturation_trim_db: -3.0,
+            dither_bits: 16,
+            dither_enabled: false,
+        };
+        let receipt = set_master_chain(&params);
+        assert!(matches!(receipt.status, ToolStatus::Failed));
     }
 
     #[test]
