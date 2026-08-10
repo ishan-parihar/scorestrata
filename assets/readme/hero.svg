@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="360" viewBox="0 0 1200 360"
+     role="img" aria-labelledby="title desc">
+  <title id="title">Scorestrata — deterministic composition compiler</title>
+  <desc id="desc">Scorestrata turns a plain-language brief into a mastered stereo WAV through a layered arrangement: a timeline of segments (intro, verse, build, chorus, bridge, finale) rendered across track lanes with the same input always producing byte-identical output.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0D1119"/>
+      <stop offset="1" stop-color="#090C12"/>
+    </linearGradient>
+    <linearGradient id="lane" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#141A26"/>
+      <stop offset="1" stop-color="#10151F"/>
+    </linearGradient>
+    <linearGradient id="play" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F5A623" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#F5A623" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#F5A623" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="360" rx="24" fill="url(#bg)"/>
+  <rect x="1" y="1" width="1198" height="358" rx="23" fill="none" stroke="#1E2632" stroke-width="2"/>
+
+  <!-- ══════════ LEFT: IDENTITY ══════════ -->
+  <g transform="translate(56 40)">
+    <text x="0" y="0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="19" letter-spacing="4" fill="#F5A623">AGENTIC COMPOSITION COMPILER</text>
+
+    <text x="0" y="72" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+          font-size="64" font-weight="800" fill="#ECF0F7" letter-spacing="-1.5">Scorestrata</text>
+
+    <text x="0" y="126" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+          font-size="25" font-weight="600" fill="#AEB7C8">From a plain-language brief to a mastered WAV —</text>
+    <text x="0" y="162" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+          font-size="25" font-weight="600" fill="#AEB7C8">deterministically. Same input, byte-identical output.</text>
+
+    <text x="0" y="216" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="16" fill="#6E7889">Rust · 11 crates · 944 tests · clippy -D warnings clean</text>
+    <text x="0" y="242" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="16" fill="#6E7889">Recorded SF2 voices · round-robin takes · MIDI in/out</text>
+
+    <!-- status dots -->
+    <circle cx="4" cy="292" r="4" fill="#F5A623"/>
+    <circle cx="22" cy="292" r="4" fill="#3A4B66"/>
+    <circle cx="40" cy="292" r="4" fill="#45D6C8"/>
+    <circle cx="58" cy="292" r="4" fill="#2E3B4F"/>
+    <text x="74" y="297" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="15" fill="#6E7889">4 interfaces — CLI · MCP · agent crate · eval suite</text>
+  </g>
+
+  <!-- ══════════ RIGHT: PROJECT MATERIAL ══════════ -->
+  <g transform="translate(620 40)">
+    <!-- segment strip -->
+    <text x="0" y="0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+          font-size="15" letter-spacing="2" fill="#6E7889">ARRANGEMENT — 60 BARS · I–VI–III–VII</text>
+
+    <g transform="translate(0 16)">
+      <!-- Intro -->
+      <rect x="0"   y="0" width="54" height="58" rx="6" fill="#2E3B4F"/>
+      <text x="27" y="26" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#8FA0BD">INTRO</text>
+      <text x="27" y="44" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#4E5E7A">4</text>
+      <!-- Verse -->
+      <rect x="58"  y="0" width="54" height="58" rx="6" fill="#3A4B66"/>
+      <text x="85" y="26" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#9FB0CF">VERSE</text>
+      <text x="85" y="44" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#5A6C8C">8</text>
+      <!-- Build -->
+      <rect x="116" y="0" width="54" height="58" rx="6" fill="#7A5A2E"/>
+      <text x="143" y="26" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#D9B077">BUILD</text>
+      <text x="143" y="44" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#8A6A3E">4</text>
+      <!-- Chorus -->
+      <rect x="174" y="0" width="54" height="58" rx="6" fill="#F5A623"/>
+      <text x="201" y="26" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" font-weight="700" fill="#1A1206">CHORUS</text>
+      <text x="201" y="44" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" font-weight="700" fill="#7A5312">8</text>
+      <!-- Verse -->
+      <rect x="232" y="0" width="54" height="58" rx="6" fill="#3A4B66"/>
+      <text x="259" y="26" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#9FB0CF">VERSE</text>
+      <text x="259" y="44" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#5A6C8C">8</text>
+      <!-- Build -->
+      <rect x="290" y="0" width="54" height="58" rx="6" fill="#7A5A2E"/>
+      <text x="317" y="26" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#D9B077">BUILD</text>
+      <text x="317" y="44" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#8A6A3E">4</text>
+      <!-- Chorus -->
+      <rect x="348" y="0" width="54" height="58" rx="6" fill="#F5A623"/>
+      <text x="375" y="26" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" font-weight="700" fill="#1A1206">CHORUS</text>
+      <text x="375" y="44" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" font-weight="700" fill="#7A5312">8</text>
+      <!-- Bridge -->
+      <rect x="406" y="0" width="54" height="58" rx="6" fill="#8B5CF6"/>
+      <text x="433" y="26" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#C9B8F2">BRIDGE</text>
+      <text x="433" y="44" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#6E4FC9">8</text>
+      <!-- Finale -->
+      <rect x="464" y="0" width="54" height="58" rx="6" fill="#E15A5A"/>
+      <text x="491" y="26" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#F6C4C4">FINALE</text>
+      <text x="491" y="44" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+            font-size="12" fill="#B04A4A">8</text>
+    </g>
+
+    <!-- track lanes -->
+    <g transform="translate(0 96)">
+      <text x="0" y="0" font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+            font-size="15" letter-spacing="2" fill="#6E7889">TRACK STRATA</text>
+
+      <!-- lane 1: drums -->
+      <rect x="0" y="14" width="524" height="40" rx="8" fill="url(#lane)"/>
+      <rect x="0" y="14" width="524" height="40" rx="8" fill="none" stroke="#1E2632"/>
+      <text x="14" y="38" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#8A93A6">DRUMS</text>
+      <path d="M 96 34 L 120 34 L 124 26 L 128 42 L 132 22 L 136 40 L 148 34 L 172 34 L 176 26 L 180 42 L 184 22 L 188 40 L 200 34 L 224 34 L 228 26 L 232 42 L 236 22 L 240 40 L 252 34 L 276 34 L 280 26 L 284 42 L 288 22 L 292 40 L 304 34 L 328 34 L 332 26 L 336 42 L 340 22 L 344 40 L 356 34 L 380 34 L 384 26 L 388 42 L 392 22 L 396 40 L 408 34 L 432 34 L 436 26 L 440 42 L 444 22 L 448 40 L 460 34 L 484 34 L 488 26 L 492 42 L 496 22 L 500 40 L 512 34"
+            fill="none" stroke="#F5A623" stroke-width="2" stroke-linecap="round"/>
+      <text x="524" y="38" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#4E5E7A">SF2 KIT</text>
+
+      <!-- lane 2: bass -->
+      <rect x="0" y="62" width="524" height="40" rx="8" fill="url(#lane)"/>
+      <rect x="0" y="62" width="524" height="40" rx="8" fill="none" stroke="#1E2632"/>
+      <text x="14" y="86" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#8A93A6">BASS</text>
+      <path d="M 96 82 L 200 82 L 200 74 L 204 90 L 208 72 L 212 92 L 216 74 L 220 90 L 224 82 L 328 82 L 328 74 L 332 90 L 336 72 L 340 92 L 344 74 L 348 90 L 352 82 L 456 82 L 456 74 L 460 90 L 464 72 L 468 92 L 472 74 L 476 90 L 480 82 L 524 82"
+            fill="none" stroke="#45D6C8" stroke-width="2" stroke-linecap="round"/>
+      <text x="524" y="86" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#2E4E4A">OCTAVE BOUNCE</text>
+
+      <!-- lane 3: guitar -->
+      <rect x="0" y="110" width="524" height="40" rx="8" fill="url(#lane)"/>
+      <rect x="0" y="110" width="524" height="40" rx="8" fill="none" stroke="#1E2632"/>
+      <text x="14" y="134" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#8A93A6">GUITAR</text>
+      <path d="M 96 130 L 116 118 L 124 142 L 132 116 L 140 144 L 148 120 L 158 130 L 178 118 L 186 142 L 194 116 L 202 144 L 210 120 L 220 130 L 240 118 L 248 142 L 256 116 L 264 144 L 272 120 L 282 130 L 302 118 L 310 142 L 318 116 L 326 144 L 334 120 L 344 130 L 364 118 L 372 142 L 380 116 L 388 144 L 396 120 L 406 130 L 426 118 L 434 142 L 442 116 L 450 144 L 458 120 L 468 130 L 524 130"
+            fill="none" stroke="#8FA0BD" stroke-width="2" stroke-linecap="round"/>
+      <text x="524" y="134" text-anchor="end" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#4E5E7A">L/R DOUBLE-TRACKED</text>
+    </g>
+  </g>
+</svg>
