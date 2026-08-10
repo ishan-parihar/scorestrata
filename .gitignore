@@ -37,3 +37,8 @@ lp_demo/
 .sisyphus/
 .oh-my-opencode/
 .history/
+
+# local secrets
+.env
+.env.*
+!.env.example
