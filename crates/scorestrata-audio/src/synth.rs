@@ -136,6 +136,12 @@ impl Default for SynthParams {
 }
 
 /// The General-MIDI drum voice for a pitch (36 = kick, 38 = snare, …).
+///
+/// The set grew past the Phase-A five (kick/snare/hat/open-hat/clap) to the
+/// full kit a real rock/disco track needs: three toms, crash and ride. Every
+/// variant has a synth fallback in [`render_drum_note`] so the bankless path
+/// (R1) renders real drum sounds for any of them, and the sampled `sf2` kit
+/// overrides each with a recorded one-shot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrumKind {
     /// Kick drum (pitch sweep, short decay).
@@ -148,21 +154,40 @@ pub enum DrumKind {
     OpenHat,
     /// Clap (layered noise bursts).
     Clap,
+    /// Floor / low tom (pitched drum, low body).
+    TomLow,
+    /// Rack / mid tom (pitched drum, mid body).
+    TomMid,
+    /// High tom (pitched drum, high body).
+    TomHigh,
+    /// Crash cymbal (long bright noise wash).
+    Crash,
+    /// Ride cymbal (metallic ring + medium noise decay).
+    Ride,
 }
 
 /// Map a MIDI pitch to a drum voice using the General-MIDI drum map.
 ///
 /// The compiler already emits these pitches for step patterns
 /// (`drum_pitch_for_velocity`: kick=36, snare=38, hat=42), so percussion
-/// layers render as real drums instead of tone-frequency buzzes.
+/// layers render as real drums instead of tone-frequency buzzes. Note-based
+/// drum layers can emit any GM pitch: open hat 46, clap 39, toms 41–50,
+/// crash 57 and ride 59. Pitches 49/51 keep the legacy clap mapping (the
+/// Phase-I demos write clap notes there); the kit's crash lives at 57 and
+/// ride at 59 so nothing collides.
 #[must_use]
 pub const fn drum_kind_for_pitch(pitch: u8) -> Option<DrumKind> {
     match pitch {
         35 | 36 => Some(DrumKind::Kick),
         38 | 40 => Some(DrumKind::Snare),
+        39 | 49 | 51 => Some(DrumKind::Clap),
         42 | 44 => Some(DrumKind::Hat),
         46 => Some(DrumKind::OpenHat),
-        49 | 51 => Some(DrumKind::Clap),
+        41 | 43 => Some(DrumKind::TomLow),
+        45 | 47 => Some(DrumKind::TomMid),
+        48 | 50 => Some(DrumKind::TomHigh),
+        57 => Some(DrumKind::Crash),
+        59 => Some(DrumKind::Ride),
         _ => None,
     }
 }
@@ -628,6 +653,10 @@ fn xorshift32(state: &mut u32) -> f32 {
 ///
 /// Deterministic: every hit uses a fixed noise seed, so identical inputs
 /// produce identical bytes (per §17 determinism rules).
+#[expect(
+    clippy::too_many_lines,
+    reason = "Full kit synthesis composes ten distinct voice recipes; splitting risks subtle state bugs"
+)]
 pub fn render_drum_note(kind: DrumKind, velocity: f32, sample_rate: f32, output: &mut [f32]) {
     match kind {
         DrumKind::Kick => {
@@ -705,6 +734,70 @@ pub fn render_drum_note(kind: DrumKind, velocity: f32, sample_rate: f32, output:
                     }
                 }
                 *s = xorshift32(&mut state) * amp * velocity;
+            }
+        }
+        DrumKind::TomLow | DrumKind::TomMid | DrumKind::TomHigh => {
+            // Pitched tom: a sine body with a fast pitch sweep (like the
+            // kick but tuned up and with a shorter decay) plus a soft skin
+            // noise transient. Body roots: floor ~110 Hz, rack ~155 Hz,
+            // high ~205 Hz, each sweeping down a fourth.
+            let (f0, f1, decay): (f32, f32, f32) = match kind {
+                DrumKind::TomLow => (110.0, 78.0, 0.30),
+                DrumKind::TomMid => (155.0, 108.0, 0.24),
+                _ => (205.0, 142.0, 0.18),
+            };
+            let mut phase = 0.0f32;
+            let mut state = 0x70E7_EE0Fu32;
+            for (i, s) in output.iter_mut().enumerate() {
+                let t = i as f32 / sample_rate;
+                let freq = f0.mul_add((-t / 0.05).exp(), f1 - f0);
+                phase = (phase + freq / sample_rate) % 1.0;
+                let amp = (-t / decay).exp();
+                let body = (phase * std::f32::consts::TAU).sin() * amp;
+                // Skin transient: first ~4 ms of low-passed noise.
+                let n = if t < 0.004 {
+                    xorshift32(&mut state) * 0.5
+                } else {
+                    0.0
+                };
+                *s = body.mul_add(1.3, n).tanh() * 0.9 * velocity;
+            }
+        }
+        DrumKind::Crash => {
+            // Crash: a long, bright noise wash with a fast attack and a
+            // ~1.2 s decay — the "explosion" of a cymbal. High-passed noise
+            // keeps it sizzly rather than rumbling.
+            let mut state = 0xC84A_5C12u32;
+            let mut prev = 0.0f32;
+            let mut hp = 0.0f32;
+            for (i, s) in output.iter_mut().enumerate() {
+                let t = i as f32 / sample_rate;
+                let amp = (-t / 1.2).exp();
+                let n = xorshift32(&mut state);
+                let diff = n - prev;
+                prev = n;
+                hp = 0.35f32.mul_add(diff - hp, hp);
+                *s = hp * 2.6 * amp * velocity;
+            }
+        }
+        DrumKind::Ride => {
+            // Ride: a metallic ring (sine around 235 Hz with a fast decay)
+            // plus a moderate noise decay — the "tick" of a ride bell over
+            // a ~0.8 s body.
+            let mut state = 0x81DE_B0A7u32;
+            let mut prev = 0.0f32;
+            let mut hp = 0.0f32;
+            for (i, s) in output.iter_mut().enumerate() {
+                let t = i as f32 / sample_rate;
+                let amp = (-t / 0.8).exp();
+                let ring = (std::f32::consts::TAU * 235.0 * i as f32 / sample_rate).sin()
+                    * (-t / 0.35).exp()
+                    * 0.5;
+                let n = xorshift32(&mut state);
+                let diff = n - prev;
+                prev = n;
+                hp = 0.4f32.mul_add(diff - hp, hp);
+                *s = hp.mul_add(1.8, ring) * amp * velocity;
             }
         }
     }
@@ -1101,8 +1194,41 @@ mod tests {
         assert_eq!(drum_kind_for_pitch(38), Some(DrumKind::Snare));
         assert_eq!(drum_kind_for_pitch(42), Some(DrumKind::Hat));
         assert_eq!(drum_kind_for_pitch(46), Some(DrumKind::OpenHat));
-        assert_eq!(drum_kind_for_pitch(49), Some(DrumKind::Clap));
+        assert_eq!(drum_kind_for_pitch(39), Some(DrumKind::Clap));
+        assert_eq!(
+            drum_kind_for_pitch(49),
+            Some(DrumKind::Clap),
+            "legacy clap pitch"
+        );
+        assert_eq!(drum_kind_for_pitch(43), Some(DrumKind::TomLow));
+        assert_eq!(drum_kind_for_pitch(45), Some(DrumKind::TomMid));
+        assert_eq!(drum_kind_for_pitch(48), Some(DrumKind::TomHigh));
+        assert_eq!(drum_kind_for_pitch(57), Some(DrumKind::Crash));
+        assert_eq!(drum_kind_for_pitch(59), Some(DrumKind::Ride));
         assert_eq!(drum_kind_for_pitch(60), None);
+    }
+
+    #[test]
+    fn full_kit_fallbacks_render_audible() {
+        // Every extended voice must produce real sound through the synth
+        // fallback — the bankless path must never render silence for a
+        // note-based drum layer.
+        let sample_rate = 48_000.0;
+        for kind in [
+            DrumKind::TomLow,
+            DrumKind::TomMid,
+            DrumKind::TomHigh,
+            DrumKind::Crash,
+            DrumKind::Ride,
+        ] {
+            let mut out = vec![0.0f32; 14_400];
+            render_drum_note(kind, 1.0, sample_rate, &mut out);
+            let peak = out.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+            assert!(
+                peak > 0.05,
+                "{kind:?} fallback renders audible (peak {peak})"
+            );
+        }
     }
 
     #[test]

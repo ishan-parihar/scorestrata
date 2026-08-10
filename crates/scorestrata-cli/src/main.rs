@@ -160,6 +160,14 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
     },
+    /// Import a standard MIDI file (.mid) into a scorestrata project bundle
+    ImportMidi {
+        /// Input .mid file path
+        path: String,
+        /// Output project directory (defaults to ./imported/<midi-stem>)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
     /// Show system capabilities
     Capabilities,
     /// Render the built-in genre demos (techno/ambient/house/loop) across all
@@ -432,6 +440,7 @@ fn main() -> Result<()> {
         Commands::Mix { path, action } => handle_mix(&path, action)?,
         Commands::Template { path, action } => handle_template(&path, action)?,
         Commands::ExportMidi { path, output } => handle_export_midi(&path, output.as_deref())?,
+        Commands::ImportMidi { path, output } => handle_import_midi(&path, output.as_deref())?,
         Commands::Capabilities => handle_capabilities()?,
         Commands::Demo { dir } => handle_demo(&dir)?,
         Commands::Trace {
@@ -2027,6 +2036,70 @@ fn handle_export_midi(path: &str, output: Option<&str>) -> Result<()> {
     println!("  Events: {}", timeline.event_count());
     println!("  MIDI bytes: {}", midi.len());
     println!("  Output:    {}", midi_path.display().to_string().green());
+    Ok(())
+}
+
+/// Import a standard MIDI file into a pipeline-ready project bundle.
+///
+/// Reads the `.mid`, rebuilds a [`Project`] via `midi_import` (tracks →
+/// layers, GM programs → instrument families, tempo/time-signature
+/// recovered), and writes the bundle so the normal loop continues from
+/// there: `ss compile`, `ss validate`, `ss render`. The imported project
+/// enables the recorded production banks (`melodic_bank`/`sound_bank` =
+/// `sf2`), so an imported song renders with real instruments + the GM kit.
+fn handle_import_midi(path: &str, output: Option<&str>) -> Result<()> {
+    println!("{}", format!("Importing MIDI: {path}").magenta());
+
+    let midi_bytes = std::fs::read(path).with_context(|| format!("Cannot read '{path}'"))?;
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("imported")
+        .to_string();
+    let project = scorestrata_compiler::midi_import::import_midi(&midi_bytes, &stem)
+        .context("MIDI import failed — is this a standard format-0/1 .mid file?")?;
+
+    let project_dir = output.map_or_else(|| PathBuf::from("imported").join(&stem), PathBuf::from);
+    scorestrata_storage::bundle::init_project_bundle(&project_dir)
+        .context("Failed to initialize project bundle")?;
+    scorestrata_storage::bundle::save_project(&project, &project_dir)
+        .context("Failed to save project")?;
+
+    let layer_summary: Vec<String> = project
+        .arrangement
+        .segments
+        .iter()
+        .flat_map(|s| {
+            s.layers
+                .iter()
+                .map(|l| format!("{} ({})", l.name, l.instrument))
+        })
+        .collect();
+    println!("  BPM:             {}", project.config.bpm);
+    println!(
+        "  Time signature:  {}/{}",
+        project.config.time_signature.numerator, project.config.time_signature.denominator
+    );
+    println!("  Bars:            {}", project.arrangement.total_bars);
+    println!("  Layers:          {}", layer_summary.join(", "));
+    println!(
+        "  Notes:           {}",
+        project
+            .patterns
+            .iter()
+            .map(|p| p.notes.len())
+            .sum::<usize>()
+    );
+    println!("  Banks:           melodic=sf2, drums=sf2 (recorded production banks)");
+    println!(
+        "  Output:          {}",
+        project_dir
+            .join("project.json")
+            .display()
+            .to_string()
+            .green()
+    );
+    println!("  Next: `ss compile`, `ss validate`, `ss render` the imported project");
     Ok(())
 }
 

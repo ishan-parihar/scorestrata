@@ -1,8 +1,8 @@
 {
   "id": "d628296e-a6bd-5712-8cd1-b32bbab5d645",
   "name": "nu_disco",
-  "created_at": "2026-08-09T23:22:25.538902+00:00",
-  "modified_at": "2026-08-09T23:22:25.538902+00:00",
+  "created_at": "2026-08-10T00:06:37.376260+00:00",
+  "modified_at": "2026-08-10T00:06:37.376260+00:00",
   "brief": {
     "raw_text": "Nu-disco at 116 BPM in B Dorian, 44 bars \u2014 Daft Punk Get Lucky-style: 4-on-floor kick with open-hat disco pocket, octave-bounce bass on Bm7-D-F#m7-E, off-beat guitar stabs, epiano chord comps, pentatonic lead riff in the chorus",
     "genre": "funk",
@@ -298,61 +298,61 @@
             "group": null
           },
           {
-            "id": "d38e2dc7-3cba-5144-8a42-6d51eca96b69",
-            "name": "Guitar",
-            "instrument": "distorted_guitar",
+            "id": "16b0ef53-de92-5c75-9503-3f469ff2f298",
+            "name": "Guitar_V_guL",
+            "instrument": "clean_guitar",
             "pattern_instances": [
               {
-                "id": "707a3e58-e9b9-5ca5-bcf6-5f58479772b5",
+                "id": "810f23f7-af42-556f-a4ad-1468faf7736b",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 0,
                 "transpose": 0,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "cbf53c36-3f21-584e-b220-053f8fa48d63",
+                "id": "ae2b6ca9-47aa-5b02-8b71-9d3c997f1e40",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 1920,
                 "transpose": 3,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "e7f0da26-2953-58ae-a4f6-469f443ce6ab",
+                "id": "95988aa7-9174-5bed-a30f-a51fd65cb48f",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 3840,
                 "transpose": -5,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "33d50d93-1e54-5d71-a94b-d265e2ea4c5f",
+                "id": "42786c84-e8c0-566d-b83e-35f75ee1f027",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 5760,
                 "transpose": -7,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "bff448e6-048f-58b5-8f0a-a3d83aa5427d",
+                "id": "6d02fa8f-f61e-5014-8245-de8e55bcd01d",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 7680,
                 "transpose": 0,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "f97eb92c-3868-562a-b608-7611255077fe",
+                "id": "16199ab7-f5b6-5ed5-9494-8372efe0639b",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 9600,
                 "transpose": 3,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "7ff85138-0a03-53b4-a742-96902a16073b",
+                "id": "9d709e8d-1f41-5ba0-8cc1-e75a9ea82e65",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 11520,
                 "transpose": -5,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "6a027b06-5dcb-5938-8363-ad1efe11ce84",
+                "id": "0128f58b-2c20-5ea9-860e-996f9a55f094",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 13440,
                 "transpose": -7,
@@ -366,7 +366,79 @@
             "automation": [],
             "fx": null,
             "mix_gain_db": -2.0,
-            "mix_pan": -0.2,
+            "mix_pan": -0.6,
+            "group": null
+          },
+          {
+            "id": "eb43d023-05bd-5146-89b7-2bd3ea53be81",
+            "name": "Guitar_V_guR",
+            "instrument": "clean_guitar",
+            "pattern_instances": [
+              {
+                "id": "7b7912dc-1fee-57a2-8802-271dcbd60c7c",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 4,
+                "transpose": 0,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "fde34cd0-c711-53b0-bf34-0224476509a9",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1924,
+                "transpose": 3,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "8dd3b9be-0676-50b2-bc0d-e48b5ec4c78d",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3844,
+                "transpose": -5,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "27e77141-3bc3-5694-8c9f-989180a8fcce",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5764,
+                "transpose": -7,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "7d5ba522-ba85-590a-853d-28556f21bb99",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 7684,
+                "transpose": 0,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "db776ea4-69b1-5e78-8dbc-eaff500ce480",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 9604,
+                "transpose": 3,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "ea68ad39-6c38-52e5-a613-2d49996bc45f",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 11524,
+                "transpose": -5,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "00f8b6b3-aa58-5830-a6ed-160e1399bdb8",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 13444,
+                "transpose": -7,
+                "velocity_multiplier": 0.8
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": 0.6,
             "group": null
           },
           {
@@ -686,61 +758,61 @@
             "group": null
           },
           {
-            "id": "5fef050b-04f6-5c1c-b39e-3c0a9fd5292a",
-            "name": "Guitar",
-            "instrument": "distorted_guitar",
+            "id": "c054db66-707a-5cf1-abe6-b4f688ada659",
+            "name": "Guitar_C_guL",
+            "instrument": "clean_guitar",
             "pattern_instances": [
               {
-                "id": "a3d01ff0-2ea3-5f63-8745-d5a7fdcdb1d9",
+                "id": "454ad039-b6f4-5a37-b177-bc388b6808b9",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 0,
                 "transpose": 0,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "2b389ab9-e265-5f0e-a2c5-c1f78bcbeed3",
+                "id": "639dc3af-5531-5463-8aa0-b1041a19bc85",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 1920,
                 "transpose": 3,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "29e329e9-6491-522d-ae3f-ccf87d492e70",
+                "id": "b3db6b99-370a-50d4-9fa5-07e9509574b8",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 3840,
                 "transpose": -5,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "1778a04e-f333-5955-8a9b-b3254e26a5ae",
+                "id": "8c33daad-f1b5-5f55-bebd-611a0278d4ef",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 5760,
                 "transpose": -7,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "c0c8a6a4-11de-5179-902e-c2bd62dd4470",
+                "id": "aeab2c4a-a3e4-5478-80ed-8c7de1fc9ded",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 7680,
                 "transpose": 0,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "fa1dd00c-b88b-5c3b-b874-9322625f6793",
+                "id": "99a43052-1660-5c9e-88bf-38a0f55e73db",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 9600,
                 "transpose": 3,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "bce05dad-6180-5fc6-a94d-1dd65c7fb366",
+                "id": "876167c5-10a3-5ba9-9b31-debebe937347",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 11520,
                 "transpose": -5,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "c63ec79b-71d5-5ba2-8854-0a53514b03b0",
+                "id": "e88c9b50-32c3-53e3-b8d6-d5124772615d",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 13440,
                 "transpose": -7,
@@ -754,7 +826,79 @@
             "automation": [],
             "fx": null,
             "mix_gain_db": -2.0,
-            "mix_pan": -0.2,
+            "mix_pan": -0.6,
+            "group": null
+          },
+          {
+            "id": "7acf3a32-ef84-5a1f-8767-c7583e18ab94",
+            "name": "Guitar_C_guR",
+            "instrument": "clean_guitar",
+            "pattern_instances": [
+              {
+                "id": "550efe3e-e72d-5252-bab1-928c818bfd1a",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 4,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "7ab511cc-3fd9-5ddb-ac78-1bfa1a453da2",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1924,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "28584c84-cc7a-5edb-954f-0be4590254b0",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3844,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "9245ff34-e986-5cd7-ad36-f38d054a69dc",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5764,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "a04cd547-654c-5f3d-b64a-56a83caccc72",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 7684,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "9e87060c-46b9-5e16-b318-7ba801f452c3",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 9604,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "202252f7-afc3-5c47-b5b1-1623163833d1",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 11524,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "993121a4-008d-5aff-a38a-89320b02087b",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 13444,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": 0.6,
             "group": null
           },
           {
@@ -1052,61 +1196,61 @@
             "group": null
           },
           {
-            "id": "d38e2dc7-3cba-5144-8a42-6d51eca96b69",
-            "name": "Guitar",
-            "instrument": "distorted_guitar",
+            "id": "16b0ef53-de92-5c75-9503-3f469ff2f298",
+            "name": "Guitar_V_guL",
+            "instrument": "clean_guitar",
             "pattern_instances": [
               {
-                "id": "707a3e58-e9b9-5ca5-bcf6-5f58479772b5",
+                "id": "810f23f7-af42-556f-a4ad-1468faf7736b",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 0,
                 "transpose": 0,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "cbf53c36-3f21-584e-b220-053f8fa48d63",
+                "id": "ae2b6ca9-47aa-5b02-8b71-9d3c997f1e40",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 1920,
                 "transpose": 3,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "e7f0da26-2953-58ae-a4f6-469f443ce6ab",
+                "id": "95988aa7-9174-5bed-a30f-a51fd65cb48f",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 3840,
                 "transpose": -5,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "33d50d93-1e54-5d71-a94b-d265e2ea4c5f",
+                "id": "42786c84-e8c0-566d-b83e-35f75ee1f027",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 5760,
                 "transpose": -7,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "bff448e6-048f-58b5-8f0a-a3d83aa5427d",
+                "id": "6d02fa8f-f61e-5014-8245-de8e55bcd01d",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 7680,
                 "transpose": 0,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "f97eb92c-3868-562a-b608-7611255077fe",
+                "id": "16199ab7-f5b6-5ed5-9494-8372efe0639b",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 9600,
                 "transpose": 3,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "7ff85138-0a03-53b4-a742-96902a16073b",
+                "id": "9d709e8d-1f41-5ba0-8cc1-e75a9ea82e65",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 11520,
                 "transpose": -5,
                 "velocity_multiplier": 0.8
               },
               {
-                "id": "6a027b06-5dcb-5938-8363-ad1efe11ce84",
+                "id": "0128f58b-2c20-5ea9-860e-996f9a55f094",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 13440,
                 "transpose": -7,
@@ -1120,7 +1264,79 @@
             "automation": [],
             "fx": null,
             "mix_gain_db": -2.0,
-            "mix_pan": -0.2,
+            "mix_pan": -0.6,
+            "group": null
+          },
+          {
+            "id": "eb43d023-05bd-5146-89b7-2bd3ea53be81",
+            "name": "Guitar_V_guR",
+            "instrument": "clean_guitar",
+            "pattern_instances": [
+              {
+                "id": "7b7912dc-1fee-57a2-8802-271dcbd60c7c",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 4,
+                "transpose": 0,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "fde34cd0-c711-53b0-bf34-0224476509a9",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1924,
+                "transpose": 3,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "8dd3b9be-0676-50b2-bc0d-e48b5ec4c78d",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3844,
+                "transpose": -5,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "27e77141-3bc3-5694-8c9f-989180a8fcce",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5764,
+                "transpose": -7,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "7d5ba522-ba85-590a-853d-28556f21bb99",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 7684,
+                "transpose": 0,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "db776ea4-69b1-5e78-8dbc-eaff500ce480",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 9604,
+                "transpose": 3,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "ea68ad39-6c38-52e5-a613-2d49996bc45f",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 11524,
+                "transpose": -5,
+                "velocity_multiplier": 0.8
+              },
+              {
+                "id": "00f8b6b3-aa58-5830-a6ed-160e1399bdb8",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 13444,
+                "transpose": -7,
+                "velocity_multiplier": 0.8
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": 0.6,
             "group": null
           },
           {
@@ -1346,61 +1562,61 @@
             "group": null
           },
           {
-            "id": "5fef050b-04f6-5c1c-b39e-3c0a9fd5292a",
-            "name": "Guitar",
-            "instrument": "distorted_guitar",
+            "id": "c054db66-707a-5cf1-abe6-b4f688ada659",
+            "name": "Guitar_C_guL",
+            "instrument": "clean_guitar",
             "pattern_instances": [
               {
-                "id": "a3d01ff0-2ea3-5f63-8745-d5a7fdcdb1d9",
+                "id": "454ad039-b6f4-5a37-b177-bc388b6808b9",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 0,
                 "transpose": 0,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "2b389ab9-e265-5f0e-a2c5-c1f78bcbeed3",
+                "id": "639dc3af-5531-5463-8aa0-b1041a19bc85",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 1920,
                 "transpose": 3,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "29e329e9-6491-522d-ae3f-ccf87d492e70",
+                "id": "b3db6b99-370a-50d4-9fa5-07e9509574b8",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 3840,
                 "transpose": -5,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "1778a04e-f333-5955-8a9b-b3254e26a5ae",
+                "id": "8c33daad-f1b5-5f55-bebd-611a0278d4ef",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 5760,
                 "transpose": -7,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "c0c8a6a4-11de-5179-902e-c2bd62dd4470",
+                "id": "aeab2c4a-a3e4-5478-80ed-8c7de1fc9ded",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 7680,
                 "transpose": 0,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "fa1dd00c-b88b-5c3b-b874-9322625f6793",
+                "id": "99a43052-1660-5c9e-88bf-38a0f55e73db",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 9600,
                 "transpose": 3,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "bce05dad-6180-5fc6-a94d-1dd65c7fb366",
+                "id": "876167c5-10a3-5ba9-9b31-debebe937347",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 11520,
                 "transpose": -5,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "c63ec79b-71d5-5ba2-8854-0a53514b03b0",
+                "id": "e88c9b50-32c3-53e3-b8d6-d5124772615d",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 13440,
                 "transpose": -7,
@@ -1414,7 +1630,79 @@
             "automation": [],
             "fx": null,
             "mix_gain_db": -2.0,
-            "mix_pan": -0.2,
+            "mix_pan": -0.6,
+            "group": null
+          },
+          {
+            "id": "7acf3a32-ef84-5a1f-8767-c7583e18ab94",
+            "name": "Guitar_C_guR",
+            "instrument": "clean_guitar",
+            "pattern_instances": [
+              {
+                "id": "550efe3e-e72d-5252-bab1-928c818bfd1a",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 4,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "7ab511cc-3fd9-5ddb-ac78-1bfa1a453da2",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1924,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "28584c84-cc7a-5edb-954f-0be4590254b0",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3844,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "9245ff34-e986-5cd7-ad36-f38d054a69dc",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5764,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "a04cd547-654c-5f3d-b64a-56a83caccc72",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 7684,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "9e87060c-46b9-5e16-b318-7ba801f452c3",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 9604,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "202252f7-afc3-5c47-b5b1-1623163833d1",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 11524,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "993121a4-008d-5aff-a38a-89320b02087b",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 13444,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": 0.6,
             "group": null
           },
           {
@@ -1686,33 +1974,33 @@
             "group": null
           },
           {
-            "id": "b57f8a76-fe52-55f5-8bc4-f9b219082368",
-            "name": "Guitar",
-            "instrument": "distorted_guitar",
+            "id": "771f9562-ff8d-5dcd-bf56-57fd5fc9d8c1",
+            "name": "Guitar_O_guL",
+            "instrument": "clean_guitar",
             "pattern_instances": [
               {
-                "id": "6ee70164-56a6-5fe2-b2c8-88d7e0f7d39d",
+                "id": "e52dc9dc-7e11-53d2-af2a-58d122586dd1",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 0,
                 "transpose": 0,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "25881773-ef4f-5294-a770-84f5f6235b01",
+                "id": "47e63684-2924-5f55-bfc8-2a4445e12085",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 1920,
                 "transpose": 3,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "b877cc64-975a-55d4-b70c-9d69b018f882",
+                "id": "76611ae5-e575-559f-85bf-10ab6ccd8516",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 3840,
                 "transpose": -5,
                 "velocity_multiplier": 1.0
               },
               {
-                "id": "fffde6aa-e093-56ae-a539-655097b09e98",
+                "id": "5d0ea444-1b7a-5134-b743-4f8f3f2e5d00",
                 "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
                 "start_tick": 5760,
                 "transpose": -7,
@@ -1725,7 +2013,7 @@
             },
             "automation": [
               {
-                "layer_id": "b57f8a76-fe52-55f5-8bc4-f9b219082368",
+                "layer_id": "771f9562-ff8d-5dcd-bf56-57fd5fc9d8c1",
                 "param": "Volume",
                 "points": [
                   {
@@ -1741,7 +2029,66 @@
             ],
             "fx": null,
             "mix_gain_db": -2.0,
-            "mix_pan": -0.2,
+            "mix_pan": -0.6,
+            "group": null
+          },
+          {
+            "id": "96bcf258-0d89-5103-95b4-7ba4c03df489",
+            "name": "Guitar_O_guR",
+            "instrument": "clean_guitar",
+            "pattern_instances": [
+              {
+                "id": "45c777aa-21ae-5b5c-885e-e66110862e80",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 4,
+                "transpose": 0,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "56a6bc0e-970f-5c74-832c-5f4d449cda36",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 1924,
+                "transpose": 3,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "7c90f8ec-9103-5d14-beda-e49335a204f8",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 3844,
+                "transpose": -5,
+                "velocity_multiplier": 1.0
+              },
+              {
+                "id": "93a5b689-d89d-5cb1-bc1c-55d98785486f",
+                "pattern_id": "f6696dc1-ba2f-5640-b886-fa105f357e9e",
+                "start_tick": 5764,
+                "transpose": -7,
+                "velocity_multiplier": 1.0
+              }
+            ],
+            "register": {
+              "min_octave": 2,
+              "max_octave": 3
+            },
+            "automation": [
+              {
+                "layer_id": "96bcf258-0d89-5103-95b4-7ba4c03df489",
+                "param": "Volume",
+                "points": [
+                  {
+                    "tick": 0,
+                    "value": 1.0
+                  },
+                  {
+                    "tick": 7680,
+                    "value": 0.2
+                  }
+                ]
+              }
+            ],
+            "fx": null,
+            "mix_gain_db": -2.0,
+            "mix_pan": 0.6,
             "group": null
           },
           {
@@ -2357,7 +2704,7 @@
     "stereo_width": 1.0,
     "limiter_ceiling_db": -1.0
   },
-  "sound_bank": "house",
+  "sound_bank": "sf2",
   "melodic_bank": "sf2",
   "bus_graph": null,
   "humanize": {

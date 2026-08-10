@@ -15,6 +15,9 @@ uuid.workspace = true
 chrono.workspace = true
 sha2.workspace = true
 hex.workspace = true
+# Standard MIDI file parsing for `import_midi` (the importer reads
+# format 0/1 .mid files and rebuilds a scorestrata Project from them).
+midly = "0.5"
 
 [dev-dependencies]
 proptest.workspace = true

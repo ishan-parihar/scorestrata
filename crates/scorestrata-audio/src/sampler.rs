@@ -45,6 +45,18 @@ impl DrumSampler {
         self.samples.get(&midi_note)
     }
 
+    /// Number of loaded voices.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    /// Whether the sampler holds no voices.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
     /// Render a single note at a position.
     ///
     /// Note: adds to existing output buffer; clear buffer first for isolated

@@ -1075,11 +1075,23 @@ fn render_layer_buffer(
             // family's voice carries a drive amount (e.g. `distorted_guitar`
             // = 0.85) that previously lived in the synth voice. Re-apply it
             // to the sampled body so the rock chug survives the switch.
+            //
+            // (I) Gentle saturation: the recorded distortion guitar is
+            // *already* a driven cab sound, so the original 8x+1 tanh
+            // re-crushed it into a synthetic fizz. A 3x+1 tanh adds a touch
+            // of glue without destroying the recorded transients, and a soft
+            // one-pole low-pass (~7 kHz) tames the noise floor the tanh
+            // raises — the "amp" character stays but the sample's own
+            // organic tone survives.
             if note_params.drive > 0.0 {
-                let gain = note_params.drive.clamp(0.0, 1.0).mul_add(8.0, 1.0);
+                let gain = note_params.drive.clamp(0.0, 1.0).mul_add(3.0, 1.0);
                 let norm = gain.tanh().max(1e-6);
+                let lp_alpha = 0.9f32; // one-pole ~7 kHz at 48 kHz
+                let mut lp = 0.0f32;
                 for s in &mut note_buffer {
-                    *s = (gain * *s).tanh() / norm;
+                    let driven = (gain * *s).tanh() / norm;
+                    lp = driven.mul_add(lp_alpha, lp * (1.0 - lp_alpha));
+                    *s = lp;
                 }
             }
             // (G) Release fade: the sample engine stops writing when the
@@ -1209,13 +1221,15 @@ fn melodic_bank_for(config: &RenderConfig) -> Option<crate::multisample::Instrum
     }
 }
 
-/// Map a layer instrument to a multi-sample bank voice (G).
+/// Map a layer instrument to a multi-sample bank voice (G/I).
 ///
 /// Returns the sample-bank instrument name for the instrument families the
-/// bank ships (`guitar`, `bass`, `epiano`); other families keep the
-/// subtractive synth voice. The mapping is by family substring so suffixed
-/// names (`distorted_guitar`, `bass_synth`, `lead_synth`) resolve naturally;
-/// keyboards (`epiano`/`piano`/`keys`) route to the recorded e-piano.
+/// bank ships (`guitar`, `bass`, `epiano`, plus the Phase-I additions:
+/// acoustic/clean guitar, strings, organ, brass, flute, saw lead, warm pad);
+/// other families keep the subtractive synth voice. The mapping is by family
+/// substring so suffixed names (`distorted_guitar`, `bass_synth`,
+/// `lead_synth`) resolve naturally; keyboards (`epiano`/`piano`/`keys`)
+/// route to the recorded e-piano.
 #[must_use]
 pub fn melodic_instrument_for(instrument: &str) -> Option<&'static str> {
     let lower = instrument.to_lowercase();
@@ -1223,9 +1237,38 @@ pub fn melodic_instrument_for(instrument: &str) -> Option<&'static str> {
         return Some("epiano");
     }
     match instrument_family(instrument) {
-        "guitar" => Some("guitar"),
+        "guitar" => {
+            if lower.contains("acoustic") {
+                Some("acoustic_guitar")
+            } else if lower.contains("clean") {
+                Some("clean_guitar")
+            } else {
+                Some("guitar")
+            }
+        }
         "bass" => Some("bass"),
         "bell" => Some("epiano"),
+        "brass" => Some("brass"),
+        "lead" => {
+            if lower.contains("saw") {
+                Some("leadsaw")
+            } else if lower.contains("flute") {
+                Some("flute")
+            } else {
+                None
+            }
+        }
+        "pad" => {
+            if lower.contains("string") {
+                Some("strings")
+            } else if lower.contains("warm") {
+                Some("warmpad")
+            } else if lower.contains("organ") {
+                Some("organ")
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -1245,6 +1288,26 @@ pub fn melodic_instrument_for(instrument: &str) -> Option<&'static str> {
     reason = "Voice preset table maps ~10 instrument families to full SynthParams; splitting adds indirection"
 )]
 pub fn voice_params_for_instrument(instrument: &str) -> SynthParams {
+    // Clean/acoustic guitars are the one family the layered presets must
+    // NOT overdrive: the recorded one-shots already carry their own acoustic
+    // character, so the preset stays gentle (low drive, no noise fizz) and
+    // the sampled-path drive re-application adds only a touch of glue.
+    let lower = instrument.to_lowercase();
+    if lower.contains("clean") || lower.contains("acoustic") {
+        return SynthParams {
+            waveform: Waveform::Triangle,
+            filter_cutoff: 0.6,
+            filter_resonance: 0.15,
+            attack: 0.003,
+            decay: 0.12,
+            sustain: 0.6,
+            release: 0.12,
+            osc2_mix: 0.35,
+            detune_cents: 5.0,
+            drive: 0.08,
+            ..Default::default()
+        };
+    }
     match instrument_family(instrument) {
         "drums" => SynthParams {
             waveform: Waveform::Sine,

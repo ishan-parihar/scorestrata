@@ -65,6 +65,11 @@ const REVERB_OFF: bool = false;
 /// - guitar → 30 (Distortion Guitar) — the rock chug.
 /// - bass   → 34 (Electric Bass, picked) — punchy rock bass.
 /// - epiano → 4  (E.Piano 1) — classic Rhodes-ish.
+/// - acoustic_guitar → 25 (Steel String Guitar) — strummy clean.
+/// - clean_guitar    → 27 (Clean Electric Guitar) — funk/verse clean.
+/// - strings → 48 (String Ensemble 1), organ → 16 (Drawbar Organ),
+///   brass → 61 (Brass Section), flute → 73 (Flute), lead saw → 81
+///   (Lead 2 - Sawtooth), warm pad → 89 (Pad 2 - warm).
 const GUITAR_PROGRAM: i32 = 30;
 const BASS_PROGRAM: i32 = 34;
 const EPIANO_PROGRAM: i32 = 4;
@@ -80,50 +85,62 @@ fn main() {
         std::fs::File::open(&sf2_path).unwrap_or_else(|e| panic!("open {sf2_path}: {e}"));
     let font = Arc::new(SoundFont::new(&mut file).expect("parse SoundFont"));
 
-    // ── Guitar: GM 30, roots C2/A2/E3/B3/E4, soft + hard velocity layers.
+    // ── Guitar: GM 30, roots C2/A2/E3/B3/E4. Three round-robin takes per
+    // velocity layer (velocity-stepped + a few ms of length variation) so
+    // the engine's deterministic RR picker cycles real takes instead of
+    // machine-gunning one identical sample. Take 1 keeps the classic name
+    // (`guitar_<root>_soft.wav`) so the bank stays drop-in compatible.
     let guitar_roots = [36u8, 45, 52, 59, 66];
     for root in guitar_roots {
-        render_note(
-            &font,
-            GUITAR_PROGRAM,
-            root,
-            45,
-            1.7,
-            &out_dir,
-            &format!("guitar_{root}_soft.wav"),
-        );
-        render_note(
-            &font,
-            GUITAR_PROGRAM,
-            root,
-            110,
-            1.7,
-            &out_dir,
-            &format!("guitar_{root}_hard.wav"),
-        );
+        for (take, vel, secs) in [(1, 42, 1.62), (2, 48, 1.72), (3, 54, 1.66)] {
+            render_note(
+                &font,
+                GUITAR_PROGRAM,
+                root,
+                vel,
+                secs,
+                &out_dir,
+                &guitar_name(root, "soft", take),
+            );
+        }
+        for (take, vel, secs) in [(1, 104, 1.66), (2, 110, 1.74), (3, 116, 1.60)] {
+            render_note(
+                &font,
+                GUITAR_PROGRAM,
+                root,
+                vel,
+                secs,
+                &out_dir,
+                &guitar_name(root, "hard", take),
+            );
+        }
     }
 
-    // ── Bass: GM 34, roots C1/A1/C2/G2, soft + hard.
+    // ── Bass: GM 34, roots C1/A1/C2/G2. Two round-robin takes per layer.
     let bass_roots = [24u8, 29, 36, 43];
     for root in bass_roots {
-        render_note(
-            &font,
-            BASS_PROGRAM,
-            root,
-            45,
-            2.4,
-            &out_dir,
-            &format!("bass_{root}_soft.wav"),
-        );
-        render_note(
-            &font,
-            BASS_PROGRAM,
-            root,
-            110,
-            2.4,
-            &out_dir,
-            &format!("bass_{root}_hard.wav"),
-        );
+        for (take, vel, secs) in [(1, 44, 2.3), (2, 54, 2.5)] {
+            render_note(
+                &font,
+                BASS_PROGRAM,
+                root,
+                vel,
+                secs,
+                &out_dir,
+                &bass_name(root, "soft", take),
+            );
+        }
+        for (take, vel, secs) in [(1, 106, 2.35), (2, 114, 2.45)] {
+            render_note(
+                &font,
+                BASS_PROGRAM,
+                root,
+                vel,
+                secs,
+                &out_dir,
+                &bass_name(root, "hard", take),
+            );
+        }
     }
 
     // ── E-piano: GM 4, roots C3/C4/C5, single layer, long sustain for the
@@ -141,7 +158,140 @@ fn main() {
         );
     }
 
+    // ── Acoustic guitar (GM 25 Steel) + clean guitar (GM 27 Clean): 3 key
+    // zones × 2 velocity layers × 2 RR takes each — the clean/strum family
+    // for funk stabs, arpeggios and verses where the distortion guitar is
+    // too aggressive.
+    for (program, prefix) in [(25, "acoustic"), (27, "clean")] {
+        for root in [48u8, 60, 72] {
+            for (take, vel, secs) in [(1, 52, 1.9), (2, 60, 1.8)] {
+                render_note(
+                    &font,
+                    program,
+                    root,
+                    vel,
+                    secs,
+                    &out_dir,
+                    &format!("{prefix}_{root}_soft{take}.wav"),
+                );
+            }
+            for (take, vel, secs) in [(1, 108, 1.85), (2, 116, 1.95)] {
+                render_note(
+                    &font,
+                    program,
+                    root,
+                    vel,
+                    secs,
+                    &out_dir,
+                    &format!("{prefix}_{root}_hard{take}.wav"),
+                );
+            }
+        }
+    }
+
+    // ── Sustained instruments (GM programs) — long renders whose stable
+    // region the loop-detector in `sf2_bank.rs` turns into a sustain loop:
+    // strings (48), drawbar organ (16), brass section (61), flute (73),
+    // saw lead (81) and warm pad (89).
+    let sustained: [(&str, i32, &[u8]); 6] = [
+        ("strings", 48, &[48u8, 60, 72]),
+        ("organ", 16, &[48, 60, 72]),
+        ("brass", 61, &[48, 60, 72]),
+        ("flute", 73, &[60, 72, 84]),
+        ("leadsaw", 81, &[48, 60, 72]),
+        ("warmpad", 89, &[36, 48, 60]),
+    ];
+    for (name, program, roots) in sustained {
+        for &root in roots {
+            render_note(
+                &font,
+                program,
+                root,
+                96,
+                4.0,
+                &out_dir,
+                &format!("{name}_{root}_sustain.wav"),
+            );
+        }
+    }
+
+    // ── Drums: GM percussion (channel 9 in rustysynth). Real recorded kit
+    // one-shots — kick, snare, hats, clap, three toms, crash and ride — the
+    // production kit behind `sound_bank: "sf2"`. Durations match each
+    // voice's natural decay (crash/ride ring longest).
+    let drums: [(&str, u8, f32); 10] = [
+        ("kick", 36, 0.55),
+        ("snare", 38, 0.65),
+        ("hat", 42, 0.3),
+        ("open_hat", 46, 0.9),
+        ("clap", 39, 0.55),
+        ("tom_low", 43, 0.8),
+        ("tom_mid", 45, 0.8),
+        ("tom_high", 48, 0.8),
+        ("crash", 57, 2.4),
+        ("ride", 59, 1.8),
+    ];
+    for (name, pitch, seconds) in drums {
+        render_drum(&font, pitch, seconds, &out_dir, &format!("drum_{name}.wav"));
+    }
+
     println!("Extracted SF2 instrument bank -> {}", out_dir.display());
+}
+
+/// Render one GM percussion one-shot through the drum channel (9).
+///
+/// rustysynth treats channel 9 as the percussion channel (bank 128:0), so a
+/// plain note-on plays the kit voice. Finalized at −18 dB like the other
+/// hard/sustain layers.
+fn render_drum(
+    font: &Arc<SoundFont>,
+    pitch: u8,
+    seconds: f32,
+    out_dir: &std::path::Path,
+    file_name: &str,
+) {
+    let mut settings = SynthesizerSettings::new(RATE.cast_signed());
+    settings.enable_reverb_and_chorus = REVERB_OFF;
+    let mut synth = Synthesizer::new(font, &settings).expect("create synthesizer");
+    synth.set_master_volume(1.0);
+    synth.note_on(9, i32::from(pitch), 110);
+
+    let n = (seconds * RATE as f32) as usize;
+    let mut left = vec![0.0f32; n];
+    let mut right = vec![0.0f32; n];
+    synth.render(&mut left, &mut right);
+    synth.note_off(9, i32::from(pitch));
+    let tail = (0.25 * RATE as f32) as usize;
+    let mut tl = vec![0.0f32; tail];
+    let mut tr = vec![0.0f32; tail];
+    synth.render(&mut tl, &mut tr);
+
+    let mut mono: Vec<f32> = left
+        .iter()
+        .zip(&right)
+        .map(|(l, r)| (l + r) * 0.5)
+        .collect();
+    mono.extend(tl.iter().zip(&tr).map(|(l, r)| (l + r) * 0.5));
+    let mono = finalize(mono, -18.0);
+    write_wav_file(out_dir, file_name, &mono);
+}
+
+/// Take-1 keeps the legacy bare name (`guitar_45_soft.wav`) so existing
+/// references and the bank manifest stay valid; takes 2/3 are suffixed.
+fn guitar_name(root: u8, layer: &str, take: u8) -> String {
+    if take == 1 {
+        format!("guitar_{root}_{layer}.wav")
+    } else {
+        format!("guitar_{root}_{layer}_{take}.wav")
+    }
+}
+
+fn bass_name(root: u8, layer: &str, take: u8) -> String {
+    if take == 1 {
+        format!("bass_{root}_{layer}.wav")
+    } else {
+        format!("bass_{root}_{layer}_{take}.wav")
+    }
 }
 
 /// Render one note through rustysynth and write it as a mono 24-bit WAV.

@@ -39,18 +39,24 @@ pub const BANK_RATE: u32 = 48_000;
 /// crate and the zone manifest is static, so failures here are programming
 /// errors, not runtime conditions.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Bank assembly registers a dozen instruments as one flat zone manifest"
+)]
 pub fn sf2_instrument_bank() -> InstrumentBank {
     let mut bank = InstrumentBank::new();
 
     // Guitar: C2/A2/E3/B3/E4 roots, soft + hard velocity layers. Key ranges
-    // tile the full rock guitar register (MIDI 32–72) — same as the
-    // synthetic bank, so the two banks are interchangeable.
-    for (root, key_min, key_max, wav_soft, wav_hard) in [
-        (36u8, 32, 40, GUITAR_C2_SOFT, GUITAR_C2_HARD),
-        (45, 41, 48, GUITAR_A2_SOFT, GUITAR_A2_HARD),
-        (52, 49, 55, GUITAR_E3_SOFT, GUITAR_E3_HARD),
-        (59, 56, 62, GUITAR_B3_SOFT, GUITAR_B3_HARD),
-        (66, 63, 72, GUITAR_E4_SOFT, GUITAR_E4_HARD),
+    // tile the full rock guitar register (MIDI 32–72). Three round-robin
+    // takes per layer (velocity-stepped renders from `extract_sf2`) so the
+    // engine's RR picker cycles real takes on repeated chugs instead of
+    // machine-gunning one identical sample.
+    for (root, key_min, key_max, t) in [
+        (36u8, 32, 40, GUITAR_C2_TAKES),
+        (45, 41, 48, GUITAR_A2_TAKES),
+        (52, 49, 55, GUITAR_E3_TAKES),
+        (59, 56, 62, GUITAR_B3_TAKES),
+        (66, 63, 72, GUITAR_E4_TAKES),
     ] {
         push_zones(
             &mut bank,
@@ -61,25 +67,34 @@ pub fn sf2_instrument_bank() -> InstrumentBank {
                     key_max,
                     vel_min: 0.0,
                     vel_max: 0.62,
-                    samples: vec![load_zone(root, wav_soft)],
+                    samples: vec![
+                        load_zone(root, t[0]),
+                        load_zone(root, t[1]),
+                        load_zone(root, t[2]),
+                    ],
                 },
                 SampleZone {
                     key_min,
                     key_max,
                     vel_min: 0.62,
                     vel_max: 1.0,
-                    samples: vec![load_zone(root, wav_hard)],
+                    samples: vec![
+                        load_zone(root, t[3]),
+                        load_zone(root, t[4]),
+                        load_zone(root, t[5]),
+                    ],
                 },
             ],
         );
     }
 
-    // Bass: C1/A1/C2/G2 roots, soft + hard layers (MIDI 12–47).
-    for (root, key_min, key_max, wav_soft, wav_hard) in [
-        (24u8, 12, 26, BASS_C1_SOFT, BASS_C1_HARD),
-        (29, 27, 32, BASS_A1_SOFT, BASS_A1_HARD),
-        (36, 33, 39, BASS_C2_SOFT, BASS_C2_HARD),
-        (43, 40, 47, BASS_G2_SOFT, BASS_G2_HARD),
+    // Bass: C1/A1/C2/G2 roots, soft + hard layers (MIDI 12–47), two
+    // round-robin takes per layer.
+    for (root, key_min, key_max, t) in [
+        (24u8, 12, 26, BASS_C1_TAKES),
+        (29, 27, 32, BASS_A1_TAKES),
+        (36, 33, 39, BASS_C2_TAKES),
+        (43, 40, 47, BASS_G2_TAKES),
     ] {
         push_zones(
             &mut bank,
@@ -90,14 +105,14 @@ pub fn sf2_instrument_bank() -> InstrumentBank {
                     key_max,
                     vel_min: 0.0,
                     vel_max: 0.62,
-                    samples: vec![load_zone(root, wav_soft)],
+                    samples: vec![load_zone(root, t[0]), load_zone(root, t[1])],
                 },
                 SampleZone {
                     key_min,
                     key_max,
                     vel_min: 0.62,
                     vel_max: 1.0,
-                    samples: vec![load_zone(root, wav_hard)],
+                    samples: vec![load_zone(root, t[2]), load_zone(root, t[3])],
                 },
             ],
         );
@@ -111,23 +126,146 @@ pub fn sf2_instrument_bank() -> InstrumentBank {
         (60, 55, 66, EPIANO_C4),
         (72, 67, 84, EPIANO_C5),
     ] {
-        let mut sample = load_zone(root, wav);
+        register_sustained(&mut bank, "epiano", &[(root, key_min, key_max, wav)]);
+    }
+
+    // Clean / acoustic guitar family (Phase I): 3 key zones × 2 velocity
+    // layers × 2 RR takes. Steel-string (25) and clean electric (27) covers
+    // funk stabs, verses and arpeggios the distortion guitar can't do.
+    register_plucked(
+        &mut bank,
+        "acoustic_guitar",
+        &[
+            (48u8, 36, 53, ACOUSTIC_C3),
+            (60, 54, 65, ACOUSTIC_C4),
+            (72, 66, 84, ACOUSTIC_C5),
+        ],
+    );
+    register_plucked(
+        &mut bank,
+        "clean_guitar",
+        &[
+            (48u8, 36, 53, CLEAN_C3),
+            (60, 54, 65, CLEAN_C4),
+            (72, 66, 84, CLEAN_C5),
+        ],
+    );
+
+    // Sustained voices (Phase I): loop-detected long one-shots for the
+    // orchestral / synth families — strings, organ, brass, flute, saw lead,
+    // warm pad.
+    register_sustained(
+        &mut bank,
+        "strings",
+        &[
+            (48u8, 36, 53, STRINGS_C3),
+            (60, 54, 65, STRINGS_C4),
+            (72, 66, 84, STRINGS_C5),
+        ],
+    );
+    register_sustained(
+        &mut bank,
+        "organ",
+        &[
+            (48u8, 36, 53, ORGAN_C3),
+            (60, 54, 65, ORGAN_C4),
+            (72, 66, 84, ORGAN_C5),
+        ],
+    );
+    register_sustained(
+        &mut bank,
+        "brass",
+        &[
+            (48u8, 36, 53, BRASS_C3),
+            (60, 54, 65, BRASS_C4),
+            (72, 66, 84, BRASS_C5),
+        ],
+    );
+    register_sustained(
+        &mut bank,
+        "flute",
+        &[
+            (60u8, 48, 65, FLUTE_C4),
+            (72, 66, 77, FLUTE_C5),
+            (84, 78, 96, FLUTE_C6),
+        ],
+    );
+    register_sustained(
+        &mut bank,
+        "leadsaw",
+        &[
+            (48u8, 36, 53, LEADSAW_C3),
+            (60, 54, 65, LEADSAW_C4),
+            (72, 66, 84, LEADSAW_C5),
+        ],
+    );
+    register_sustained(
+        &mut bank,
+        "warmpad",
+        &[
+            (36u8, 24, 41, WARMPAD_C2),
+            (48, 42, 53, WARMPAD_C3),
+            (60, 54, 72, WARMPAD_C4),
+        ],
+    );
+
+    bank
+}
+
+/// Register a plucked instrument: 3 zones, each with 2 velocity layers and
+/// 2 round-robin takes per layer (`[soft1, soft2, hard1, hard2]`).
+fn register_plucked(
+    bank: &mut InstrumentBank,
+    name: &str,
+    zones: &[(u8, u8, u8, [&'static [u8]; 4])],
+) {
+    for (root, key_min, key_max, takes) in zones {
+        push_zones(
+            bank,
+            name,
+            vec![
+                SampleZone {
+                    key_min: *key_min,
+                    key_max: *key_max,
+                    vel_min: 0.0,
+                    vel_max: 0.62,
+                    samples: vec![load_zone(*root, takes[0]), load_zone(*root, takes[1])],
+                },
+                SampleZone {
+                    key_min: *key_min,
+                    key_max: *key_max,
+                    vel_min: 0.62,
+                    vel_max: 1.0,
+                    samples: vec![load_zone(*root, takes[2]), load_zone(*root, takes[3])],
+                },
+            ],
+        );
+    }
+}
+
+/// Register a sustained instrument: 1–3 zones, each a single long one-shot
+/// whose stable sustain region becomes a loop (attack + release excluded).
+fn register_sustained(
+    bank: &mut InstrumentBank,
+    name: &str,
+    zones: &[(u8, u8, u8, &'static [u8])],
+) {
+    for (root, key_min, key_max, wav) in zones {
+        let mut sample = load_zone(*root, wav);
         sample.loop_start = Some(detect_loop_start(&sample.data));
         sample.loop_end = Some(detect_loop_end(&sample.data));
         push_zones(
-            &mut bank,
-            "epiano",
+            bank,
+            name,
             vec![SampleZone {
-                key_min,
-                key_max,
+                key_min: *key_min,
+                key_max: *key_max,
                 vel_min: 0.0,
                 vel_max: 1.0,
                 samples: vec![sample],
             }],
         );
     }
-
-    bank
 }
 
 /// Append zones to a (possibly already-present) instrument, creating it if
@@ -226,30 +364,137 @@ fn windowed_rms_peak(data: &[f32], win: usize) -> f32 {
 }
 
 // ── Embedded assets (generated by `extract_sf2`) ───────────────────────
+// Take 1 keeps the bare legacy name (`guitar_45_soft.wav`); takes 2/3 are
+// suffixed `_2`/`_3`. Arrays index [soft1, soft2, soft3, hard1, hard2, hard3].
 
-const GUITAR_C2_SOFT: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_36_soft.wav");
-const GUITAR_C2_HARD: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_36_hard.wav");
-const GUITAR_A2_SOFT: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_45_soft.wav");
-const GUITAR_A2_HARD: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_45_hard.wav");
-const GUITAR_E3_SOFT: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_52_soft.wav");
-const GUITAR_E3_HARD: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_52_hard.wav");
-const GUITAR_B3_SOFT: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_59_soft.wav");
-const GUITAR_B3_HARD: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_59_hard.wav");
-const GUITAR_E4_SOFT: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_66_soft.wav");
-const GUITAR_E4_HARD: &[u8] = include_bytes!("../assets/instruments_sf2/guitar_66_hard.wav");
+const GUITAR_C2_TAKES: [&[u8]; 6] = [
+    include_bytes!("../assets/instruments_sf2/guitar_36_soft.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_36_soft_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_36_soft_3.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_36_hard.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_36_hard_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_36_hard_3.wav"),
+];
+const GUITAR_A2_TAKES: [&[u8]; 6] = [
+    include_bytes!("../assets/instruments_sf2/guitar_45_soft.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_45_soft_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_45_soft_3.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_45_hard.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_45_hard_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_45_hard_3.wav"),
+];
+const GUITAR_E3_TAKES: [&[u8]; 6] = [
+    include_bytes!("../assets/instruments_sf2/guitar_52_soft.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_52_soft_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_52_soft_3.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_52_hard.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_52_hard_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_52_hard_3.wav"),
+];
+const GUITAR_B3_TAKES: [&[u8]; 6] = [
+    include_bytes!("../assets/instruments_sf2/guitar_59_soft.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_59_soft_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_59_soft_3.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_59_hard.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_59_hard_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_59_hard_3.wav"),
+];
+const GUITAR_E4_TAKES: [&[u8]; 6] = [
+    include_bytes!("../assets/instruments_sf2/guitar_66_soft.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_66_soft_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_66_soft_3.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_66_hard.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_66_hard_2.wav"),
+    include_bytes!("../assets/instruments_sf2/guitar_66_hard_3.wav"),
+];
 
-const BASS_C1_SOFT: &[u8] = include_bytes!("../assets/instruments_sf2/bass_24_soft.wav");
-const BASS_C1_HARD: &[u8] = include_bytes!("../assets/instruments_sf2/bass_24_hard.wav");
-const BASS_A1_SOFT: &[u8] = include_bytes!("../assets/instruments_sf2/bass_29_soft.wav");
-const BASS_A1_HARD: &[u8] = include_bytes!("../assets/instruments_sf2/bass_29_hard.wav");
-const BASS_C2_SOFT: &[u8] = include_bytes!("../assets/instruments_sf2/bass_36_soft.wav");
-const BASS_C2_HARD: &[u8] = include_bytes!("../assets/instruments_sf2/bass_36_hard.wav");
-const BASS_G2_SOFT: &[u8] = include_bytes!("../assets/instruments_sf2/bass_43_soft.wav");
-const BASS_G2_HARD: &[u8] = include_bytes!("../assets/instruments_sf2/bass_43_hard.wav");
+const BASS_C1_TAKES: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/bass_24_soft.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_24_soft_2.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_24_hard.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_24_hard_2.wav"),
+];
+const BASS_A1_TAKES: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/bass_29_soft.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_29_soft_2.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_29_hard.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_29_hard_2.wav"),
+];
+const BASS_C2_TAKES: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/bass_36_soft.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_36_soft_2.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_36_hard.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_36_hard_2.wav"),
+];
+const BASS_G2_TAKES: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/bass_43_soft.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_43_soft_2.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_43_hard.wav"),
+    include_bytes!("../assets/instruments_sf2/bass_43_hard_2.wav"),
+];
 
 const EPIANO_C3: &[u8] = include_bytes!("../assets/instruments_sf2/epiano_48_sustain.wav");
 const EPIANO_C4: &[u8] = include_bytes!("../assets/instruments_sf2/epiano_60_sustain.wav");
 const EPIANO_C5: &[u8] = include_bytes!("../assets/instruments_sf2/epiano_72_sustain.wav");
+
+// Plucked clean family (take 1 keeps the unsuffixed name). Index order per
+// zone: [soft1, soft2, hard1, hard2].
+const ACOUSTIC_C3: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/acoustic_48_soft1.wav"),
+    include_bytes!("../assets/instruments_sf2/acoustic_48_soft2.wav"),
+    include_bytes!("../assets/instruments_sf2/acoustic_48_hard1.wav"),
+    include_bytes!("../assets/instruments_sf2/acoustic_48_hard2.wav"),
+];
+const ACOUSTIC_C4: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/acoustic_60_soft1.wav"),
+    include_bytes!("../assets/instruments_sf2/acoustic_60_soft2.wav"),
+    include_bytes!("../assets/instruments_sf2/acoustic_60_hard1.wav"),
+    include_bytes!("../assets/instruments_sf2/acoustic_60_hard2.wav"),
+];
+const ACOUSTIC_C5: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/acoustic_72_soft1.wav"),
+    include_bytes!("../assets/instruments_sf2/acoustic_72_soft2.wav"),
+    include_bytes!("../assets/instruments_sf2/acoustic_72_hard1.wav"),
+    include_bytes!("../assets/instruments_sf2/acoustic_72_hard2.wav"),
+];
+const CLEAN_C3: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/clean_48_soft1.wav"),
+    include_bytes!("../assets/instruments_sf2/clean_48_soft2.wav"),
+    include_bytes!("../assets/instruments_sf2/clean_48_hard1.wav"),
+    include_bytes!("../assets/instruments_sf2/clean_48_hard2.wav"),
+];
+const CLEAN_C4: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/clean_60_soft1.wav"),
+    include_bytes!("../assets/instruments_sf2/clean_60_soft2.wav"),
+    include_bytes!("../assets/instruments_sf2/clean_60_hard1.wav"),
+    include_bytes!("../assets/instruments_sf2/clean_60_hard2.wav"),
+];
+const CLEAN_C5: [&[u8]; 4] = [
+    include_bytes!("../assets/instruments_sf2/clean_72_soft1.wav"),
+    include_bytes!("../assets/instruments_sf2/clean_72_soft2.wav"),
+    include_bytes!("../assets/instruments_sf2/clean_72_hard1.wav"),
+    include_bytes!("../assets/instruments_sf2/clean_72_hard2.wav"),
+];
+
+// Sustained voices — one long render per zone, loop-detected at load.
+const STRINGS_C3: &[u8] = include_bytes!("../assets/instruments_sf2/strings_48_sustain.wav");
+const STRINGS_C4: &[u8] = include_bytes!("../assets/instruments_sf2/strings_60_sustain.wav");
+const STRINGS_C5: &[u8] = include_bytes!("../assets/instruments_sf2/strings_72_sustain.wav");
+const ORGAN_C3: &[u8] = include_bytes!("../assets/instruments_sf2/organ_48_sustain.wav");
+const ORGAN_C4: &[u8] = include_bytes!("../assets/instruments_sf2/organ_60_sustain.wav");
+const ORGAN_C5: &[u8] = include_bytes!("../assets/instruments_sf2/organ_72_sustain.wav");
+const BRASS_C3: &[u8] = include_bytes!("../assets/instruments_sf2/brass_48_sustain.wav");
+const BRASS_C4: &[u8] = include_bytes!("../assets/instruments_sf2/brass_60_sustain.wav");
+const BRASS_C5: &[u8] = include_bytes!("../assets/instruments_sf2/brass_72_sustain.wav");
+const FLUTE_C4: &[u8] = include_bytes!("../assets/instruments_sf2/flute_60_sustain.wav");
+const FLUTE_C5: &[u8] = include_bytes!("../assets/instruments_sf2/flute_72_sustain.wav");
+const FLUTE_C6: &[u8] = include_bytes!("../assets/instruments_sf2/flute_84_sustain.wav");
+const LEADSAW_C3: &[u8] = include_bytes!("../assets/instruments_sf2/leadsaw_48_sustain.wav");
+const LEADSAW_C4: &[u8] = include_bytes!("../assets/instruments_sf2/leadsaw_60_sustain.wav");
+const LEADSAW_C5: &[u8] = include_bytes!("../assets/instruments_sf2/leadsaw_72_sustain.wav");
+const WARMPAD_C2: &[u8] = include_bytes!("../assets/instruments_sf2/warmpad_36_sustain.wav");
+const WARMPAD_C3: &[u8] = include_bytes!("../assets/instruments_sf2/warmpad_48_sustain.wav");
+const WARMPAD_C4: &[u8] = include_bytes!("../assets/instruments_sf2/warmpad_60_sustain.wav");
 
 #[cfg(test)]
 mod tests {
@@ -271,7 +516,61 @@ mod tests {
         assert_eq!(guitar.zones.len(), 10);
         assert_eq!(bass.zones.len(), 8);
         assert_eq!(epiano.zones.len(), 3);
+        for name in [
+            "acoustic_guitar",
+            "clean_guitar",
+            "strings",
+            "organ",
+            "brass",
+            "flute",
+            "leadsaw",
+            "warmpad",
+        ] {
+            #[expect(clippy::expect_used, reason = "Test assertions")]
+            let inst = bank.get(name).expect(name);
+            assert!(!inst.zones.is_empty(), "{name} has zones");
+        }
         assert!(bank.total_frames() > 0, "bank carries sample frames");
+    }
+
+    #[test]
+    fn new_instruments_are_audible_and_loop() {
+        // The Phase-I families must render real sound (not silence) and the
+        // sustained ones must hold through a long note via their loops.
+        let bank = sf2_instrument_bank();
+        let n = BANK_RATE as usize * 3;
+        for (name, pitch) in [
+            ("acoustic_guitar", 60),
+            ("clean_guitar", 60),
+            ("strings", 60),
+            ("organ", 60),
+            ("brass", 60),
+            ("flute", 72),
+            ("leadsaw", 60),
+            ("warmpad", 48),
+        ] {
+            let mut out = vec![0.0f32; n];
+            bank.render_note(name, pitch, 0.8, 7, &mut out);
+            let peak = out.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+            assert!(peak > 0.02, "{name} renders audible (peak {peak})");
+            assert!(peak <= 1.0, "{name} does not clip (peak {peak})");
+            // Sustained families must still be sounding at the end of a
+            // 3-second note (loop engaged); plucks decay naturally.
+            let sustained = matches!(
+                name,
+                "strings" | "organ" | "brass" | "flute" | "leadsaw" | "warmpad"
+            );
+            let tail_peak = out[out.len() - 200..]
+                .iter()
+                .map(|s| s.abs())
+                .fold(0.0f32, f32::max);
+            if sustained {
+                assert!(
+                    tail_peak > 0.01,
+                    "{name} sustains through a 3 s note (tail peak {tail_peak})"
+                );
+            }
+        }
     }
 
     #[test]
@@ -311,6 +610,22 @@ mod tests {
                 "guitar covers MIDI {pitch}"
             );
         }
+    }
+
+    #[test]
+    fn new_plucked_instruments_alternate_round_robin() {
+        // Two identical hits must cycle the RR takes (different bytes), and
+        // the same seed must stay byte-identical (R2) — same contract as the
+        // distortion guitar.
+        let bank = sf2_instrument_bank();
+        let mut a = vec![0.0f32; 4000];
+        let mut b = vec![0.0f32; 4000];
+        bank.render_note("acoustic_guitar", 60, 0.8, 0, &mut a);
+        bank.render_note("acoustic_guitar", 60, 0.8, 0, &mut b);
+        assert_eq!(a, b, "same RR seed stays deterministic (R2)");
+        let mut c = vec![0.0f32; 4000];
+        bank.render_note("acoustic_guitar", 60, 0.8, 1, &mut c);
+        assert_ne!(a, c, "different RR seed cycles the alternate take");
     }
 
     #[test]

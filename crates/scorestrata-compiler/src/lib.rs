@@ -10,6 +10,7 @@ pub mod compile;
 pub mod diagnostics;
 pub mod incremental;
 pub mod midi_export;
+pub mod midi_import;
 pub mod passes;
 pub mod performance;
 pub mod plan;

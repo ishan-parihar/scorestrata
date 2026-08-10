@@ -32,7 +32,7 @@ use crate::synth::DrumKind;
 /// One-shots per drum voice for one kit.
 #[derive(Debug, Clone)]
 pub struct DrumKit {
-    /// Kit name (`rock`, `house`, `hiphop`, `techno`, `trap`).
+    /// Kit name (`rock`, `house`, `hiphop`, `techno`, `trap`, `sf2`).
     pub name: &'static str,
     /// The sampler populated with the kit's one-shots.
     pub sampler: DrumSampler,
@@ -41,7 +41,13 @@ pub struct DrumKit {
 }
 
 /// The embedded kit catalog. `None` → legacy synth drums (R1).
-pub const KIT_NAMES: &[&str] = &["rock", "house", "hiphop", "techno", "trap"];
+///
+/// `sf2` is the production kit: **recorded** one-shots extracted from the
+/// `FluidR3_GM` `SoundFont`'s GM percussion set (kick/snare/hats/clap/toms/
+/// crash/ride), embedded via `include_bytes!` — the same recorded-instrument
+/// posture as the melodic SF2 bank. The five parametric kits remain for
+/// genre color when a project asks for them.
+pub const KIT_NAMES: &[&str] = &["rock", "house", "hiphop", "techno", "trap", "sf2"];
 
 /// Look up a kit by name.
 #[must_use]
@@ -52,6 +58,7 @@ pub fn kit(name: &str) -> Option<DrumKit> {
         "hiphop" => Some(hiphop_kit()),
         "techno" => Some(techno_kit()),
         "trap" => Some(trap_kit()),
+        "sf2" => Some(sf2_kit()),
         _ => None,
     }
 }
@@ -59,10 +66,14 @@ pub fn kit(name: &str) -> Option<DrumKit> {
 /// Catalog voice names for a kit (same order as the sampler's voice map).
 #[must_use]
 pub fn kit_voice_names(name: &str) -> Vec<String> {
-    let voices = match name {
+    let voices: &[&str] = match name {
         "rock" | "house" | "hiphop" | "techno" | "trap" => {
-            ["kick", "snare", "hat", "open_hat", "clap"]
+            &["kick", "snare", "hat", "open_hat", "clap"]
         }
+        "sf2" => &[
+            "kick", "snare", "hat", "open_hat", "clap", "tom_low", "tom_mid", "tom_high", "crash",
+            "ride",
+        ],
         _ => return Vec::new(),
     };
     voices.iter().map(|v| (*v).to_string()).collect()
@@ -77,6 +88,7 @@ pub fn kit_character(name: &str) -> &'static str {
         "hiphop" => "boomy wide kick, fat snare, sizzling open hats",
         "techno" => "hard and dry; long sub kick, piercing closed hats",
         "trap" => "sub-heavy kick with long decay, dense snare, dark hats",
+        "sf2" => "recorded GM percussion (FluidR3_GM): real kick, snare, toms, crash, ride",
         _ => "unknown kit",
     }
 }
@@ -105,6 +117,11 @@ pub fn kit_processing_summary(name: &str) -> Vec<String> {
             "kick tuned to F1 with 0.6 sub-heavy decay".to_string(),
             "snare at 0.3 with wide 0.8 noise layer".to_string(),
         ],
+        "sf2" => vec![
+            "recorded kick with natural transient and room".to_string(),
+            "recorded snare with real shell + snare-wire character".to_string(),
+            "recorded toms, crash and ride for fills and accents".to_string(),
+        ],
         _ => Vec::new(),
     }
 }
@@ -114,12 +131,19 @@ pub fn kit_processing_summary(name: &str) -> Vec<String> {
 /// Velocity scales the sample gain, mimicking the velocity-layer behavior of
 /// real sampled kits. Unknown pitches fall back to the nearest mapped voice.
 pub fn render_kit_note(kit: &DrumKit, kind: DrumKind, velocity: f32, output: &mut [f32]) {
+    // 49 keeps the legacy clap pitch (the Phase-I demos write clap notes
+    // there); the `sf2` kit loads its recorded clap under the same key.
     let midi = match kind {
         DrumKind::Kick => 36,
         DrumKind::Snare => 38,
         DrumKind::Hat => 42,
         DrumKind::OpenHat => 46,
         DrumKind::Clap => 49,
+        DrumKind::TomLow => 43,
+        DrumKind::TomMid => 45,
+        DrumKind::TomHigh => 48,
+        DrumKind::Crash => 57,
+        DrumKind::Ride => 59,
     };
     let sampler = &kit.sampler;
     if let Some(sample) = sampler.get_sample(midi) {
@@ -240,6 +264,50 @@ fn clap(seconds: f32) -> Vec<f32> {
     out
 }
 
+/// The production recorded kit: one-shots extracted by `extract_sf2` from
+/// the `FluidR3_GM` `SoundFont`'s GM percussion set (channel 9), embedded via
+/// `include_bytes!` — the same R7 asset posture as the melodic bank. The
+/// extractor renders each voice dry at 48 kHz and normalizes to the same
+/// −18 dB level plan, so the kit slots into the mix exactly like the
+/// parametric kits.
+fn sf2_kit() -> DrumKit {
+    #[expect(
+        clippy::expect_used,
+        reason = "Embedded assets are built by the crate's own extractor; a parse failure is a build-time error"
+    )]
+    let load = |bytes: &'static [u8]| -> Vec<f32> {
+        let (data, rate) =
+            crate::wav::read_wav_mono(bytes).expect("SF2 drum WAV must parse (re-run extract_sf2)");
+        crate::wav::convert_rate(&data, rate, 48_000)
+    };
+    let mut sampler = DrumSampler::new();
+    for (name, bytes, midi) in [
+        ("kick", DRUM_KICK, 36u8),
+        ("snare", DRUM_SNARE, 38),
+        ("hat", DRUM_HAT, 42),
+        ("open_hat", DRUM_OPEN_HAT, 46),
+        ("clap", DRUM_CLAP, 49),
+        ("tom_low", DRUM_TOM_LOW, 43),
+        ("tom_mid", DRUM_TOM_MID, 45),
+        ("tom_high", DRUM_TOM_HIGH, 48),
+        ("crash", DRUM_CRASH, 57),
+        ("ride", DRUM_RIDE, 59),
+    ] {
+        sampler.load_sample(DrumSample {
+            name: name.to_string(),
+            midi_note: midi,
+            data: load(bytes),
+            sample_rate: 48_000,
+            base_velocity: 1.0,
+        });
+    }
+    DrumKit {
+        name: "sf2",
+        sampler,
+        sample_rate: 48_000,
+    }
+}
+
 fn rock_kit() -> DrumKit {
     let recipes = vec![
         ("kick", 36u8, kick(150.0, 48.0, 1.2, 0.35)),
@@ -300,6 +368,19 @@ fn techno_kit() -> DrumKit {
     }
 }
 
+// ── Recorded drum one-shots (generated by `extract_sf2`) ───────────────
+
+const DRUM_KICK: &[u8] = include_bytes!("../assets/instruments_sf2/drum_kick.wav");
+const DRUM_SNARE: &[u8] = include_bytes!("../assets/instruments_sf2/drum_snare.wav");
+const DRUM_HAT: &[u8] = include_bytes!("../assets/instruments_sf2/drum_hat.wav");
+const DRUM_OPEN_HAT: &[u8] = include_bytes!("../assets/instruments_sf2/drum_open_hat.wav");
+const DRUM_CLAP: &[u8] = include_bytes!("../assets/instruments_sf2/drum_clap.wav");
+const DRUM_TOM_LOW: &[u8] = include_bytes!("../assets/instruments_sf2/drum_tom_low.wav");
+const DRUM_TOM_MID: &[u8] = include_bytes!("../assets/instruments_sf2/drum_tom_mid.wav");
+const DRUM_TOM_HIGH: &[u8] = include_bytes!("../assets/instruments_sf2/drum_tom_high.wav");
+const DRUM_CRASH: &[u8] = include_bytes!("../assets/instruments_sf2/drum_crash.wav");
+const DRUM_RIDE: &[u8] = include_bytes!("../assets/instruments_sf2/drum_ride.wav");
+
 fn trap_kit() -> DrumKit {
     let recipes = vec![
         ("kick", 36u8, kick(180.0, 32.0, 2.0, 0.6)),
@@ -333,6 +414,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn sf2_kit_loads_the_full_ten_voice_set() {
+        // The production kit must cover the extended kit: every GM voice
+        // `render_kit_note` can request — including toms, crash and ride.
+        let k = kit("sf2").expect("sf2 kit");
+        assert_eq!(k.sampler.len(), 10, "sf2 kit has ten voices");
+        for midi in [36, 38, 42, 46, 49, 43, 45, 48, 57, 59] {
+            let sample = k.sampler.get_sample(midi).expect("voice present");
+            assert!(
+                sample.data.iter().any(|s| s.abs() > 0.01),
+                "voice {midi} renders audible"
+            );
+        }
+    }
+
+    #[test]
+    fn sf2_kit_is_deterministic_and_distinct_from_synth() {
+        // The recorded kit must be byte-stable (R2) and its kick must differ
+        // from the parametric rock kit's kick — proof the recorded one-shot
+        // is actually in the mix.
+        let a = kit("sf2").expect("a");
+        let b = kit("sf2").expect("b");
+        assert_eq!(
+            a.sampler.get_sample(36).expect("kick").data,
+            b.sampler.get_sample(36).expect("kick").data
+        );
+        let rock = kit("rock").expect("rock");
+        assert_ne!(
+            a.sampler.get_sample(36).expect("kick").data,
+            rock.sampler.get_sample(36).expect("rock kick").data,
+            "recorded kick differs from the synthesized rock kick"
+        );
     }
 
     #[test]
@@ -376,10 +491,11 @@ mod tests {
     #[test]
     fn catalog_helpers_cover_every_kit() {
         for name in KIT_NAMES {
+            let expected = if *name == "sf2" { 10 } else { 5 };
             assert_eq!(
                 kit_voice_names(name).len(),
-                5,
-                "{name} exposes all five voices"
+                expected,
+                "{name} exposes all its voices"
             );
             assert!(
                 kit_character(name).len() > 8,

@@ -113,18 +113,39 @@ def reg(lo: int, hi: int) -> dict:
 
 
 def place(seed_prefix: str, pattern_id: str, bars: int, cycle, vm: float,
-          offset: int = 0, fade: list | None = None) -> list:
+          offset: int = 0, fade: list | None = None, tick_shift: int = 0) -> list:
     """One pattern instance per bar; `cycle` = transposes; `fade` = trailing
-    velocity-multiplier taper applied to the final `len(fade)` bars."""
+    velocity-multiplier taper applied to the final `len(fade)` bars;
+    `tick_shift` adds a constant tick offset to every instance start (the
+    double-tracked take offset)."""
     out = []
     for b in range(offset, offset + bars):
         mult = vm
         if fade and b >= offset + bars - len(fade):
             # Offset-independent: the fade index counts back from the last bar.
             mult *= fade[b - (bars - len(fade))]
-        out.append(instance(f"{seed_prefix}#{b}", pattern_id, b,
-                            cycle[b % len(cycle)], round(mult, 3)))
+        inst = instance(f"{seed_prefix}#{b}", pattern_id, b,
+                        cycle[b % len(cycle)], round(mult, 3))
+        if tick_shift:
+            inst["start_tick"] += tick_shift
+        out.append(inst)
     return out
+
+
+def dt(seed: str, pattern_id: str, bars: int, cycle, vm: float,
+       register, gain: float) -> list:
+    """A double-tracked guitar pair: two layers playing the same part with a
+    few ticks of natural take-offset, panned hard L/R — the classic rock
+    width. The right take lags 4 ticks so the two recordings are never
+    sample-identical (the organic double-track, not a stereo dupe)."""
+    return [
+        layer(f"{seed}_L", f"Guitar_{seed}L", "distorted_guitar",
+              place(f"{seed}_L#", pattern_id, bars, cycle, vm), register,
+              gain=gain, pan=-0.6),
+        layer(f"{seed}_R", f"Guitar_{seed}R", "distorted_guitar",
+              place(f"{seed}_R#", pattern_id, bars, cycle, vm, tick_shift=4),
+              register, gain=gain, pan=0.6),
+    ]
 
 
 def drum_steps(seed_prefix: str, hits: dict) -> list:
@@ -224,9 +245,7 @@ def build_segments(patterns: dict) -> list:
               place("V_dr", pid["Drums_Backbeat"], 8, [0, 0, 0, 0], 0.9)),
         layer("L_v_ba", "Bass", "bass_synth",
               place("V_ba", pid["Bass_Verse"], 8, CHORDS, 0.9), reg(1, 3), gain=-1.5),
-        layer("L_v_gu", "Guitar", "distorted_guitar",
-              place("V_gu", pid["Guitar_Verse"], 8, CHORDS, 0.8), reg(2, 3),
-              gain=-2.0, pan=-0.2),
+        *dt("V_gu", pid["Guitar_Verse"], 8, CHORDS, 0.8, reg(2, 3), gain=-2.0),
         layer("L_v_epi", "Epiano", "epiano_bell",
               place("V_epi", pid["Epiano_Arp"], 8, CHORDS, 0.55), reg(3, 5),
               gain=-7.0, pan=0.3),
@@ -240,9 +259,7 @@ def build_segments(patterns: dict) -> list:
               place("B_dr", pid["Drums_Build"], 4, [0, 0, 0, 0], 0.95)),
         layer("L_b_ba", "Bass", "bass_synth",
               place("B_ba", pid["Bass_Verse"], 4, CHORDS, 0.95), reg(1, 3), gain=-1.5),
-        layer("L_b_gu", "Guitar", "distorted_guitar",
-              place("B_gu", pid["Guitar_Build"], 4, CHORDS, 0.95), reg(2, 3),
-              gain=-2.0, pan=-0.2),
+        *dt("B_gu", pid["Guitar_Build"], 4, CHORDS, 0.95, reg(2, 3), gain=-2.0),
         layer("L_b_ld", "Lead", "lead_synth",
               place("B_ld", pid["Lead_BuildRise"], 4, CHORDS, 0.9), reg(4, 5),
               automation=[{
@@ -252,8 +269,8 @@ def build_segments(patterns: dict) -> list:
               }],
               gain=-3.0, pan=0.25),
     ]
-    # Wire the automation to the real lead layer id.
-    build_layers[3]["id"] = build_lead_id
+    # Wire the automation to the real lead layer id (index 4 after the dt pair).
+    build_layers[4]["id"] = build_lead_id
     segs.append(segment("S_b1", "Build", "build", 12, 4, build_layers))
 
     # ── Chorus (bars 16-23): wall-of-sound ───────────────────────────────
@@ -262,9 +279,7 @@ def build_segments(patterns: dict) -> list:
               place("C_dr", pid["Drums_Chorus"], 8, [0, 0, 0, 0], 1.0)),
         layer("L_c_ba", "Bass", "bass_synth",
               place("C_ba", pid["Bass_Chorus"], 8, CHORDS, 1.0), reg(1, 3), gain=-1.5),
-        layer("L_c_gu", "Guitar", "distorted_guitar",
-              place("C_gu", pid["Guitar_Chorus"], 8, CHORDS, 1.0), reg(2, 3),
-              gain=-2.0, pan=-0.2),
+        *dt("C_gu", pid["Guitar_Chorus"], 8, CHORDS, 1.0, reg(2, 3), gain=-2.0),
         layer("L_c_ld", "Lead", "lead_synth",
               place("C_ld", pid["Lead_Hook"], 8, CHORDS, 1.0), reg(4, 5),
               gain=-3.0, pan=0.25),
@@ -290,9 +305,7 @@ def build_segments(patterns: dict) -> list:
         layer("L_br_ld", "Lead", "lead_synth",
               place("BR_ld", pid["Lead_Bridge"], 8, CHORDS, 0.7), reg(4, 5),
               gain=-3.0, pan=0.25),
-        layer("L_br_gu", "Guitar", "distorted_guitar",
-              place("BR_gu", pid["Guitar_Bridge"], 8, CHORDS, 0.6), reg(2, 3),
-              gain=-2.0, pan=-0.2),
+        *dt("BR_gu", pid["Guitar_Bridge"], 8, CHORDS, 0.6, reg(2, 3), gain=-2.0),
     ]
     segs.append(segment("S_br", "Bridge", "bridge", 44, 8, bridge_layers))
 
@@ -306,9 +319,7 @@ def build_segments(patterns: dict) -> list:
         layer("L_f_ba", "Bass", "bass_synth",
               place("F_ba", pid["Bass_Chorus"], 8, CHORDS, 1.0),
               reg(1, 3), gain=-1.5),
-        layer("L_f_gu", "Guitar", "distorted_guitar",
-              place("F_gu", pid["Guitar_Chorus"], 8, CHORDS, 1.0),
-              reg(2, 3), gain=-2.0, pan=-0.2),
+        *dt("F_gu", pid["Guitar_Chorus"], 8, CHORDS, 1.0, reg(2, 3), gain=-2.0),
         layer("L_f_ld", "Lead", "lead_synth",
               place("F_ld", pid["Lead_Hook"], 8, CHORDS, 1.0),
               reg(4, 5), gain=-3.0, pan=0.25),
@@ -378,7 +389,7 @@ def main() -> None:
         "patterns": patterns,
         "spectral_reference": None,
         "mixer": {"master_gain_db": 0.0, "stereo_width": 1.0, "limiter_ceiling_db": -1.0},
-        "sound_bank": "rock",
+        "sound_bank": "sf2",
         "melodic_bank": "sf2",
         "bus_graph": None,
         "humanize": {

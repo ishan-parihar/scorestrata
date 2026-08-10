@@ -86,17 +86,37 @@ def reg(lo: int, hi: int) -> dict:
 
 
 def place(seed_prefix: str, pattern_id: str, bars: int, cycle, vm: float,
-          offset: int = 0, fade: list | None = None) -> list:
+          offset: int = 0, fade: list | None = None, tick_shift: int = 0) -> list:
     """One pattern instance per bar; `cycle` = transposes; `fade` = trailing
-    velocity-multiplier taper (applied to the final `len(fade)` bars)."""
+    velocity-multiplier taper (applied to the final `len(fade)` bars);
+    `tick_shift` adds a constant tick offset (the double-track take lag)."""
     out = []
     for b in range(offset, offset + bars):
         mult = vm
         if fade and b >= offset + bars - len(fade):
             mult *= fade[b - (bars - len(fade))]
-        out.append(instance(f"{seed_prefix}#{b}", pattern_id, b,
-                            cycle[b % len(cycle)], round(mult, 3)))
+        inst = instance(f"{seed_prefix}#{b}", pattern_id, b,
+                        cycle[b % len(cycle)], round(mult, 3))
+        if tick_shift:
+            inst["start_tick"] += tick_shift
+        out.append(inst)
     return out
+
+
+def dt(seed: str, pattern_id: str, bars: int, cycle, vm: float,
+       register, gain: float, instrument: str = "clean_guitar") -> list:
+    """A double-tracked guitar pair: two layers playing the same part with a
+    few ticks of take-offset, panned hard L/R — the classic funk/rock width.
+    Disco stabs default to the recorded clean guitar (the Nile Rodgers
+    chuck), not the distortion guitar."""
+    return [
+        layer(f"{seed}_L", f"Guitar_{seed}L", instrument,
+              place(f"{seed}_L#", pattern_id, bars, cycle, vm), register,
+              gain=gain, pan=-0.6),
+        layer(f"{seed}_R", f"Guitar_{seed}R", instrument,
+              place(f"{seed}_R#", pattern_id, bars, cycle, vm, tick_shift=4),
+              register, gain=gain, pan=0.6),
+    ]
 
 
 def build_patterns() -> dict:
@@ -171,9 +191,7 @@ def build_segments(patterns: dict) -> list:
               place("V_dr", pid["Drums_Disco"], 8, [0, 0, 0, 0], 0.9)),
         layer("L_v_ba", "Bass", "bass_synth",
               place("V_ba", pid["Bass_Bounce"], 8, CHORDS, 0.9), reg(1, 3), gain=-1.5),
-        layer("L_v_gu", "Guitar", "distorted_guitar",
-              place("V_gu", pid["Guitar_Stabs"], 8, CHORDS, 0.8), reg(2, 3),
-              gain=-2.0, pan=-0.2),
+        *dt("V_gu", pid["Guitar_Stabs"], 8, CHORDS, 0.8, reg(2, 3), gain=-2.0),
         layer("L_v_epi", "Epiano", "epiano_bell",
               place("V_epi", pid["Epiano_Stabs"], 8, CHORDS, 0.6), reg(3, 4),
               gain=-7.0, pan=0.3),
@@ -196,9 +214,7 @@ def build_segments(patterns: dict) -> list:
               place("C_dr", pid["Drums_Disco"], 8, [0, 0, 0, 0], 1.0)),
         layer("L_c_ba", "Bass", "bass_synth",
               place("C_ba", pid["Bass_Bounce"], 8, CHORDS, 1.0), reg(1, 3), gain=-1.5),
-        layer("L_c_gu", "Guitar", "distorted_guitar",
-              place("C_gu", pid["Guitar_Stabs"], 8, CHORDS, 1.0), reg(2, 3),
-              gain=-2.0, pan=-0.2),
+        *dt("C_gu", pid["Guitar_Stabs"], 8, CHORDS, 1.0, reg(2, 3), gain=-2.0),
         layer("L_c_epi", "Epiano", "epiano_bell",
               place("C_epi", pid["Epiano_Stabs"], 8, CHORDS, 0.7), reg(3, 4),
               gain=-7.0, pan=0.3),
@@ -220,9 +236,7 @@ def build_segments(patterns: dict) -> list:
               place("O_dr", pid["Drums_Disco"], 4, [0, 0, 0, 0], 1.0)),
         layer("L_o_ba", "Bass", "bass_synth",
               place("O_ba", pid["Bass_Bounce"], 4, CHORDS, 1.0), reg(1, 3), gain=-1.5),
-        layer("L_o_gu", "Guitar", "distorted_guitar",
-              place("O_gu", pid["Guitar_Stabs"], 4, CHORDS, 1.0), reg(2, 3),
-              gain=-2.0, pan=-0.2),
+        *dt("O_gu", pid["Guitar_Stabs"], 4, CHORDS, 1.0, reg(2, 3), gain=-2.0),
         layer("L_o_epi", "Epiano", "epiano_bell",
               place("O_epi", pid["Epiano_Stabs"], 4, CHORDS, 0.7), reg(3, 4),
               gain=-7.0, pan=0.3),
@@ -289,7 +303,7 @@ def main() -> None:
         "patterns": patterns,
         "spectral_reference": None,
         "mixer": {"master_gain_db": 0.0, "stereo_width": 1.0, "limiter_ceiling_db": -1.0},
-        "sound_bank": "house",
+        "sound_bank": "sf2",
         "melodic_bank": "sf2",
         "bus_graph": None,
         "humanize": {
