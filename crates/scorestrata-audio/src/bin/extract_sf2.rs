@@ -64,12 +64,12 @@ const REVERB_OFF: bool = false;
 /// GM program numbers to extract, per bank instrument.
 /// - guitar → 30 (Distortion Guitar) — the rock chug.
 /// - bass   → 34 (Electric Bass, picked) — punchy rock bass.
-/// - epiano → 4  (E.Piano 1) — classic Rhodes-ish.
-/// - acoustic_guitar → 25 (Steel String Guitar) — strummy clean.
-/// - clean_guitar    → 27 (Clean Electric Guitar) — funk/verse clean.
+/// - epiano → 4  (`E.Piano 1`) — classic Rhodes-ish.
+/// - `acoustic_guitar` → 25 (Steel String Guitar) — strummy clean.
+/// - `clean_guitar`    → 27 (Clean Electric Guitar) — funk/verse clean.
 /// - strings → 48 (String Ensemble 1), organ → 16 (Drawbar Organ),
 ///   brass → 61 (Brass Section), flute → 73 (Flute), lead saw → 81
-///   (Lead 2 - Sawtooth), warm pad → 89 (Pad 2 - warm).
+///   (`Lead 2 - Sawtooth`), warm pad → 89 (`Pad 2 - warm`).
 const GUITAR_PROGRAM: i32 = 30;
 const BASS_PROGRAM: i32 = 34;
 const EPIANO_PROGRAM: i32 = 4;
@@ -85,114 +85,133 @@ fn main() {
         std::fs::File::open(&sf2_path).unwrap_or_else(|e| panic!("open {sf2_path}: {e}"));
     let font = Arc::new(SoundFont::new(&mut file).expect("parse SoundFont"));
 
-    // ── Guitar: GM 30, roots C2/A2/E3/B3/E4. Three round-robin takes per
-    // velocity layer (velocity-stepped + a few ms of length variation) so
-    // the engine's deterministic RR picker cycles real takes instead of
-    // machine-gunning one identical sample. Take 1 keeps the classic name
-    // (`guitar_<root>_soft.wav`) so the bank stays drop-in compatible.
+    render_guitars(&font, &out_dir);
+    render_basses(&font, &out_dir);
+    render_epianos(&font, &out_dir);
+    render_clean_family(&font, &out_dir);
+    render_sustained(&font, &out_dir);
+    render_drums(&font, &out_dir);
+
+    println!("Extracted SF2 instrument bank -> {}", out_dir.display());
+}
+
+/// ── Guitar: GM 30, roots C2/A2/E3/B3/E4. Three round-robin takes per
+/// velocity layer (velocity-stepped + a few ms of length variation) so
+/// the engine's deterministic RR picker cycles real takes instead of
+/// machine-gunning one identical sample. Take 1 keeps the classic name
+/// (`guitar_<root>_soft.wav`) so the bank stays drop-in compatible.
+fn render_guitars(font: &Arc<SoundFont>, out_dir: &std::path::Path) {
     let guitar_roots = [36u8, 45, 52, 59, 66];
     for root in guitar_roots {
         for (take, vel, secs) in [(1, 42, 1.62), (2, 48, 1.72), (3, 54, 1.66)] {
             render_note(
-                &font,
+                font,
                 GUITAR_PROGRAM,
                 root,
                 vel,
                 secs,
-                &out_dir,
+                out_dir,
                 &guitar_name(root, "soft", take),
             );
         }
         for (take, vel, secs) in [(1, 104, 1.66), (2, 110, 1.74), (3, 116, 1.60)] {
             render_note(
-                &font,
+                font,
                 GUITAR_PROGRAM,
                 root,
                 vel,
                 secs,
-                &out_dir,
+                out_dir,
                 &guitar_name(root, "hard", take),
             );
         }
     }
+}
 
-    // ── Bass: GM 34, roots C1/A1/C2/G2. Two round-robin takes per layer.
+/// ── Bass: GM 34, roots C1/A1/C2/G2. Two round-robin takes per layer.
+fn render_basses(font: &Arc<SoundFont>, out_dir: &std::path::Path) {
     let bass_roots = [24u8, 29, 36, 43];
     for root in bass_roots {
         for (take, vel, secs) in [(1, 44, 2.3), (2, 54, 2.5)] {
             render_note(
-                &font,
+                font,
                 BASS_PROGRAM,
                 root,
                 vel,
                 secs,
-                &out_dir,
+                out_dir,
                 &bass_name(root, "soft", take),
             );
         }
         for (take, vel, secs) in [(1, 106, 2.35), (2, 114, 2.45)] {
             render_note(
-                &font,
+                font,
                 BASS_PROGRAM,
                 root,
                 vel,
                 secs,
-                &out_dir,
+                out_dir,
                 &bass_name(root, "hard", take),
             );
         }
     }
+}
 
-    // ── E-piano: GM 4, roots C3/C4/C5, single layer, long sustain for the
-    // loop-detector in `sf2_bank.rs` (the engine loops the stable region).
+/// ── E-piano: GM 4, roots C3/C4/C5, single layer, long sustain for the
+/// loop-detector in `sf2_bank.rs` (the engine loops the stable region).
+fn render_epianos(font: &Arc<SoundFont>, out_dir: &std::path::Path) {
     let epiano_roots = [48u8, 60, 72];
     for root in epiano_roots {
         render_note(
-            &font,
+            font,
             EPIANO_PROGRAM,
             root,
             90,
             6.0,
-            &out_dir,
+            out_dir,
             &format!("epiano_{root}_sustain.wav"),
         );
     }
+}
 
-    // ── Acoustic guitar (GM 25 Steel) + clean guitar (GM 27 Clean): 3 key
-    // zones × 2 velocity layers × 2 RR takes each — the clean/strum family
-    // for funk stabs, arpeggios and verses where the distortion guitar is
-    // too aggressive.
+/// ── Acoustic guitar (GM 25 Steel) + clean guitar (GM 27 Clean): 3 key
+/// zones × 2 velocity layers × 2 RR takes each — the clean/strum family
+/// for funk stabs, arpeggios and verses where the distortion guitar is
+/// too aggressive.
+fn render_clean_family(font: &Arc<SoundFont>, out_dir: &std::path::Path) {
     for (program, prefix) in [(25, "acoustic"), (27, "clean")] {
         for root in [48u8, 60, 72] {
             for (take, vel, secs) in [(1, 52, 1.9), (2, 60, 1.8)] {
                 render_note(
-                    &font,
+                    font,
                     program,
                     root,
                     vel,
                     secs,
-                    &out_dir,
+                    out_dir,
                     &format!("{prefix}_{root}_soft{take}.wav"),
                 );
             }
             for (take, vel, secs) in [(1, 108, 1.85), (2, 116, 1.95)] {
                 render_note(
-                    &font,
+                    font,
                     program,
                     root,
                     vel,
                     secs,
-                    &out_dir,
+                    out_dir,
                     &format!("{prefix}_{root}_hard{take}.wav"),
                 );
             }
         }
     }
+}
 
-    // ── Sustained instruments (GM programs) — long renders whose stable
-    // region the loop-detector in `sf2_bank.rs` turns into a sustain loop:
-    // strings (48), drawbar organ (16), brass section (61), flute (73),
-    // saw lead (81) and warm pad (89).
+/// ── Sustained instruments (GM programs) — long renders whose stable
+/// region the loop-detector in `sf2_bank.rs` turns into a sustain loop:
+/// strings (48), drawbar organ (16), brass section (61), flute (73),
+/// saw lead (81) and warm pad (89).
+fn render_sustained(font: &Arc<SoundFont>, out_dir: &std::path::Path) {
     let sustained: [(&str, i32, &[u8]); 6] = [
         ("strings", 48, &[48u8, 60, 72]),
         ("organ", 16, &[48, 60, 72]),
@@ -204,21 +223,23 @@ fn main() {
     for (name, program, roots) in sustained {
         for &root in roots {
             render_note(
-                &font,
+                font,
                 program,
                 root,
                 96,
                 4.0,
-                &out_dir,
+                out_dir,
                 &format!("{name}_{root}_sustain.wav"),
             );
         }
     }
+}
 
-    // ── Drums: GM percussion (channel 9 in rustysynth). Real recorded kit
-    // one-shots — kick, snare, hats, clap, three toms, crash and ride — the
-    // production kit behind `sound_bank: "sf2"`. Durations match each
-    // voice's natural decay (crash/ride ring longest).
+/// ── Drums: GM percussion (channel 9 in rustysynth). Real recorded kit
+/// one-shots — kick, snare, hats, clap, three toms, crash and ride — the
+/// production kit behind `sound_bank: "sf2"`. Durations match each
+/// voice's natural decay (crash/ride ring longest).
+fn render_drums(font: &Arc<SoundFont>, out_dir: &std::path::Path) {
     let drums: [(&str, u8, f32); 10] = [
         ("kick", 36, 0.55),
         ("snare", 38, 0.65),
@@ -232,10 +253,8 @@ fn main() {
         ("ride", 59, 1.8),
     ];
     for (name, pitch, seconds) in drums {
-        render_drum(&font, pitch, seconds, &out_dir, &format!("drum_{name}.wav"));
+        render_drum(font, pitch, seconds, out_dir, &format!("drum_{name}.wav"));
     }
-
-    println!("Extracted SF2 instrument bank -> {}", out_dir.display());
 }
 
 /// Render one GM percussion one-shot through the drum channel (9).
