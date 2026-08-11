@@ -4,7 +4,7 @@
 
 <p align="center">
 <img src="https://img.shields.io/badge/LOC-73.0K-informational?style=flat-square" alt="LOC">
-<a href="https://github.com/ishan-parihar/scorestrata/actions/workflows/ci.yml"><img src="https://github.com/ishan-parihar/scorestrata/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+<a href="https://github.com/ishan-parihar/scorestrata/actions/workflows/ci.yml"><img src="https://github.com/ishan-parihar/scorestrata/actions/workflows/ci.yml/badge.svg?style=flat-square" alt="CI"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-1.85+-blue?style=flat-square" alt="Rust"></a>
   <img src="https://img.shields.io/badge/tests-944%20passing-brightgreen?style=flat-square" alt="944 tests passing">
   <img src="https://img.shields.io/badge/clippy--D%20warnings-clean-brightgreen?style=flat-square" alt="clippy clean">
