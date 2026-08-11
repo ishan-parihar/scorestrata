@@ -6,7 +6,9 @@
 examples/projects/
 renders/
 *.ssproj/
-demos/*/render/
+demos/*/render/*
+!demos/*/render/
+!demos/*/render/master.wav
 demos/*/timeline.json
 demos/*/cache/
 
