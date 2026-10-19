@@ -143,6 +143,8 @@ The eval suite also pins the gold-standard demos: compile, validate, and render 
 - [`docs/planning/re-architecture-upgrade-plan.md`](docs/planning/re-architecture-upgrade-plan.md) — the upgrade plan behind the current phase
 - [`docs/planning/organic-character-verification.md`](docs/planning/organic-character-verification.md) — DSP evidence for the recorded-instrument sound
 
+- [Page index](docs/PAGE-INDEX.md) — every active doc and the question it owns.
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
